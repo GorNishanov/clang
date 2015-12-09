@@ -23,6 +23,7 @@
 namespace clang {
 
 class VarDecl;
+class CoawaitExpr;
 
 /// CXXCatchStmt - This represents a C++ catch block.
 ///
@@ -297,69 +298,65 @@ public:
 /// body and holds the additional semantic context required to set up and tear
 /// down the coroutine frame.
 class CoroutineBodyStmt : public Stmt {
-  enum SubStmt {
-    Body,          ///< The body of the coroutine.
-    Promise,       ///< The promise statement.
-    InitSuspend,   ///< The initial suspend statement, run before the body.
-    FinalSuspend,  ///< The final suspend statement, run after the body.
-    OnException,   ///< Handler for exceptions thrown in the body.
-    OnFallthrough, ///< Handler for control flow falling off the body.
-    ReturnValue,   ///< Return value for thunk function.
-    FirstParamMove ///< First offset for move construction of parameter copies.
-  };
-  Stmt *SubStmts[SubStmt::FirstParamMove];
-
-  friend class ASTStmtReader;
 public:
-  CoroutineBodyStmt(Stmt *Body, Stmt *Promise, Stmt *InitSuspend,
-                    Stmt *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
-                    Expr *ReturnValue, ArrayRef<Expr *> ParamMoves)
-      : Stmt(CoroutineBodyStmtClass) {
-    SubStmts[CoroutineBodyStmt::Body] = Body;
-    SubStmts[CoroutineBodyStmt::Promise] = Promise;
-    SubStmts[CoroutineBodyStmt::InitSuspend] = InitSuspend;
-    SubStmts[CoroutineBodyStmt::FinalSuspend] = FinalSuspend;
-    SubStmts[CoroutineBodyStmt::OnException] = OnException;
-    SubStmts[CoroutineBodyStmt::OnFallthrough] = OnFallthrough;
-    SubStmts[CoroutineBodyStmt::ReturnValue] = ReturnValue;
-    // FIXME: Tail-allocate space for parameter move expressions and store them.
-    assert(ParamMoves.empty() && "not implemented yet");
+  // this structure is tail allocated after CoroutineBodyStmt
+  // followed by NumParams Stmt* for parameter moves statements
+  struct SubStmt {
+    Stmt *Body;                ///< The body of the coroutine.
+    Stmt *Promise;             ///< The promise statement.
+    CoawaitExpr *InitSuspend;  ///< The initial suspend, run after the body.
+    CoawaitExpr *FinalSuspend; ///< The final suspend, run after the body.
+    Stmt *OnException;         ///< Handler for exceptions thrown in the body.
+    Stmt *OnFallthrough;       ///< Handler for control flow falling off the body.
+    Expr *Allocate;            ///< Coroutine frame memory allocation
+    LabelStmt *Deallocate;     ///< Coroutine frame memory deallocation
+    Stmt *ResultDecl;          ///< Result declaration goes before body
+    Stmt *ReturnStmt;          ///< Return statement goes after body
+  };
+
+private:
+  unsigned NumParams;
+
+  static_assert(alignof(SubStmt) == alignof(Stmt*), "unexpected alignment in SubStmt");
+  Stmt **getStoredStmts() { return reinterpret_cast<Stmt **>(this + 1); }
+  Stmt *const *getStoredStmts() const {
+    return reinterpret_cast<Stmt *const *>(this + 1);
+  }
+  size_t getParamMoveIndex() const {
+    return sizeof(SubStmt) / sizeof(Stmt*);
+  }
+  SubStmt& getSubStmts() {
+    return *reinterpret_cast<SubStmt *>(this + 1);
+  }
+  CoroutineBodyStmt(SubStmt const &SubStmts, ArrayRef<Stmt *> ParamMoves);
+
+public:
+  static CoroutineBodyStmt *Create(const ASTContext &C, SubStmt const &SubStmts,
+                                   ArrayRef<Stmt *> ParamMoves);
+
+  child_range children() {
+    return child_range(getStoredStmts(),
+      getStoredStmts() + getParamMoveIndex() + NumParams);
+  }
+  ArrayRef<Stmt *> getParamMoves() {
+    return{ getStoredStmts() + getParamMoveIndex(), NumParams };
+  }
+
+  const SubStmt& getSubStmts() const {
+    return *reinterpret_cast<SubStmt const * const>(this + 1);
   }
 
   /// \brief Retrieve the body of the coroutine as written. This will be either
   /// a CompoundStmt or a TryStmt.
   Stmt *getBody() const {
-    return SubStmts[SubStmt::Body];
+    return getSubStmts().Body;
   }
-
-  Stmt *getPromiseDeclStmt() const { return SubStmts[SubStmt::Promise]; }
-  VarDecl *getPromiseDecl() const {
-    return cast<VarDecl>(cast<DeclStmt>(getPromiseDeclStmt())->getSingleDecl());
-  }
-
-  Stmt *getInitSuspendStmt() const { return SubStmts[SubStmt::InitSuspend]; }
-  Stmt *getFinalSuspendStmt() const { return SubStmts[SubStmt::FinalSuspend]; }
-
-  Stmt *getExceptionHandler() const { return SubStmts[SubStmt::OnException]; }
-  Stmt *getFallthroughHandler() const {
-    return SubStmts[SubStmt::OnFallthrough];
-  }
-
-  Expr *getReturnValueInit() const {
-    return cast<Expr>(SubStmts[SubStmt::ReturnValue]);
-  }
-
   SourceLocation getLocStart() const LLVM_READONLY {
     return getBody()->getLocStart();
   }
   SourceLocation getLocEnd() const LLVM_READONLY {
     return getBody()->getLocEnd();
   }
-
-  child_range children() {
-    return child_range(SubStmts, SubStmts + SubStmt::FirstParamMove);
-  }
-
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == CoroutineBodyStmtClass;
   }
