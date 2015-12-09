@@ -3,6 +3,7 @@ set(LLVM_LINK_COMPONENTS
   BitReader
   BitWriter
   Core
+  Coroutines
   IPO
   IRReader
   InstCombine
@@ -34,6 +35,7 @@ add_clang_library(clangCodeGen
   CGBuiltin.cpp
   CGCUDANV.cpp
   CGCUDARuntime.cpp
+  CGCoroutine.cpp
   CGCXX.cpp
   CGCXXABI.cpp
   CGCall.cpp
