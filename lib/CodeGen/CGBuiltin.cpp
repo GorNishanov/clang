@@ -2135,6 +2135,29 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     break;
   }
 
+  case Builtin::BI__builtin_coro_resume: {
+    Value *ArgValue = EmitScalarExpr(E->getArg(0));
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_resume);
+    return RValue::get(Builder.CreateCall(F, ArgValue));
+  }
+  case Builtin::BI__builtin_coro_size: {
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_size);
+    return RValue::get(Builder.CreateCall(F));
+  }
+  case Builtin::BI__builtin_coro_frame: {
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_frame);
+    return RValue::get(Builder.CreateCall(F));
+  }
+  case Builtin::BI__builtin_coro_destroy: {
+    Value *ArgValue = EmitScalarExpr(E->getArg(0));
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_destroy);
+    return RValue::get(Builder.CreateCall(F, ArgValue));
+  }
+  case Builtin::BI__builtin_coro_done: {
+    Value *ArgValue = EmitScalarExpr(E->getArg(0));
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_done);
+    return RValue::get(Builder.CreateCall(F, ArgValue));
+  }
   // OpenCL v2.0 s6.13.16.2, Built-in pipe read and write functions
   case Builtin::BIread_pipe:
   case Builtin::BIwrite_pipe: {

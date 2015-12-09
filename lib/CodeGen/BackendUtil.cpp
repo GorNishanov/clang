@@ -41,6 +41,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
+#include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
@@ -192,6 +193,48 @@ static void addKernelAddressSanitizerPasses(const PassManagerBuilder &Builder,
       /*Recover*/ true, /*UseAfterScope*/ false));
   PM.add(createAddressSanitizerModulePass(/*CompileKernel*/true,
                                           /*Recover*/true));
+}
+
+static void addCoroEarlyPass(const PassManagerBuilder &Builder,
+  legacy::PassManagerBase &PM) {
+  PM.add(createCoroEarlyPass());
+  PM.add(createVerifierPass());
+}
+static void addCoroModuleEarlyPass(const PassManagerBuilder &Builder,
+  legacy::PassManagerBase &PM) {
+  PM.add(createCoroPreSplit());
+  PM.add(createVerifierPass());
+  PM.add(createCFGSimplificationPass());
+  PM.add(createEarlyCSEPass());
+  PM.add(createCoroSplitPass());
+  PM.add(createVerifierPass());
+}
+static void addCoroScalarLatePass(const PassManagerBuilder &Builder,
+  legacy::PassManagerBase &PM) {
+  const PassManagerBuilderWrapper &BuilderWrapper =
+    static_cast<const PassManagerBuilderWrapper&>(Builder);
+  const CodeGenOptions &CGOpts = BuilderWrapper.getCGOpts();
+  // FIXME: figure out a better way to integrate CoroHeapElide pass
+  PM.add(createCoroHeapElidePass());
+  PM.add(createVerifierPass());
+  PM.add(createFunctionInliningPass());
+  // -early-cse -sroa -early-cse -jump-threading -simplifycfg -instcombine -gvn -correlated-propagation 
+  PM.add(createEarlyCSEPass());
+  PM.add(createSROAPass());
+  PM.add(createEarlyCSEPass());
+  PM.add(createJumpThreadingPass());
+  PM.add(createCFGSimplificationPass());
+  PM.add(createInstructionCombiningPass());
+  PM.add(createGVNPass());
+  PM.add(createCorrelatedValuePropagationPass());
+}
+static void addCoroLastPass(const PassManagerBuilder &Builder,
+  legacy::PassManagerBase &PM) {
+  PM.add(createCoroLastPass());
+}
+static void addCoroOnOpt0(const PassManagerBuilder &Builder,
+  legacy::PassManagerBase &PM) {
+  PM.add(createCoroOnOpt0());
 }
 
 static void addMemorySanitizerPass(const PassManagerBuilder &Builder,
@@ -399,6 +442,19 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
                            addDataFlowSanitizerPass);
     PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
                            addDataFlowSanitizerPass);
+  }
+
+  if (LangOpts.Coroutines) {
+    PMBuilder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
+                           addCoroEarlyPass);
+    PMBuilder.addExtension(PassManagerBuilder::EP_ModuleOptimizerEarly,
+                           addCoroModuleEarlyPass);
+    PMBuilder.addExtension(PassManagerBuilder::EP_ScalarOptimizerLate,
+                           addCoroScalarLatePass);
+    PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
+                           addCoroLastPass);
+    PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
+                           addCoroOnOpt0);
   }
 
   if (LangOpts.Sanitize.hasOneOf(SanitizerKind::Efficiency)) {

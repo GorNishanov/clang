@@ -81,6 +81,7 @@ class CGFunctionInfo;
 class CGRecordLayout;
 class CGBlockInfo;
 class CGCXXABI;
+class CGCoroutine;
 class BlockByrefHelpers;
 class BlockByrefInfo;
 class BlockFlags;
@@ -154,6 +155,7 @@ public:
   const CGFunctionInfo *CurFnInfo;
   QualType FnRetTy;
   llvm::Function *CurFn;
+  CGCoroutine* CurCoroutine;
 
   /// CurGD - The GlobalDecl for the current function being compiled.
   GlobalDecl CurGD;
@@ -1238,6 +1240,8 @@ public:
   const TargetInfo &getTarget() const { return Target; }
   llvm::LLVMContext &getLLVMContext() { return CGM.getLLVMContext(); }
 
+  CGCoroutine& getCGCoroutine();
+
   //===--------------------------------------------------------------------===//
   //                                  Cleanups
   //===--------------------------------------------------------------------===//
@@ -2289,6 +2293,8 @@ public:
   void EmitObjCAtThrowStmt(const ObjCAtThrowStmt &S);
   void EmitObjCAtSynchronizedStmt(const ObjCAtSynchronizedStmt &S);
   void EmitObjCAutoreleasePoolStmt(const ObjCAutoreleasePoolStmt &S);
+  
+  void EmitCoroutineBody(const CoroutineBodyStmt &s);
 
   void EnterCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);
   void ExitCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);

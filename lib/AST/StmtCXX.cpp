@@ -49,8 +49,25 @@ CXXTryStmt::CXXTryStmt(SourceLocation tryLoc, Stmt *tryBlock,
   std::copy(handlers.begin(), handlers.end(), Stmts + 1);
 }
 
-CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range,
-                                 DeclStmt *BeginStmt, DeclStmt *EndStmt,
+CoroutineBodyStmt *CoroutineBodyStmt::Create(const ASTContext &C,
+                                             SubStmt const &SubStmts,
+                                             ArrayRef<Stmt *> ParamMoves) {
+  std::size_t Size = sizeof(CoroutineBodyStmt) + sizeof(SubStmt);
+  Size += (ParamMoves.size() * sizeof(Stmt *));
+
+  void *Mem = C.Allocate(Size, llvm::alignOf<CoroutineBodyStmt>());
+  return new (Mem) CoroutineBodyStmt(SubStmts, ParamMoves);
+}
+
+CoroutineBodyStmt::CoroutineBodyStmt(SubStmt const &SubStmts, ArrayRef<Stmt *> ParamMoves)
+  : Stmt(CoroutineBodyStmtClass), NumParams(ParamMoves.size()) {
+
+  getSubStmts() = SubStmts;
+  std::copy(ParamMoves.begin(), ParamMoves.end(), 
+    const_cast<Stmt**>(getParamMoves().data()));
+}
+
+CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range, DeclStmt *BeginEndStmt,
                                  Expr *Cond, Expr *Inc, DeclStmt *LoopVar,
                                  Stmt *Body, SourceLocation FL,
                                  SourceLocation CAL, SourceLocation CL,
