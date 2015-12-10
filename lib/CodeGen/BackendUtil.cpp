@@ -211,9 +211,6 @@ static void addCoroModuleEarlyPass(const PassManagerBuilder &Builder,
 }
 static void addCoroScalarLatePass(const PassManagerBuilder &Builder,
   legacy::PassManagerBase &PM) {
-  const PassManagerBuilderWrapper &BuilderWrapper =
-    static_cast<const PassManagerBuilderWrapper&>(Builder);
-  const CodeGenOptions &CGOpts = BuilderWrapper.getCGOpts();
   // FIXME: figure out a better way to integrate CoroHeapElide pass
   PM.add(createCoroHeapElidePass());
   PM.add(createVerifierPass());
