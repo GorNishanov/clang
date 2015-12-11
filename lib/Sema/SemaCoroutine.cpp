@@ -282,10 +282,11 @@ ExprResult Sema::ActOnCoawaitExpr(Scope *S, SourceLocation Loc, Expr *E) {
     E = R.get();
   }
 
-  ExprResult Awaitable = buildOperatorCoawaitCall(*this, S, Loc, E);
-  if (Awaitable.isInvalid())
-    return ExprError();
-  return BuildCoawaitExpr(Loc, Awaitable.get());
+  //ExprResult Awaitable = buildOperatorCoawaitCall(*this, S, Loc, E);
+  //if (Awaitable.isInvalid())
+  //  return ExprError();
+  //return BuildCoawaitExpr(Loc, Awaitable.get());
+  return BuildCoawaitExpr(Loc, E);
 }
 ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
   auto *Coroutine = checkCoroutineContext(*this, Loc, "co_await");
