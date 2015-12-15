@@ -83,7 +83,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
 
   llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   SmallVector<Value*, 2> args{bitcast, CGF.EmitScalarExpr(S.getSuspendExpr()),
-    ConstantInt::getTrue(CGF.CGM.getLLVMContext())
+    ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
 
   // FIXME: use invoke / landing pad model
@@ -93,12 +93,17 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
 
   CGF.EmitBlock(cleanupBlock);
 
+#if 1
+  auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
+  CGF.EmitBranchThroughCleanup(jumpDest);
+#else
   // FIXME: switch to invoke / landing pad (was: CGF.EmitBranchThroughCleanup();)
   // EmitBranchThrough cleanup generates extra variables and switches that
   // confuse CoroSplit pass (and add unnecessary state to coroutine frame)
 
-  auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
+ // auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
   Builder.CreateBr(jumpDest.getBlock());
+#endif
 
   CGF.EmitBlock(ReadyBlock);
   return CGF.EmitScalarExpr(S.getResumeExpr());
@@ -115,6 +120,32 @@ clang::CodeGen::CGCoroutine::CGCoroutine(CodeGenFunction &F)
 
 clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 
+static void InitializeReturnSlot(CodeGenFunction& CGF, Expr const* RV) {
+  CodeGenFunction::RunCleanupsScope cleanupScope(CGF);
+  if (const ExprWithCleanups *cleanups =
+    dyn_cast_or_null<ExprWithCleanups>(RV)) {
+    CGF.enterFullExpression(cleanups);
+    RV = cleanups->getSubExpr();
+  }
+
+  switch (CGF.getEvaluationKind(RV->getType())) {
+  case TEK_Scalar:
+    CGF.Builder.CreateStore(CGF.EmitScalarExpr(RV), CGF.ReturnValue);
+    break;
+  case TEK_Complex:
+    CGF.EmitComplexExprIntoLValue(RV, CGF.MakeAddrLValue(CGF.ReturnValue, RV->getType()),
+      /*isInit*/ true);
+    break;
+  case TEK_Aggregate:
+    CGF.EmitAggExpr(RV, AggValueSlot::forAddr(CGF.ReturnValue,
+      Qualifiers(),
+      AggValueSlot::IsDestructed,
+      AggValueSlot::DoesNotNeedGCBarriers,
+      AggValueSlot::IsNotAliased));
+    break;
+  }
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
 
@@ -122,33 +153,34 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init),
                      EmitScalarExpr(SS.Allocate));
 
-  EmitStmt(SS.Promise);
-  EmitStmt(SS.ResultDecl);
-
   auto rampReturn = createBasicBlock("coro.ret");
+  {
+    CodeGenFunction::RunCleanupsScope ResumeScope(*this);
+    EmitStmt(SS.Promise);
+    EmitStmt(SS.ResultDecl);
 
-  auto start = createBasicBlock("coro.start");
+    auto start = createBasicBlock("coro.start");
 
-  llvm::Function* coroDone = CGM.getIntrinsic(llvm::Intrinsic::coro_done);
-  auto doneResult = Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGM.Int8PtrTy));
-  Builder.CreateCondBr(doneResult, rampReturn, start);
+    llvm::Function* coroDone = CGM.getIntrinsic(llvm::Intrinsic::coro_done);
+    auto doneResult = Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGM.Int8PtrTy));
+    Builder.CreateCondBr(doneResult, rampReturn, start);
 
-  EmitBlock(start);
-  getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
+    EmitBlock(start);
+    getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 
-  emitSuspendExpression(*this, Builder, *SS.InitSuspend,
-                        "init", 1);
+    emitSuspendExpression(*this, Builder, *SS.InitSuspend,
+      "init", 1);
 
-  EmitStmt(SS.Body);
+    EmitStmt(SS.Body);
 
-  if (Builder.GetInsertBlock()) {
-    // create final block if we we don't have endless loop
-    auto FinalBlock = createBasicBlock("coro.fin");
-    EmitBlock(FinalBlock);
-    emitSuspendExpression(*this, Builder, *SS.FinalSuspend,
-      "final", 0, rampReturn);
+    if (Builder.GetInsertBlock()) {
+      // create final block if we we don't have endless loop
+      auto FinalBlock = createBasicBlock("coro.fin");
+      EmitBlock(FinalBlock);
+      emitSuspendExpression(*this, Builder, *SS.FinalSuspend,
+        "final", 0);
+    }
   }
-
   EmitStmt(SS.Deallocate);
 
   EmitBlock(rampReturn);

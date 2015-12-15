@@ -2148,6 +2148,10 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *F = CGM.getIntrinsic(Intrinsic::coro_frame);
     return RValue::get(Builder.CreateCall(F));
   }
+  case Builtin::BI__builtin_coro_delete: {
+	  Value *F = CGM.getIntrinsic(Intrinsic::coro_delete);
+	  return RValue::get(Builder.CreateCall(F));
+  }
   case Builtin::BI__builtin_coro_destroy: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
     Value *F = CGM.getIntrinsic(Intrinsic::coro_destroy);

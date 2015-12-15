@@ -1373,6 +1373,7 @@ BUILTIN(__builtin_coro_destroy, "vv*", "n")
 BUILTIN(__builtin_coro_done, "bv*", "n")
 BUILTIN(__builtin_coro_size, "z", "n")
 BUILTIN(__builtin_coro_frame, "v*", "n")
+BUILTIN(__builtin_coro_delete, "v*", "n")
 
 #undef BUILTIN
 #undef LIBBUILTIN
