@@ -255,14 +255,6 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
           Loc, {});
       if (Result.isInvalid())
         return Calls;
-#if 0
-      ExprResult addr = S.BuildUnaryOp(S.getCurScope(), Loc, UnaryOperatorKind::UO_AddrOf, Operand);
-      if (Result.isInvalid())
-        return Calls;
-
-      SmallVector<Expr*, 2> args = { addr.get(), Result.get() };
-      Result = buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_suspend, args);
-#endif
     } else {
       Result = buildMemberCall(S, Operand, Loc, Funcs[I], {});
     }
@@ -545,7 +537,7 @@ public:
       return false;
 
     SmallVector<Expr *, 2> deleteArgs{
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {})};
+        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_delete, {})};
 
     // Check if we need to pass the size
     const FunctionProtoType *opDeleteType =
@@ -616,7 +608,6 @@ public:
 
   bool makeReturnStmt() {
     assert(RetDecl && "makeResultDecl must be invoked before makeReturnStmt");
-
     auto declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
     if (declRef.isInvalid())
       return false;
