@@ -58,8 +58,7 @@ namespace {
 
 static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
                                     CoroutineSuspendExpr &S, StringRef Name,
-                                    unsigned suspendNum,
-                                    BasicBlock *returnBlock = nullptr) {
+                                    unsigned suspendNum) {
   SmallString<8> suffix(Name);
   if (suspendNum > 1) {
     Twine(suspendNum).toVector(suffix);
@@ -85,17 +84,22 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   SmallVector<Value*, 2> args{bitcast, CGF.EmitScalarExpr(S.getSuspendExpr()),
     ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
+  BasicBlock *UnreachBlock = suspendNum != 0 ? nullptr : CGF.createBasicBlock("unreach");
 
   // FIXME: use invoke / landing pad model
   // EmitBranchThrough Cleanup does not generate as nice cleanup code
   auto suspendResult = Builder.CreateCall(coroSuspend, args);
-  Builder.CreateCondBr(suspendResult, returnBlock ? returnBlock : ReadyBlock, cleanupBlock);
+  Builder.CreateCondBr(suspendResult, UnreachBlock ? UnreachBlock : ReadyBlock, cleanupBlock);
+
+  if (UnreachBlock) {
+    CGF.EmitBlock(UnreachBlock);
+    Builder.CreateUnreachable();
+  }
 
   CGF.EmitBlock(cleanupBlock);
 
   auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
 #if 0
-  jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
   CGF.EmitBranchThroughCleanup(jumpDest);
 #else
   // FIXME: switch to invoke / landing pad (was: CGF.EmitBranchThroughCleanup();)
@@ -120,32 +124,6 @@ clang::CodeGen::CGCoroutine::CGCoroutine(CodeGenFunction &F)
 
 clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 
-static void InitializeReturnSlot(CodeGenFunction& CGF, Expr const* RV) {
-  CodeGenFunction::RunCleanupsScope cleanupScope(CGF);
-  if (const ExprWithCleanups *cleanups =
-    dyn_cast_or_null<ExprWithCleanups>(RV)) {
-    CGF.enterFullExpression(cleanups);
-    RV = cleanups->getSubExpr();
-  }
-
-  switch (CGF.getEvaluationKind(RV->getType())) {
-  case TEK_Scalar:
-    CGF.Builder.CreateStore(CGF.EmitScalarExpr(RV), CGF.ReturnValue);
-    break;
-  case TEK_Complex:
-    CGF.EmitComplexExprIntoLValue(RV, CGF.MakeAddrLValue(CGF.ReturnValue, RV->getType()),
-      /*isInit*/ true);
-    break;
-  case TEK_Aggregate:
-    CGF.EmitAggExpr(RV, AggValueSlot::forAddr(CGF.ReturnValue,
-      Qualifiers(),
-      AggValueSlot::IsDestructed,
-      AggValueSlot::DoesNotNeedGCBarriers,
-      AggValueSlot::IsNotAliased));
-    break;
-  }
-}
-
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
 
@@ -157,13 +135,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
     EmitStmt(SS.Promise);
 
-    auto start = createBasicBlock("coro.start");
-
-    llvm::Function* coroDone = CGM.getIntrinsic(llvm::Intrinsic::coro_done);
-    auto doneResult = Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGM.Int8PtrTy));
-    Builder.CreateCondBr(doneResult, ReturnBlock.getBlock(), start);
-
-    EmitBlock(start);
     getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 
     EmitStmt(SS.ReturnStmt);
@@ -173,7 +144,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     EmitStmt(SS.Body);
 
     if (Builder.GetInsertBlock()) {
-      // create final block if we we don't have endless loop
+      // create final block if we we don't have an endless loop
       auto FinalBlock = createBasicBlock("coro.fin");
       EmitBlock(FinalBlock);
       emitSuspendExpression(*this, Builder, *SS.FinalSuspend,
@@ -181,4 +152,5 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     }
   }
   EmitStmt(SS.Deallocate);
+  EmitBranch(ReturnBlock.getBlock());
 }
