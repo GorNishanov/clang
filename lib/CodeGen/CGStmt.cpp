@@ -1005,7 +1005,8 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
     ++NumSimpleReturnExprs;
 
   cleanupScope.ForceCleanup();
-  EmitBranchThroughCleanup(ReturnBlock);
+  if (CurCoroutine == nullptr)
+    EmitBranchThroughCleanup(ReturnBlock);
 }
 
 void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
