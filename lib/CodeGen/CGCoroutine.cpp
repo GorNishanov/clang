@@ -86,33 +86,25 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
     ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
 
-  if (auto InvokeDest = CGF.getInvokeDest()) {
-    Builder.CreateInvoke(coroSuspend, ReadyBlock, InvokeDest, args);
-  }
-  else {
-    llvm_unreachable("cannot handle yet");
-  }
-#if 0
   // FIXME: use invoke / landing pad model
   // EmitBranchThrough Cleanup does not generate as nice cleanup code
   auto suspendResult = Builder.CreateCall(coroSuspend, args);
   Builder.CreateCondBr(suspendResult, returnBlock ? returnBlock : ReadyBlock, cleanupBlock);
-#if 0
+
   CGF.EmitBlock(cleanupBlock);
 
-#if 1
   auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
+#if 0
+  jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
   CGF.EmitBranchThroughCleanup(jumpDest);
 #else
   // FIXME: switch to invoke / landing pad (was: CGF.EmitBranchThroughCleanup();)
   // EmitBranchThrough cleanup generates extra variables and switches that
   // confuse CoroSplit pass (and add unnecessary state to coroutine frame)
 
- // auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
   Builder.CreateBr(jumpDest.getBlock());
 #endif
-#endif
-#endif
+
   CGF.EmitBlock(ReadyBlock);
   return CGF.EmitScalarExpr(S.getResumeExpr());
 }
@@ -161,7 +153,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init),
                      EmitScalarExpr(SS.Allocate));
 
-  auto rampReturn = createBasicBlock("coro.ret");
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
     EmitStmt(SS.Promise);
@@ -170,11 +161,12 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     llvm::Function* coroDone = CGM.getIntrinsic(llvm::Intrinsic::coro_done);
     auto doneResult = Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGM.Int8PtrTy));
-    Builder.CreateCondBr(doneResult, rampReturn, start);
+    Builder.CreateCondBr(doneResult, ReturnBlock.getBlock(), start);
 
     EmitBlock(start);
     getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 
+    EmitStmt(SS.ReturnStmt);
     emitSuspendExpression(*this, Builder, *SS.InitSuspend,
       "init", 1);
 
@@ -189,8 +181,4 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     }
   }
   EmitStmt(SS.Deallocate);
-
-  EmitBlock(rampReturn);
-  //EmitStmt(SS.ResultDecl);
-  EmitStmt(SS.ReturnStmt);
 }
