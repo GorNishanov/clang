@@ -607,13 +607,30 @@ public:
   }
 
   bool makeReturnStmt() {
+#if 0
     assert(RetDecl && "makeResultDecl must be invoked before makeReturnStmt");
     auto declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
     if (declRef.isInvalid())
       return false;
-
     StmtResult ReturnStmt =
-        S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
+      S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
+#else
+    ExprResult ReturnObject = buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
+    if (ReturnObject.isInvalid())
+      return false;
+
+    RetType = FD.getReturnType();
+    if (!RetType->isDependentType()) {
+      InitializedEntity Entity =
+        InitializedEntity::InitializeResult(Loc, RetType, false);
+      ReturnObject = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
+        ReturnObject.get());
+      if (ReturnObject.isInvalid())
+        return false;
+    }
+    StmtResult ReturnStmt =
+      S.ActOnReturnStmt(Loc, ReturnObject.get(), S.getCurScope());
+#endif
     this->ReturnStmt = ReturnStmt.get();
 
     return !ReturnStmt.isInvalid();

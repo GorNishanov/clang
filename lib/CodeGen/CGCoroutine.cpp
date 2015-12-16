@@ -86,11 +86,18 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
     ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
 
+  if (auto InvokeDest = CGF.getInvokeDest()) {
+    Builder.CreateInvoke(coroSuspend, ReadyBlock, InvokeDest, args);
+  }
+  else {
+    llvm_unreachable("cannot handle yet");
+  }
+#if 0
   // FIXME: use invoke / landing pad model
   // EmitBranchThrough Cleanup does not generate as nice cleanup code
   auto suspendResult = Builder.CreateCall(coroSuspend, args);
   Builder.CreateCondBr(suspendResult, returnBlock ? returnBlock : ReadyBlock, cleanupBlock);
-
+#if 0
   CGF.EmitBlock(cleanupBlock);
 
 #if 1
@@ -104,7 +111,8 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
  // auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
   Builder.CreateBr(jumpDest.getBlock());
 #endif
-
+#endif
+#endif
   CGF.EmitBlock(ReadyBlock);
   return CGF.EmitScalarExpr(S.getResumeExpr());
 }
@@ -157,7 +165,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
     EmitStmt(SS.Promise);
-    EmitStmt(SS.ResultDecl);
 
     auto start = createBasicBlock("coro.start");
 
@@ -184,5 +191,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitStmt(SS.Deallocate);
 
   EmitBlock(rampReturn);
+  //EmitStmt(SS.ResultDecl);
   EmitStmt(SS.ReturnStmt);
 }
