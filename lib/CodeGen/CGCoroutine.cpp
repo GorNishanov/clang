@@ -84,17 +84,14 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   SmallVector<Value*, 2> args{bitcast, CGF.EmitScalarExpr(S.getSuspendExpr()),
     ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
-  BasicBlock *UnreachBlock = suspendNum != 0 ? nullptr : CGF.createBasicBlock("unreach");
 
   // FIXME: use invoke / landing pad model
   // EmitBranchThrough Cleanup does not generate as nice cleanup code
   auto suspendResult = Builder.CreateCall(coroSuspend, args);
-  Builder.CreateCondBr(suspendResult, UnreachBlock ? UnreachBlock : ReadyBlock, cleanupBlock);
-
-  if (UnreachBlock) {
-    CGF.EmitBlock(UnreachBlock);
-    Builder.CreateUnreachable();
-  }
+  if (suspendNum == 0)
+    Builder.CreateBr(cleanupBlock);
+  else
+    Builder.CreateCondBr(suspendResult, ReadyBlock, cleanupBlock);
 
   CGF.EmitBlock(cleanupBlock);
 
