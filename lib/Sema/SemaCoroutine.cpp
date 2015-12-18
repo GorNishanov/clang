@@ -536,8 +536,11 @@ public:
     if (DeclRef.isInvalid())
       return false;
 
+    Expr *FramePtr =
+      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
+
     SmallVector<Expr *, 2> deleteArgs{
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_delete, {})};
+        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_delete, { FramePtr })};
 
     // Check if we need to pass the size
     const FunctionProtoType *opDeleteType =
