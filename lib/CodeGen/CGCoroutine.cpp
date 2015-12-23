@@ -115,7 +115,7 @@ Value *clang::CodeGen::CGCoroutine::EmitCoyield(CoyieldExpr &S) {
   return emitSuspendExpression(CGF, CGF.Builder, S, "yield", ++suspendNum);
 }
 clang::CodeGen::CGCoroutine::CGCoroutine(CodeGenFunction &F)
-    : CGF(F), suspendNum(0) {}
+    : CGF(F), suspendNum(1) {}
 
 clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 
