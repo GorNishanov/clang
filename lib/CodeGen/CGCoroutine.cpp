@@ -85,8 +85,6 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
     ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
 
-  // FIXME: use invoke / landing pad model
-  // EmitBranchThrough Cleanup does not generate as nice cleanup code
   auto suspendResult = Builder.CreateCall(coroSuspend, args);
   if (suspendNum == 0)
     Builder.CreateBr(cleanupBlock);
@@ -96,7 +94,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   CGF.EmitBlock(cleanupBlock);
 
   auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
-#if 0
+#if 1
   CGF.EmitBranchThroughCleanup(jumpDest);
 #else
   // FIXME: switch to invoke / landing pad (was: CGF.EmitBranchThroughCleanup();)
@@ -135,6 +133,13 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 
     EmitStmt(SS.ReturnStmt);
+
+    auto StartBlock = createBasicBlock("coro.start");
+    llvm::Function* coroDone = CGM.getIntrinsic(llvm::Intrinsic::coro_done);
+    auto doneResult = Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGM.Int8PtrTy));
+    Builder.CreateCondBr(doneResult, ReturnBlock.getBlock(), StartBlock);
+
+    EmitBlock(StartBlock);
     emitSuspendExpression(*this, Builder, *SS.InitSuspend,
       "init", 1);
 
@@ -150,4 +155,5 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   }
   EmitStmt(SS.Deallocate);
   EmitBranch(ReturnBlock.getBlock());
+  CurFn->addFnAttr(llvm::Attribute::Coroutine);
 }
