@@ -2135,6 +2135,21 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     break;
   }
 
+  case Builtin::BI__builtin_coro_from_promise: {
+    Value *ArgValue = EmitScalarExpr(E->getArg(0));
+    BitCastInst* BCI = cast<BitCastInst>(ArgValue);
+    ArgValue = BCI->getOperand(0);
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_from_promise, ArgValue->getType());
+    return RValue::get(Builder.CreateCall(F, ArgValue));
+  }
+  case Builtin::BI__builtin_coro_promise: {
+    Value *ArgValue = EmitScalarExpr(E->getArg(0));
+    BitCastInst* BCI = cast<BitCastInst>(ArgValue);
+    llvm::Type* PromiseType = BCI->getOperand(0)->getType();
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_promise, PromiseType);
+    return RValue::get(Builder.CreateCall(F, ArgValue));
+  }
+
   case Builtin::BI__builtin_coro_resume: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
     Value *F = CGM.getIntrinsic(Intrinsic::coro_resume);
