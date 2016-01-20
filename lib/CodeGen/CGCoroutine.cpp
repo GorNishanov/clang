@@ -122,9 +122,36 @@ clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
 
-  // allocate memory for coroutine frame
+  auto BoolTy = llvm::Type::getInt1Ty(getLLVMContext());
+  auto FlagAddr = Builder.CreateAlloca(BoolTy); // TODO: move it together with all others
+
+  auto CoroElide = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_elide));
+  auto ICmp =
+    Builder.CreateICmpNE(CoroElide,
+      llvm::ConstantPointerNull::get(VoidPtrTy));
+
+  auto EntryBB = Builder.GetInsertBlock();
+  auto AllocBB = createBasicBlock("coro.alloc");
+  auto InitBB = createBasicBlock("coro.init");
+
+  Builder.CreateCondBr(ICmp, InitBB, AllocBB);
+
+  EmitBlock(AllocBB);
+
+  auto AllocateCall = EmitScalarExpr(SS.Allocate);
+  Builder.CreateBr(InitBB);
+  
+  EmitBlock(InitBB);
+  auto Phi = Builder.CreatePHI(VoidPtrTy, 2);
+  Phi->addIncoming(CoroElide, EntryBB);
+  Phi->addIncoming(AllocateCall, AllocBB);
+
   Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init),
-                     EmitScalarExpr(SS.Allocate));
+                         Phi);
+
+  auto Select = Builder.CreateSelect(ICmp,
+    llvm::ConstantInt::getTrue(BoolTy), llvm::ConstantInt::getFalse(BoolTy));
+  Builder.CreateStore(Select, Address(FlagAddr,CharUnits::One()));
 
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
@@ -153,7 +180,17 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
         "final", 0);
     }
   }
+
+  auto DeallocBB = createBasicBlock("coro.free");
+  auto ReturnBB = ReturnBlock.getBlock();
+
+  auto ShouldDeallocate = 
+    Builder.CreateLoad(Address(FlagAddr, CharUnits::One()));
+  Builder.CreateCondBr(ShouldDeallocate, DeallocBB, ReturnBB);
+
+  EmitBlock(DeallocBB);
   EmitStmt(SS.Deallocate);
   EmitBranch(ReturnBlock.getBlock());
+
   CurFn->addFnAttr(llvm::Attribute::Coroutine);
 }
