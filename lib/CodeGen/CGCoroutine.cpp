@@ -122,9 +122,6 @@ clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
 
-  auto BoolTy = llvm::Type::getInt1Ty(getLLVMContext());
-  auto FlagAddr = Builder.CreateAlloca(BoolTy); // TODO: move it together with all others
-
   auto CoroElide = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_elide));
   auto ICmp =
     Builder.CreateICmpNE(CoroElide,
@@ -148,10 +145,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init),
                          Phi);
-
-  auto Select = Builder.CreateSelect(ICmp,
-    llvm::ConstantInt::getTrue(BoolTy), llvm::ConstantInt::getFalse(BoolTy));
-  Builder.CreateStore(Select, Address(FlagAddr,CharUnits::One()));
 
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
@@ -180,15 +173,20 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
         "final", 0);
     }
   }
-
+#if 0
   auto DeallocBB = createBasicBlock("coro.free");
   auto ReturnBB = ReturnBlock.getBlock();
 
-  auto ShouldDeallocate = 
-    Builder.CreateLoad(Address(FlagAddr, CharUnits::One()));
+  auto CoroDelete = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_delete),
+    llvm::ConstantPointerNull::get(VoidPtrTy));
+  auto ShouldDeallocate =
+    Builder.CreateICmpNE(CoroDelete,
+      llvm::ConstantPointerNull::get(VoidPtrTy));
+
   Builder.CreateCondBr(ShouldDeallocate, DeallocBB, ReturnBB);
 
   EmitBlock(DeallocBB);
+#endif
   EmitStmt(SS.Deallocate);
   EmitBranch(ReturnBlock.getBlock());
 
