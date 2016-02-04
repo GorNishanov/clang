@@ -539,8 +539,9 @@ public:
     Expr *FramePtr =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
-    SmallVector<Expr *, 2> deleteArgs{
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_delete, { FramePtr })};
+    SmallVector<Expr *, 2> deleteArgs{ FramePtr };
+
+    Expr *CoroDelete = buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_delete, { FramePtr });
 
     // Check if we need to pass the size
     const FunctionProtoType *opDeleteType =
@@ -554,8 +555,22 @@ public:
     if (CallExpr.isInvalid())
       return false;
 
+#if 0
+    auto CondExpr = S.ActOnConditionalOp(Loc, Loc, CoroDelete, CallExpr.get(), CoroDelete);
+    if (CondExpr.isInvalid())
+      return false;
+#else
+    auto IfStmt = S.ActOnIfStmt(Loc, S.MakeFullExpr(CoroDelete), nullptr,
+      CallExpr.get(), Loc,
+      nullptr);
+    if (IfStmt.isInvalid())
+      return false;
+    
+#endif
+
+
     // make it a labeled statement
-    StmtResult res = S.ActOnLabelStmt(Loc, label, Loc, CallExpr.get());
+    StmtResult res = S.ActOnLabelStmt(Loc, label, Loc, IfStmt.get());
 
     if (res.isInvalid())
       return false;
