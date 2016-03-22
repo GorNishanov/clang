@@ -441,7 +441,7 @@ public:
     this->IsValid = makePromiseStmt() && makeInitialSuspend() &&
                     makeFinalSuspend() && makeOnException() &&
                     makeOnFallthrough() && makeNewAndDeleteExpr(label) &&
-                    makeResultDecl() && makeReturnStmt();
+                    makeResultDecl() && makeReturnStmt() && makeParamMoves();
   }
 
   bool isInvalid() const { return !this->IsValid; }
@@ -568,7 +568,6 @@ public:
     
 #endif
 
-
     // make it a labeled statement
     StmtResult res = S.ActOnLabelStmt(Loc, label, Loc, IfStmt.get());
 
@@ -654,8 +653,76 @@ public:
     return !ReturnStmt.isInvalid();
   }
 
+  // Create a static_cast\<T&&>(expr).
+  Expr *CastForMoving(Expr *E, QualType T = QualType()) {
+    if (T.isNull()) T = E->getType();
+    QualType TargetType = S.BuildReferenceType(
+      T, /*SpelledAsLValue*/false, SourceLocation(), DeclarationName());
+    SourceLocation ExprLoc = E->getLocStart();
+    TypeSourceInfo *TargetLoc = S.Context.getTrivialTypeSourceInfo(
+      TargetType, ExprLoc);
+
+    return S.BuildCXXNamedCast(ExprLoc, tok::kw_static_cast, TargetLoc, E,
+      SourceRange(ExprLoc, ExprLoc),
+      E->getSourceRange()).get();
+  }
+
+  /// \brief Build a variable declaration for move parameter.
+  VarDecl *buildVarDecl(SourceLocation Loc, QualType Type,
+    StringRef Name) {
+    DeclContext *DC = S.CurContext;
+    IdentifierInfo *II = &S.PP.getIdentifierTable().get(Name);
+    TypeSourceInfo *TInfo = S.Context.getTrivialTypeSourceInfo(Type, Loc);
+    VarDecl *Decl =
+      VarDecl::Create(S.Context, DC, Loc, Loc, II, Type, TInfo, SC_None);
+    Decl->setImplicit();
+    return Decl;
+  }
+
+  //DeclRefExpr *buildDeclRefExpr(VarDecl *D, QualType Ty, SourceLocation Loc) {
+  //  D->setReferenced();
+  //  D->markUsed(S.Context);
+  //  return DeclRefExpr::Create(S.getASTContext(), NestedNameSpecifierLoc(),
+  //    SourceLocation(), D, /*RefersToCapture=*/false, Loc, Ty,
+  //    VK_LValue);
+  //}
+
   bool makeParamMoves() {
     // FIXME: Perform move-initialization of parameters into frame-local copies.
+    // xxx Go through list of parameters, find UDT's passed by value and do copies
+
+    for (auto* paramDecl : FD.parameters()) {
+      auto Ty = paramDecl->getType();
+      if (Ty->isDependentType())
+        continue;
+
+      if (auto RD = Ty->getAsCXXRecordDecl()) {
+        if (RD->isUnion())
+          continue;
+        if (!paramDecl->getIdentifier())
+          continue;
+        auto ParamRef =
+            S.BuildDeclRefExpr(paramDecl, paramDecl->getType(),
+                               ExprValueKind::VK_LValue, Loc); // FIXME: scope?
+        if (ParamRef.isInvalid())
+          return false;
+
+        auto RCast = CastForMoving(ParamRef.get());
+
+        SmallString<16> str(paramDecl->getIdentifier()->getName());
+        str.append(".copy");
+        auto D = buildVarDecl(Loc, Ty, str);
+
+        S.AddInitializerToDecl(D,
+          RCast,
+          /*DirectInit=*/true, /*TypeMayContainAuto=*/false);
+
+        D->dumpColor();
+        //RCast->dumpColor();
+        // paramDecl->dumpColor();
+        // xxx
+      }
+    }
     return true;
   }
 };
