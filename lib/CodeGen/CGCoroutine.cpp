@@ -128,6 +128,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       llvm::ConstantPointerNull::get(VoidPtrTy));
 
   auto EntryBB = Builder.GetInsertBlock();
+  auto EndBB = createBasicBlock("coro.end");
   auto AllocBB = createBasicBlock("coro.alloc");
   auto InitBB = createBasicBlock("coro.init");
 
@@ -157,7 +158,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     auto StartBlock = createBasicBlock("coro.start");
     llvm::Function* coroDone = CGM.getIntrinsic(llvm::Intrinsic::coro_done);
     auto doneResult = Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGM.Int8PtrTy));
-    Builder.CreateCondBr(doneResult, ReturnBlock.getBlock(), StartBlock);
+    Builder.CreateCondBr(doneResult, EndBB, StartBlock);
 
     EmitBlock(StartBlock);
     emitSuspendExpression(*this, Builder, *SS.InitSuspend,
@@ -188,7 +189,12 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(DeallocBB);
 #endif
   EmitStmt(SS.Deallocate);
-  EmitBranch(ReturnBlock.getBlock());
+  EmitBranch(EndBB);
+
+  EmitBlock(EndBB);
+  //EmitBranchThroughCleanup(ReturnBlock);
+
+  //EmitBranch(ReturnBlock.getBlock());
 
   CurFn->addFnAttr(llvm::Attribute::Coroutine);
 }
