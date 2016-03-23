@@ -14,6 +14,7 @@
 #include "CGCoroutine.h"
 #include "CodeGenFunction.h"
 #include "llvm/IR/Intrinsics.h"
+#include "clang/AST/StmtVisitor.h"
 #include "clang/AST/StmtCXX.h"
 
 #include "llvm/Pass.h"
@@ -111,6 +112,38 @@ clang::CodeGen::CGCoroutine::CGCoroutine(CodeGenFunction &F)
 
 clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 
+namespace {
+  struct GetParamRef : public StmtVisitor<GetParamRef> {
+  public:
+    DeclRefExpr* Expr = nullptr;
+    GetParamRef() { }
+    void VisitDeclRefExpr(DeclRefExpr *E) {
+      assert(Expr == nullptr && "multilple declref in param move");
+      Expr = E;
+    }
+  };
+}
+
+static void EmitCoroParam(CodeGenFunction& CGF, DeclStmt* PM) {
+  assert(PM->isSingleDecl());
+  VarDecl* VD = static_cast<VarDecl*>(PM->getSingleDecl());
+  Expr* InitExpr = VD->getInit();
+  GetParamRef Visitor;
+  Visitor.Visit(InitExpr);// InitExpr);
+//  Visitor.TraverseStmtExpr(InitExpr);// InitExpr);
+  assert(Visitor.Expr);
+  auto DREOrig = cast<DeclRefExpr>(Visitor.Expr);
+
+  DeclRefExpr DRE(VD, /* RefersToEnclosingVariableOrCapture= */false,
+                  VD->getType(), VK_LValue, SourceLocation{});
+  auto Orig = CGF.Builder.CreateBitCast(CGF.EmitLValue(DREOrig).getAddress(), CGF.VoidPtrTy);
+  auto Copy = CGF.Builder.CreateBitCast(CGF.EmitLValue(&DRE).getAddress(), CGF.VoidPtrTy);
+  SmallVector<Value *, 2> args{Orig.getPointer(), Copy.getPointer()};
+
+  auto CoroParam = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_param);
+  auto Call = CGF.Builder.CreateCall(CoroParam, args);
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
 
@@ -141,10 +174,16 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
     EmitStmt(SS.Promise);
+
+#if 1
     for (auto PM : S.getParamMoves()) {
       EmitStmt(PM);
+      // TODO: if(CoroParam(...)) need to suround ctor and dtor
+      // for the copy, so that llvm can elide it if the copy is
+      // not needed
+     // EmitCoroParam(*this, static_cast<DeclStmt*>(PM)); 
     }
-
+#endif
     getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 
     EmitStmt(SS.ReturnStmt);
