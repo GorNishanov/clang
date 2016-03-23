@@ -150,6 +150,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
     EmitStmt(SS.Promise);
+    for (auto PM : S.getParamMoves()) {
+      EmitStmt(PM);
+    }
 
     getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 

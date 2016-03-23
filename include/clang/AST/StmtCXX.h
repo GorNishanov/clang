@@ -338,7 +338,7 @@ public:
     return child_range(getStoredStmts(),
       getStoredStmts() + getParamMoveIndex() + NumParams);
   }
-  ArrayRef<Stmt *> getParamMoves() {
+  ArrayRef<Stmt *> getParamMoves() const {
     return{ getStoredStmts() + getParamMoveIndex(), NumParams };
   }
 
