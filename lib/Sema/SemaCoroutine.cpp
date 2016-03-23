@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "TreeTransform.h"
 #include "clang/Sema/SemaInternal.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/ExprCXX.h"
@@ -419,6 +420,31 @@ StmtResult Sema::BuildCoreturnStmt(SourceLocation Loc, Expr *E) {
 }
 
 namespace {
+
+struct RewriteParams : TreeTransform<RewriteParams> {
+  typedef TreeTransform<RewriteParams> BaseTransform;
+
+  ArrayRef<Stmt *> ParamsMove;
+  ArrayRef<ParmVarDecl *> Params;
+  RewriteParams(Sema &SemaRef, ArrayRef<ParmVarDecl *> P, ArrayRef<Stmt *> PM)
+      : BaseTransform(SemaRef), Params(P), ParamsMove(PM) {}
+
+  ExprResult TransformDeclRefExpr(DeclRefExpr *E) {
+    auto D = E->getDecl();
+    if (auto PD = dyn_cast<ParmVarDecl>(D)) {
+      auto it = std::find(Params.begin(), Params.end(), PD);
+      if (it != Params.end()) {
+        auto N = it - Params.begin();
+        auto Copy = cast<DeclStmt>(ParamsMove[N]);
+        auto VD = cast<VarDecl>(Copy->getSingleDecl());
+        return SemaRef.BuildDeclRefExpr(
+            VD, VD->getType(), ExprValueKind::VK_LValue, SourceLocation{});
+      }
+    }
+    return BaseTransform::TransformDeclRefExpr(E);
+  }
+};
+
 class SubStmtBuilder : CoroutineBodyStmt::SubStmt {
   Sema &S;
   FunctionDecl &FD;
@@ -427,7 +453,8 @@ class SubStmtBuilder : CoroutineBodyStmt::SubStmt {
   SourceLocation Loc;
   QualType RetType;
   VarDecl *RetDecl = nullptr;
-  SmallVector<Stmt *, 16> ParamMoves;
+  SmallVector<Stmt *, 4> ParamMoves;
+  SmallVector<ParmVarDecl *, 4> Params;
 
 public:
   SubStmtBuilder(Sema &S, FunctionDecl &FD, FunctionScopeInfo &Fn, Stmt *Body)
@@ -442,6 +469,15 @@ public:
                     makeFinalSuspend() && makeOnException() &&
                     makeOnFallthrough() && makeNewAndDeleteExpr(label) &&
                     makeResultDecl() && makeReturnStmt() && makeParamMoves();
+    if (IsValid) {
+      RewriteParams RP(S, getParams(), getParamMoves());
+      auto NewBody = RP.TransformStmt(Body);
+      if (NewBody.isInvalid()) {
+        IsValid = false;
+        return;
+      }
+      this->Body = NewBody.get();
+    }
   }
 
   bool isInvalid() const { return !this->IsValid; }
@@ -449,6 +485,7 @@ public:
   CoroutineBodyStmt::SubStmt &getSubStmts() { return *this; }
 
   ArrayRef<Stmt *> getParamMoves() { return ParamMoves; }
+  ArrayRef<ParmVarDecl *> getParams() { return Params; }
 
   bool makePromiseStmt() {
     // Form a declaration statement for the promise declaration, so that AST
@@ -717,19 +754,14 @@ public:
           RCast,
           /*DirectInit=*/true, /*TypeMayContainAuto=*/false);
 
-        D->dumpColor();
-
         // convert decl to a statement
         StmtResult Stmt = S.ActOnDeclStmt(
           S.ConvertDeclToDeclGroup(D), Loc, Loc);
         if (Stmt.isInvalid())
           return false;
 
+        Params.push_back(paramDecl);
         ParamMoves.push_back(Stmt.get());
-
-        //RCast->dumpColor();
-        // paramDecl->dumpColor();
-        // xxx
       }
     }
     return true;
