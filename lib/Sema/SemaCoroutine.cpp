@@ -495,7 +495,7 @@ public:
   // FIXME: Perform analysis of set_exception call.
 
   bool makeOnException() { return true; }
-  bool makeOnFallthrough() { return true; }
+  bool makeOnFallthrough() { return true; } // CR: March 2016, what is this?
 
   bool makeNewAndDeleteExpr(LabelDecl *label) {
     TypeSourceInfo *TInfo = Fn.CoroutinePromise->getTypeSourceInfo();
@@ -718,6 +718,15 @@ public:
           /*DirectInit=*/true, /*TypeMayContainAuto=*/false);
 
         D->dumpColor();
+
+        // convert decl to a statement
+        StmtResult Stmt = S.ActOnDeclStmt(
+          S.ConvertDeclToDeclGroup(D), Loc, Loc);
+        if (Stmt.isInvalid())
+          return false;
+
+        ParamMoves.push_back(Stmt.get());
+
         //RCast->dumpColor();
         // paramDecl->dumpColor();
         // xxx
