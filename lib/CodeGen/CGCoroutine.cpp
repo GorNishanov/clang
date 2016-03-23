@@ -94,15 +94,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   CGF.EmitBlock(cleanupBlock);
 
   auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
-#if 1
   CGF.EmitBranchThroughCleanup(jumpDest);
-#else
-  // FIXME: switch to invoke / landing pad (was: CGF.EmitBranchThroughCleanup();)
-  // EmitBranchThrough cleanup generates extra variables and switches that
-  // confuse CoroSplit pass (and add unnecessary state to coroutine frame)
-
-  Builder.CreateBr(jumpDest.getBlock());
-#endif
 
   CGF.EmitBlock(ReadyBlock);
   return CGF.EmitScalarExpr(S.getResumeExpr());
