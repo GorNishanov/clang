@@ -36,13 +36,15 @@ struct PrintingPolicy {
   /// \brief Create a default printing policy for C.
   PrintingPolicy(const LangOptions &LO)
     : LangOpts(LO), Indentation(2), SuppressSpecifiers(false),
-      SuppressTagKeyword(false), SuppressTag(false), SuppressScope(false),
+      SuppressTagKeyword(false),
+      IncludeTagDefinition(false), SuppressScope(false),
       SuppressUnwrittenScope(false), SuppressInitializers(false),
       ConstantArraySizeAsWritten(false), AnonymousTagLocations(true),
       SuppressStrongLifetime(false), SuppressLifetimeQualifiers(false),
+      SuppressTemplateArgsInCXXConstructors(false),
       Bool(LO.Bool), TerseOutput(false), PolishForDeclaration(false),
       Half(LO.Half), MSWChar(LO.MicrosoftExt && !LO.WChar),
-      IncludeNewlines(true) { }
+      IncludeNewlines(true), MSVCFormatting(false) { }
 
   /// \brief What language we're printing.
   LangOptions LangOpts;
@@ -76,15 +78,15 @@ struct PrintingPolicy {
   /// \endcode
   bool SuppressTagKeyword : 1;
 
-  /// \brief Whether type printing should skip printing the actual tag type.
+  /// \brief When true, include the body of a tag definition.
   ///
-  /// This is used when the caller needs to print a tag definition in front
-  /// of the type, as in constructs like the following:
+  /// This is used to place the definition of a struct
+  /// in the middle of another declaration as with:
   ///
   /// \code
   /// typedef struct { int x, y; } Point;
   /// \endcode
-  bool SuppressTag : 1;
+  bool IncludeTagDefinition : 1;
 
   /// \brief Suppresses printing of scope specifiers.
   bool SuppressScope : 1;
@@ -136,7 +138,11 @@ struct PrintingPolicy {
   /// \brief When true, suppress printing of lifetime qualifier in
   /// ARC.
   unsigned SuppressLifetimeQualifiers : 1;
-  
+
+  /// When true, suppresses printing template arguments in names of C++
+  /// constructors.
+  unsigned SuppressTemplateArgsInCXXConstructors : 1;
+
   /// \brief Whether we can use 'bool' rather than '_Bool', even if the language
   /// doesn't actually have 'bool' (because, e.g., it is defined as a macro).
   unsigned Bool : 1;
@@ -163,6 +169,11 @@ struct PrintingPolicy {
 
   /// \brief When true, include newlines after statements like "break", etc.
   unsigned IncludeNewlines : 1;
+
+  /// \brief Use whitespace and punctuation like MSVC does. In particular, this
+  /// prints anonymous namespaces as `anonymous namespace' and does not insert
+  /// spaces after template arguments.
+  bool MSVCFormatting : 1;
 };
 
 } // end namespace clang

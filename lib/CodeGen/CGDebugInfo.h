@@ -16,6 +16,7 @@
 
 #include "CGBuilder.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Frontend/CodeGenOptions.h"
@@ -52,11 +53,12 @@ class CGDebugInfo {
   friend class ApplyDebugLocation;
   friend class SaveAndRestoreLocation;
   CodeGenModule &CGM;
-  const CodeGenOptions::DebugInfoKind DebugKind;
+  const codegenoptions::DebugInfoKind DebugKind;
   bool DebugTypeExtRefs;
   llvm::DIBuilder DBuilder;
   llvm::DICompileUnit *TheCU = nullptr;
   ModuleMap *ClangModuleMap = nullptr;
+  ExternalASTSource::ASTSourceDescriptor PCHDescriptor;
   SourceLocation CurLoc;
   llvm::DIType *VTablePtrType = nullptr;
   llvm::DIType *ClassTy = nullptr;
@@ -107,13 +109,18 @@ class CGDebugInfo {
   /// compilation.
   std::vector<std::pair<const TagType *, llvm::TrackingMDRef>> ReplaceMap;
 
-  /// Cache of replaceable forward declarartions (functions and
+  /// Cache of replaceable forward declarations (functions and
   /// variables) to RAUW at the end of compilation.
   std::vector<std::pair<const DeclaratorDecl *, llvm::TrackingMDRef>>
       FwdDeclReplaceMap;
 
   /// Keep track of our current nested lexical block.
   std::vector<llvm::TypedTrackingMDRef<llvm::DIScope>> LexicalBlockStack;
+
+  /// Map of AST declaration to its lexical block scope.
+  llvm::DenseMap<const Decl *, llvm::TypedTrackingMDRef<llvm::DIScope>>
+      LexicalBlockMap;
+
   llvm::DenseMap<const Decl *, llvm::TrackingMDRef> RegionMap;
   /// Keep track of LexicalBlockStack counter at the beginning of a
   /// function. This is used to pop unbalanced regions at the end of a
@@ -168,6 +175,7 @@ class CGDebugInfo {
   llvm::DIType *CreateType(const RValueReferenceType *Ty, llvm::DIFile *Unit);
   llvm::DIType *CreateType(const MemberPointerType *Ty, llvm::DIFile *F);
   llvm::DIType *CreateType(const AtomicType *Ty, llvm::DIFile *F);
+  llvm::DIType *CreateType(const PipeType *Ty, llvm::DIFile *F);
   /// Get enumeration type.
   llvm::DIType *CreateEnumType(const EnumType *Ty);
   llvm::DIType *CreateTypeDefinition(const EnumType *Ty);
@@ -274,6 +282,8 @@ public:
 
   void finalize();
 
+  /// Module debugging: Support for building PCMs.
+  /// @{
   /// Set the main CU's DwoId field to \p Signature.
   void setDwoId(uint64_t Signature);
 
@@ -281,6 +291,14 @@ public:
   /// precompiled header, this module map will be used to determine
   /// the module of origin of each Decl.
   void setModuleMap(ModuleMap &MMap) { ClangModuleMap = &MMap; }
+
+  /// When generating debug information for a clang module or
+  /// precompiled header, this module map will be used to determine
+  /// the module of origin of each Decl.
+  void setPCHDescriptor(ExternalASTSource::ASTSourceDescriptor PCH) {
+    PCHDescriptor = PCH;
+  }
+  /// @}
 
   /// Update the current source location. If \arg loc is invalid it is
   /// ignored.
@@ -364,6 +382,12 @@ public:
 
   /// Emit an Objective-C interface type standalone debug info.
   llvm::DIType *getOrCreateInterfaceType(QualType Ty, SourceLocation Loc);
+
+  /// Map AST declaration to its lexical block scope if available.
+  void recordDeclarationLexicalScope(const Decl &D);
+
+  /// Get lexical scope of AST declaration.
+  llvm::DIScope *getDeclarationLexicalScope(const Decl &D, QualType Ty);
 
   /// Emit standalone debug info for a type.
   llvm::DIType *getOrCreateStandaloneType(QualType Ty, SourceLocation Loc);
@@ -574,7 +598,7 @@ public:
   /// passing an empty SourceLocation to \a CGDebugInfo::setLocation()
   /// will result in the last valid location being reused.  Note that
   /// all instructions that do not have a location at the beginning of
-  /// a function are counted towards to funciton prologue.
+  /// a function are counted towards to function prologue.
   static ApplyDebugLocation CreateEmpty(CodeGenFunction &CGF) {
     return ApplyDebugLocation(CGF, true, SourceLocation());
   }

@@ -19,6 +19,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/Config/llvm-config.h"
 #include <atomic>
@@ -111,6 +112,20 @@ bool FileSystem::exists(const Twine &Path) {
   return Status && Status->exists();
 }
 
+#ifndef NDEBUG
+static bool isTraversalComponent(StringRef Component) {
+  return Component.equals("..") || Component.equals(".");
+}
+
+static bool pathHasTraversal(StringRef Path) {
+  using namespace llvm::sys;
+  for (StringRef Comp : llvm::make_range(path::begin(Path), path::end(Path)))
+    if (isTraversalComponent(Comp))
+      return true;
+  return false;
+}
+#endif
+
 //===-----------------------------------------------------------------------===/
 // RealFileSystem implementation
 //===-----------------------------------------------------------------------===/
@@ -158,21 +173,10 @@ RealFile::getBuffer(const Twine &Name, int64_t FileSize,
                                    IsVolatile);
 }
 
-// FIXME: This is terrible, we need this for ::close.
-#if !defined(_MSC_VER) && !defined(__MINGW32__)
-#include <unistd.h>
-#include <sys/uio.h>
-#else
-#include <io.h>
-#ifndef S_ISFIFO
-#define S_ISFIFO(x) (0)
-#endif
-#endif
 std::error_code RealFile::close() {
-  if (::close(FD))
-    return std::error_code(errno, std::generic_category());
+  std::error_code EC = sys::Process::SafelyCloseFileDescriptor(FD);
   FD = -1;
-  return std::error_code();
+  return EC;
 }
 
 namespace {
@@ -658,6 +662,23 @@ directory_iterator InMemoryFileSystem::dir_begin(const Twine &Dir,
   EC = make_error_code(llvm::errc::not_a_directory);
   return directory_iterator(std::make_shared<InMemoryDirIterator>());
 }
+
+std::error_code InMemoryFileSystem::setCurrentWorkingDirectory(const Twine &P) {
+  SmallString<128> Path;
+  P.toVector(Path);
+
+  // Fix up relative paths. This just prepends the current working directory.
+  std::error_code EC = makeAbsolute(Path);
+  assert(!EC);
+  (void)EC;
+
+  if (useNormalizedPaths())
+    llvm::sys::path::remove_dots(Path, /*remove_dot_dot=*/true);
+
+  if (!Path.empty())
+    WorkingDirectory = Path.str();
+  return std::error_code();
+}
 }
 }
 
@@ -759,6 +780,7 @@ public:
 /// All configuration options are optional.
 ///   'case-sensitive': <boolean, default=true>
 ///   'use-external-names': <boolean, default=true>
+///   'overlay-relative': <boolean, default=false>
 ///
 /// Virtual directories are represented as
 /// \verbatim
@@ -798,6 +820,10 @@ class RedirectingFileSystem : public vfs::FileSystem {
   std::vector<std::unique_ptr<Entry>> Roots;
   /// \brief The file system to use for external references.
   IntrusiveRefCntPtr<FileSystem> ExternalFS;
+  /// If IsRelativeOverlay is set, this represents the directory
+  /// path that should be prefixed to each 'external-contents' entry
+  /// when reading from YAML files.
+  std::string ExternalContentsPrefixDir;
 
   /// @name Configuration
   /// @{
@@ -807,10 +833,24 @@ class RedirectingFileSystem : public vfs::FileSystem {
   /// Currently, case-insensitive matching only works correctly with ASCII.
   bool CaseSensitive;
 
+  /// IsRelativeOverlay marks whether a IsExternalContentsPrefixDir path must
+  /// be prefixed in every 'external-contents' when reading from YAML files.
+  bool IsRelativeOverlay = false;
+
   /// \brief Whether to use to use the value of 'external-contents' for the
   /// names of files.  This global value is overridable on a per-file basis.
   bool UseExternalNames;
   /// @}
+
+  /// Virtual file paths and external files could be canonicalized without "..",
+  /// "." and "./" in their paths. FIXME: some unittests currently fail on
+  /// win32 when using remove_dots and remove_leading_dotslash on paths.
+  bool UseCanonicalizedPaths =
+#ifdef LLVM_ON_WIN32
+      false;
+#else
+      true;
+#endif
 
   friend class RedirectingFileSystemParser;
 
@@ -834,8 +874,8 @@ public:
   /// returns a virtual file system representing its contents.
   static RedirectingFileSystem *
   create(std::unique_ptr<MemoryBuffer> Buffer,
-         SourceMgr::DiagHandlerTy DiagHandler, void *DiagContext,
-         IntrusiveRefCntPtr<FileSystem> ExternalFS);
+         SourceMgr::DiagHandlerTy DiagHandler, StringRef YAMLFilePath,
+         void *DiagContext, IntrusiveRefCntPtr<FileSystem> ExternalFS);
 
   ErrorOr<Status> status(const Twine &Path) override;
   ErrorOr<std::unique_ptr<File>> openFileForRead(const Twine &Path) override;
@@ -868,6 +908,15 @@ public:
     return directory_iterator(std::make_shared<VFSFromYamlDirIterImpl>(Dir,
         *this, D->contents_begin(), D->contents_end(), EC));
   }
+
+  void setExternalContentsPrefixDir(StringRef PrefixDir) {
+    ExternalContentsPrefixDir = PrefixDir.str();
+  }
+
+  StringRef getExternalContentsPrefixDir() const {
+    return ExternalContentsPrefixDir;
+  }
+
 };
 
 /// \brief A helper class to hold the common YAML parsing state.
@@ -947,7 +996,7 @@ class RedirectingFileSystemParser {
     return true;
   }
 
-  std::unique_ptr<Entry> parseEntry(yaml::Node *N) {
+  std::unique_ptr<Entry> parseEntry(yaml::Node *N, RedirectingFileSystem *FS) {
     yaml::MappingNode *M = dyn_cast<yaml::MappingNode>(N);
     if (!M) {
       error(N, "expected mapping node for file or directory entry");
@@ -987,7 +1036,17 @@ class RedirectingFileSystemParser {
       if (Key == "name") {
         if (!parseScalarString(I->getValue(), Value, Buffer))
           return nullptr;
-        Name = Value;
+
+        if (FS->UseCanonicalizedPaths) {
+          SmallString<256> Path(Value);
+          // Guarantee that old YAML files containing paths with ".." and "."
+          // are properly canonicalized before read into the VFS.
+          Path = sys::path::remove_leading_dotslash(Path);
+          sys::path::remove_dots(Path, /*remove_dot_dot=*/true);
+          Name = Path.str();
+        } else {
+          Name = Value;
+        }
       } else if (Key == "type") {
         if (!parseScalarString(I->getValue(), Value, Buffer))
           return nullptr;
@@ -1017,7 +1076,7 @@ class RedirectingFileSystemParser {
         for (yaml::SequenceNode::iterator I = Contents->begin(),
                                           E = Contents->end();
              I != E; ++I) {
-          if (std::unique_ptr<Entry> E = parseEntry(&*I))
+          if (std::unique_ptr<Entry> E = parseEntry(&*I, FS))
             EntryArrayContents.push_back(std::move(E));
           else
             return nullptr;
@@ -1031,7 +1090,24 @@ class RedirectingFileSystemParser {
         HasContents = true;
         if (!parseScalarString(I->getValue(), Value, Buffer))
           return nullptr;
-        ExternalContentsPath = Value;
+
+        SmallString<256> FullPath;
+        if (FS->IsRelativeOverlay) {
+          FullPath = FS->getExternalContentsPrefixDir();
+          assert(!FullPath.empty() &&
+                 "External contents prefix directory must exist");
+          llvm::sys::path::append(FullPath, Value);
+        } else {
+          FullPath = Value;
+        }
+
+        if (FS->UseCanonicalizedPaths) {
+          // Guarantee that old YAML files containing paths with ".." and "."
+          // are properly canonicalized before read into the VFS.
+          FullPath = sys::path::remove_leading_dotslash(FullPath);
+          sys::path::remove_dots(FullPath, /*remove_dot_dot=*/true);
+        }
+        ExternalContentsPath = FullPath.str();
       } else if (Key == "use-external-name") {
         bool Val;
         if (!parseScalarBool(I->getValue(), Val))
@@ -1117,6 +1193,7 @@ public:
       KeyStatusPair("version", true),
       KeyStatusPair("case-sensitive", false),
       KeyStatusPair("use-external-names", false),
+      KeyStatusPair("overlay-relative", false),
       KeyStatusPair("roots", true),
     };
 
@@ -1142,7 +1219,7 @@ public:
 
         for (yaml::SequenceNode::iterator I = Roots->begin(), E = Roots->end();
              I != E; ++I) {
-          if (std::unique_ptr<Entry> E = parseEntry(&*I))
+          if (std::unique_ptr<Entry> E = parseEntry(&*I, FS))
             FS->Roots.push_back(std::move(E));
           else
             return false;
@@ -1168,6 +1245,9 @@ public:
       } else if (Key == "case-sensitive") {
         if (!parseScalarBool(I->getValue(), FS->CaseSensitive))
           return false;
+      } else if (Key == "overlay-relative") {
+        if (!parseScalarBool(I->getValue(), FS->IsRelativeOverlay))
+          return false;
       } else if (Key == "use-external-names") {
         if (!parseScalarBool(I->getValue(), FS->UseExternalNames))
           return false;
@@ -1188,9 +1268,11 @@ public:
 
 Entry::~Entry() = default;
 
-RedirectingFileSystem *RedirectingFileSystem::create(
-    std::unique_ptr<MemoryBuffer> Buffer, SourceMgr::DiagHandlerTy DiagHandler,
-    void *DiagContext, IntrusiveRefCntPtr<FileSystem> ExternalFS) {
+RedirectingFileSystem *
+RedirectingFileSystem::create(std::unique_ptr<MemoryBuffer> Buffer,
+                              SourceMgr::DiagHandlerTy DiagHandler,
+                              StringRef YAMLFilePath, void *DiagContext,
+                              IntrusiveRefCntPtr<FileSystem> ExternalFS) {
 
   SourceMgr SM;
   yaml::Stream Stream(Buffer->getMemBufferRef(), SM);
@@ -1207,6 +1289,23 @@ RedirectingFileSystem *RedirectingFileSystem::create(
 
   std::unique_ptr<RedirectingFileSystem> FS(
       new RedirectingFileSystem(ExternalFS));
+
+  if (!YAMLFilePath.empty()) {
+    // Use the YAML path from -ivfsoverlay to compute the dir to be prefixed
+    // to each 'external-contents' path.
+    //
+    // Example:
+    //    -ivfsoverlay dummy.cache/vfs/vfs.yaml
+    // yields:
+    //  FS->ExternalContentsPrefixDir => /<absolute_path_to>/dummy.cache/vfs
+    //
+    SmallString<256> OverlayAbsDir = sys::path::parent_path(YAMLFilePath);
+    std::error_code EC = llvm::sys::fs::make_absolute(OverlayAbsDir);
+    assert(!EC && "Overlay dir final path must be absolute");
+    (void)EC;
+    FS->setExternalContentsPrefixDir(OverlayAbsDir);
+  }
+
   if (!P.parse(Root, FS.get()))
     return nullptr;
 
@@ -1220,6 +1319,14 @@ ErrorOr<Entry *> RedirectingFileSystem::lookupPath(const Twine &Path_) {
   // Handle relative paths
   if (std::error_code EC = makeAbsolute(Path))
     return EC;
+
+  // Canonicalize path by removing ".", "..", "./", etc components. This is
+  // a VFS request, do bot bother about symlinks in the path components
+  // but canonicalize in order to perform the correct entry search.
+  if (UseCanonicalizedPaths) {
+    Path = sys::path::remove_leading_dotslash(Path);
+    sys::path::remove_dots(Path, /*remove_dot_dot=*/true);
+  }
 
   if (Path.empty())
     return make_error_code(llvm::errc::invalid_argument);
@@ -1237,10 +1344,17 @@ ErrorOr<Entry *> RedirectingFileSystem::lookupPath(const Twine &Path_) {
 ErrorOr<Entry *>
 RedirectingFileSystem::lookupPath(sys::path::const_iterator Start,
                                   sys::path::const_iterator End, Entry *From) {
+#ifndef LLVM_ON_WIN32
+  assert(!isTraversalComponent(*Start) &&
+         !isTraversalComponent(From->getName()) &&
+         "Paths should not contain traversal components");
+#else
+  // FIXME: this is here to support windows, remove it once canonicalized
+  // paths become globally default.
   if (Start->equals("."))
     ++Start;
+#endif
 
-  // FIXME: handle ..
   if (CaseSensitive ? !Start->equals(From->getName())
                     : !Start->equals_lower(From->getName()))
     // failure to match
@@ -1266,20 +1380,27 @@ RedirectingFileSystem::lookupPath(sys::path::const_iterator Start,
   return make_error_code(llvm::errc::no_such_file_or_directory);
 }
 
+static Status getRedirectedFileStatus(const Twine &Path, bool UseExternalNames,
+                                      Status ExternalStatus) {
+  Status S = ExternalStatus;
+  if (!UseExternalNames)
+    S = Status::copyWithNewName(S, Path.str());
+  S.IsVFSMapped = true;
+  return S;
+}
+
 ErrorOr<Status> RedirectingFileSystem::status(const Twine &Path, Entry *E) {
   assert(E != nullptr);
-  std::string PathStr(Path.str());
   if (auto *F = dyn_cast<RedirectingFileEntry>(E)) {
     ErrorOr<Status> S = ExternalFS->status(F->getExternalContentsPath());
     assert(!S || S->getName() == F->getExternalContentsPath());
-    if (S && !F->useExternalName(UseExternalNames))
-      *S = Status::copyWithNewName(*S, PathStr);
     if (S)
-      S->IsVFSMapped = true;
+      return getRedirectedFileStatus(Path, F->useExternalName(UseExternalNames),
+                                     *S);
     return S;
   } else { // directory
     auto *DE = cast<RedirectingDirectoryEntry>(E);
-    return Status::copyWithNewName(DE->getStatus(), PathStr);
+    return Status::copyWithNewName(DE->getStatus(), Path.str());
   }
 }
 
@@ -1291,22 +1412,17 @@ ErrorOr<Status> RedirectingFileSystem::status(const Twine &Path) {
 }
 
 namespace {
-/// Provide a file wrapper that returns the external name when asked.
-class NamedFileAdaptor : public File {
+/// Provide a file wrapper with an overriden status.
+class FileWithFixedStatus : public File {
   std::unique_ptr<File> InnerFile;
-  std::string NewName;
+  Status S;
 
 public:
-  NamedFileAdaptor(std::unique_ptr<File> InnerFile, std::string NewName)
-      : InnerFile(std::move(InnerFile)), NewName(std::move(NewName)) {}
+  FileWithFixedStatus(std::unique_ptr<File> InnerFile, Status S)
+      : InnerFile(std::move(InnerFile)), S(S) {}
 
-  llvm::ErrorOr<Status> status() override {
-    auto InnerStatus = InnerFile->status();
-    if (InnerStatus)
-      return Status::copyWithNewName(*InnerStatus, NewName);
-    return InnerStatus.getError();
-  }
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
+  ErrorOr<Status> status() override { return S; }
+  ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBuffer(const Twine &Name, int64_t FileSize, bool RequiresNullTerminator,
             bool IsVolatile) override {
     return InnerFile->getBuffer(Name, FileSize, RequiresNullTerminator,
@@ -1330,19 +1446,25 @@ RedirectingFileSystem::openFileForRead(const Twine &Path) {
   if (!Result)
     return Result;
 
-  if (!F->useExternalName(UseExternalNames))
-    return std::unique_ptr<File>(
-        new NamedFileAdaptor(std::move(*Result), Path.str()));
+  auto ExternalStatus = (*Result)->status();
+  if (!ExternalStatus)
+    return ExternalStatus.getError();
 
-  return Result;
+  // FIXME: Update the status with the name and VFSMapped.
+  Status S = getRedirectedFileStatus(Path, F->useExternalName(UseExternalNames),
+                                     *ExternalStatus);
+  return std::unique_ptr<File>(
+      llvm::make_unique<FileWithFixedStatus>(std::move(*Result), S));
 }
 
 IntrusiveRefCntPtr<FileSystem>
 vfs::getVFSFromYAML(std::unique_ptr<MemoryBuffer> Buffer,
-                    SourceMgr::DiagHandlerTy DiagHandler, void *DiagContext,
+                    SourceMgr::DiagHandlerTy DiagHandler,
+                    StringRef YAMLFilePath,
+                    void *DiagContext,
                     IntrusiveRefCntPtr<FileSystem> ExternalFS) {
   return RedirectingFileSystem::create(std::move(Buffer), DiagHandler,
-                                       DiagContext, ExternalFS);
+                                       YAMLFilePath, DiagContext, ExternalFS);
 }
 
 UniqueID vfs::getNextVirtualUniqueID() {
@@ -1352,16 +1474,6 @@ UniqueID vfs::getNextVirtualUniqueID() {
   // dev_t value from the OS.
   return UniqueID(std::numeric_limits<uint64_t>::max(), ID);
 }
-
-#ifndef NDEBUG
-static bool pathHasTraversal(StringRef Path) {
-  using namespace llvm::sys;
-  for (StringRef Comp : llvm::make_range(path::begin(Path), path::end(Path)))
-    if (Comp == "." || Comp == "..")
-      return true;
-  return false;
-}
-#endif
 
 void YAMLVFSWriter::addFileMapping(StringRef VirtualPath, StringRef RealPath) {
   assert(sys::path::is_absolute(VirtualPath) && "virtual path not absolute");
@@ -1384,7 +1496,8 @@ class JSONWriter {
 
 public:
   JSONWriter(llvm::raw_ostream &OS) : OS(OS) {}
-  void write(ArrayRef<YAMLVFSEntry> Entries, Optional<bool> IsCaseSensitive);
+  void write(ArrayRef<YAMLVFSEntry> Entries, Optional<bool> IsCaseSensitive,
+             Optional<bool> IsOverlayRelative, StringRef OverlayDir);
 };
 }
 
@@ -1437,7 +1550,9 @@ void JSONWriter::writeEntry(StringRef VPath, StringRef RPath) {
 }
 
 void JSONWriter::write(ArrayRef<YAMLVFSEntry> Entries,
-                       Optional<bool> IsCaseSensitive) {
+                       Optional<bool> IsCaseSensitive,
+                       Optional<bool> IsOverlayRelative,
+                       StringRef OverlayDir) {
   using namespace llvm::sys;
 
   OS << "{\n"
@@ -1445,12 +1560,27 @@ void JSONWriter::write(ArrayRef<YAMLVFSEntry> Entries,
   if (IsCaseSensitive.hasValue())
     OS << "  'case-sensitive': '"
        << (IsCaseSensitive.getValue() ? "true" : "false") << "',\n";
+  bool UseOverlayRelative = false;
+  if (IsOverlayRelative.hasValue()) {
+    UseOverlayRelative = IsOverlayRelative.getValue();
+    OS << "  'overlay-relative': '"
+       << (UseOverlayRelative ? "true" : "false") << "',\n";
+  }
   OS << "  'roots': [\n";
 
   if (!Entries.empty()) {
     const YAMLVFSEntry &Entry = Entries.front();
     startDirectory(path::parent_path(Entry.VPath));
-    writeEntry(path::filename(Entry.VPath), Entry.RPath);
+
+    StringRef RPath = Entry.RPath;
+    if (UseOverlayRelative) {
+      unsigned OverlayDirLen = OverlayDir.size();
+      assert(RPath.substr(0, OverlayDirLen) == OverlayDir &&
+             "Overlay dir must be contained in RPath");
+      RPath = RPath.slice(OverlayDirLen, RPath.size());
+    }
+
+    writeEntry(path::filename(Entry.VPath), RPath);
 
     for (const auto &Entry : Entries.slice(1)) {
       StringRef Dir = path::parent_path(Entry.VPath);
@@ -1464,7 +1594,14 @@ void JSONWriter::write(ArrayRef<YAMLVFSEntry> Entries,
         OS << ",\n";
         startDirectory(Dir);
       }
-      writeEntry(path::filename(Entry.VPath), Entry.RPath);
+      StringRef RPath = Entry.RPath;
+      if (UseOverlayRelative) {
+        unsigned OverlayDirLen = OverlayDir.size();
+        assert(RPath.substr(0, OverlayDirLen) == OverlayDir &&
+               "Overlay dir must be contained in RPath");
+        RPath = RPath.slice(OverlayDirLen, RPath.size());
+      }
+      writeEntry(path::filename(Entry.VPath), RPath);
     }
 
     while (!DirStack.empty()) {
@@ -1484,7 +1621,8 @@ void YAMLVFSWriter::write(llvm::raw_ostream &OS) {
     return LHS.VPath < RHS.VPath;
   });
 
-  JSONWriter(OS).write(Mappings, IsCaseSensitive);
+  JSONWriter(OS).write(Mappings, IsCaseSensitive, IsOverlayRelative,
+                       OverlayDir);
 }
 
 VFSFromYamlDirIterImpl::VFSFromYamlDirIterImpl(

@@ -70,15 +70,10 @@ class ModuleMap {
   /// These are always simple C language options.
   LangOptions MMapLangOpts;
 
-  // The module that we are building; related to \c LangOptions::CurrentModule.
-  Module *CompilingModule;
-
-public:
-  // The module that the .cc source file is associated with.
+  // The module that the main source file is associated with (the module
+  // named LangOpts::CurrentModule, if we've loaded it).
   Module *SourceModule;
-  std::string SourceModuleName;
 
-private:
   /// \brief The top-level modules that are known.
   llvm::StringMap<Module *> Modules;
 
@@ -318,12 +313,18 @@ public:
   ///
   /// \param RequestingModule The module including a file.
   ///
+  /// \param RequestingModuleIsModuleInterface \c true if the inclusion is in
+  ///        the interface of RequestingModule, \c false if it's in the
+  ///        implementation of RequestingModule. Value is ignored and
+  ///        meaningless if RequestingModule is nullptr.
+  ///
   /// \param FilenameLoc The location of the inclusion's filename.
   ///
   /// \param Filename The included filename as written.
   ///
   /// \param File The included file.
   void diagnoseHeaderInclusion(Module *RequestingModule,
+                               bool RequestingModuleIsModuleInterface,
                                SourceLocation FilenameLoc, StringRef Filename,
                                const FileEntry *File);
 

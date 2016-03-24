@@ -508,7 +508,7 @@ static void computeBlockInfo(CodeGenModule &CGM, CodeGenFunction *CGF,
   // At this point, we just have to add padding if the end align still
   // isn't aligned right.
   if (endAlign < maxFieldAlign) {
-    CharUnits newBlockSize = blockSize.RoundUpToAlignment(maxFieldAlign);
+    CharUnits newBlockSize = blockSize.alignTo(maxFieldAlign);
     CharUnits padding = newBlockSize - blockSize;
 
     // If we haven't yet added any fields, remember that there was an
@@ -1109,8 +1109,8 @@ void CodeGenFunction::setBlockContextParameter(const ImplicitParamDecl *D,
   }
 
   if (CGDebugInfo *DI = getDebugInfo()) {
-    if (CGM.getCodeGenOpts().getDebugInfo()
-          >= CodeGenOptions::LimitedDebugInfo) {
+    if (CGM.getCodeGenOpts().getDebugInfo() >=
+        codegenoptions::LimitedDebugInfo) {
       DI->setLocation(D->getLocation());
       DI->EmitDeclareOfBlockLiteralArgVariable(*BlockInfo, arg, argNum,
                                                localAddr, Builder);
@@ -1174,9 +1174,8 @@ CodeGenFunction::GenerateBlockFunction(GlobalDecl GD,
 
   // Create the function declaration.
   const FunctionProtoType *fnType = blockInfo.getBlockExpr()->getFunctionType();
-  const CGFunctionInfo &fnInfo = CGM.getTypes().arrangeFreeFunctionDeclaration(
-      fnType->getReturnType(), args, fnType->getExtInfo(),
-      fnType->isVariadic());
+  const CGFunctionInfo &fnInfo =
+    CGM.getTypes().arrangeBlockFunctionDeclaration(fnType, args);
   if (CGM.ReturnSlotInterferesWithArgs(fnInfo))
     blockInfo.UsesStret = true;
 
@@ -1260,8 +1259,8 @@ CodeGenFunction::GenerateBlockFunction(GlobalDecl GD,
       const VarDecl *variable = CI.getVariable();
       DI->EmitLocation(Builder, variable->getLocation());
 
-      if (CGM.getCodeGenOpts().getDebugInfo()
-            >= CodeGenOptions::LimitedDebugInfo) {
+      if (CGM.getCodeGenOpts().getDebugInfo() >=
+          codegenoptions::LimitedDebugInfo) {
         const CGBlockInfo::Capture &capture = blockInfo.getCapture(variable);
         if (capture.isConstant()) {
           auto addr = LocalDeclMap.find(variable)->second;
@@ -1329,8 +1328,8 @@ CodeGenFunction::GenerateCopyHelperFunction(const CGBlockInfo &blockInfo) {
                             C.VoidPtrTy);
   args.push_back(&srcDecl);
 
-  const CGFunctionInfo &FI = CGM.getTypes().arrangeFreeFunctionDeclaration(
-      C.VoidTy, args, FunctionType::ExtInfo(), /*variadic=*/false);
+  const CGFunctionInfo &FI =
+    CGM.getTypes().arrangeBuiltinFunctionDeclaration(C.VoidTy, args);
 
   // FIXME: it would be nice if these were mergeable with things with
   // identical semantics.
@@ -1505,8 +1504,8 @@ CodeGenFunction::GenerateDestroyHelperFunction(const CGBlockInfo &blockInfo) {
                             C.VoidPtrTy);
   args.push_back(&srcDecl);
 
-  const CGFunctionInfo &FI = CGM.getTypes().arrangeFreeFunctionDeclaration(
-      C.VoidTy, args, FunctionType::ExtInfo(), /*variadic=*/false);
+  const CGFunctionInfo &FI =
+    CGM.getTypes().arrangeBuiltinFunctionDeclaration(C.VoidTy, args);
 
   // FIXME: We'd like to put these into a mergable by content, with
   // internal linkage.
@@ -1791,8 +1790,8 @@ generateByrefCopyHelper(CodeGenFunction &CGF, const BlockByrefInfo &byrefInfo,
                         Context.VoidPtrTy);
   args.push_back(&src);
 
-  const CGFunctionInfo &FI = CGF.CGM.getTypes().arrangeFreeFunctionDeclaration(
-      R, args, FunctionType::ExtInfo(), /*variadic=*/false);
+  const CGFunctionInfo &FI =
+    CGF.CGM.getTypes().arrangeBuiltinFunctionDeclaration(R, args);
 
   llvm::FunctionType *LTy = CGF.CGM.getTypes().GetFunctionType(FI);
 
@@ -1864,8 +1863,8 @@ generateByrefDisposeHelper(CodeGenFunction &CGF,
                         Context.VoidPtrTy);
   args.push_back(&src);
 
-  const CGFunctionInfo &FI = CGF.CGM.getTypes().arrangeFreeFunctionDeclaration(
-      R, args, FunctionType::ExtInfo(), /*variadic=*/false);
+  const CGFunctionInfo &FI =
+    CGF.CGM.getTypes().arrangeBuiltinFunctionDeclaration(R, args);
 
   llvm::FunctionType *LTy = CGF.CGM.getTypes().GetFunctionType(FI);
 
@@ -2108,7 +2107,7 @@ const BlockByrefInfo &CodeGenFunction::getBlockByrefInfo(const VarDecl *D) {
 
   bool packed = false;
   CharUnits varAlign = getContext().getDeclAlign(D);
-  CharUnits varOffset = size.RoundUpToAlignment(varAlign);
+  CharUnits varOffset = size.alignTo(varAlign);
 
   // We may have to insert padding.
   if (varOffset != size) {

@@ -299,10 +299,7 @@ public:
   llvm::ErrorOr<std::string> getCurrentWorkingDirectory() const override {
     return WorkingDirectory;
   }
-  std::error_code setCurrentWorkingDirectory(const Twine &Path) override {
-    WorkingDirectory = Path.str();
-    return std::error_code();
-  }
+  std::error_code setCurrentWorkingDirectory(const Twine &Path) override;
 };
 
 /// \brief Get a globally unique ID for a virtual file or directory.
@@ -313,6 +310,7 @@ llvm::sys::fs::UniqueID getNextVirtualUniqueID();
 IntrusiveRefCntPtr<FileSystem>
 getVFSFromYAML(std::unique_ptr<llvm::MemoryBuffer> Buffer,
                llvm::SourceMgr::DiagHandlerTy DiagHandler,
+               StringRef YAMLFilePath,
                void *DiagContext = nullptr,
                IntrusiveRefCntPtr<FileSystem> ExternalFS = getRealFileSystem());
 
@@ -326,6 +324,8 @@ struct YAMLVFSEntry {
 class YAMLVFSWriter {
   std::vector<YAMLVFSEntry> Mappings;
   Optional<bool> IsCaseSensitive;
+  Optional<bool> IsOverlayRelative;
+  std::string OverlayDir;
 
 public:
   YAMLVFSWriter() {}
@@ -333,6 +333,11 @@ public:
   void setCaseSensitivity(bool CaseSensitive) {
     IsCaseSensitive = CaseSensitive;
   }
+  void setOverlayDir(StringRef OverlayDirectory) {
+    IsOverlayRelative = true;
+    OverlayDir.assign(OverlayDirectory.str());
+  }
+
   void write(llvm::raw_ostream &OS);
 };
 

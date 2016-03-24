@@ -217,6 +217,27 @@
 // CHECK-TSAN-MSAN-MSAN-DARWIN: unsupported option '-fsanitize=memory' for target 'x86_64-apple-darwin10'
 // CHECK-TSAN-MSAN-MSAN-DARWIN-NOT: unsupported option
 
+// RUN: %clang -target x86_64-apple-darwin -fsanitize=thread %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-TSAN-X86-64-DARWIN
+// CHECK-TSAN-X86-64-DARWIN-NOT: unsupported option
+
+// RUN: %clang -target x86_64-apple-iossimulator -fsanitize=thread %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-TSAN-X86-64-IOSSIMULATOR
+// CHECK-TSAN-X86-64-IOSSIMULATOR-NOT: unsupported option
+
+// RUN: %clang -target x86_64-apple-tvossimulator -fsanitize=thread %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-TSAN-X86-64-TVOSSIMULATOR
+// CHECK-TSAN-X86-64-TVOSSIMULATOR-NOT: unsupported option
+
+// RUN: %clang -target i386-apple-darwin -fsanitize=thread %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-TSAN-I386-DARWIN
+// CHECK-TSAN-I386-DARWIN: unsupported option '-fsanitize=thread' for target 'i386-apple-darwin'
+
+// RUN: %clang -target arm-apple-ios -fsanitize=thread %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-TSAN-ARM-IOS
+// CHECK-TSAN-ARM-IOS: unsupported option '-fsanitize=thread' for target 'arm-apple-ios'
+
+// RUN: %clang -target i386-apple-iossimulator -fsanitize=thread %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-TSAN-I386-IOSSIMULATOR
+// CHECK-TSAN-I386-IOSSIMULATOR: unsupported option '-fsanitize=thread' for target 'i386-apple-iossimulator'
+
+// RUN: %clang -target i386-apple-tvossimulator -fsanitize=thread %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-TSAN-I386-TVOSSIMULATOR
+// CHECK-TSAN-I386-TVOSSIMULATOR: unsupported option '-fsanitize=thread' for target 'i386-apple-tvossimulator'
+
 // RUN: %clang -target x86_64-apple-darwin10 -fsanitize=function %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-FSAN-DARWIN
 // CHECK-FSAN-DARWIN: unsupported option '-fsanitize=function' for target 'x86_64-apple-darwin10'
 
@@ -230,7 +251,7 @@
 // CHECK-VPTR-DARWIN-NEW: -fsanitize=alignment,vptr
 
 // RUN: %clang -target armv7-apple-ios7 -miphoneos-version-min=7.0 -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-ASAN-IOS
-// CHECK-ASAN-IOS: unsupported option '-fsanitize=address' for target 'arm-apple-ios7'
+// CHECK-ASAN-IOS: -fsanitize=address
 
 // RUN: %clang -target i386-pc-openbsd -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-ASAN-OPENBSD
 // CHECK-ASAN-OPENBSD: unsupported option '-fsanitize=address' for target 'i386-pc-openbsd'
@@ -262,6 +283,18 @@
 // RUN: %clang -target x86_64-pc-win32 -flto -fsanitize=cfi-vcall -fno-sanitize-trap=cfi -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-NOTRAP-WIN
 // CHECK-CFI-NOTRAP-WIN: -emit-llvm-bc
 // CHECK-CFI-NOTRAP-WIN-NOT: -fsanitize-trap=cfi
+
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -fsanitize-cfi-cross-dso -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-CROSS-DSO
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-NO-CROSS-DSO
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -fsanitize-cfi-cross-dso -fno-sanitize-cfi-cross-dso -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-NO-CROSS-DSO
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -fno-sanitize-cfi-cross-dso -fsanitize-cfi-cross-dso -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-CROSS-DSO
+// CHECK-CFI-CROSS-DSO: -emit-llvm-bc
+// CHECK-CFI-CROSS-DSO: -fsanitize-cfi-cross-dso
+// CHECK-CFI-NO-CROSS-DSO: -emit-llvm-bc
+// CHECK-CFI-NO-CROSS-DSO-NOT: -fsanitize-cfi-cross-dso
+
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -fsanitize-stats -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-STATS
+// CHECK-CFI-STATS: -fsanitize-stats
 
 // RUN: %clang_cl -fsanitize=address -c -MDd -### -- %s 2>&1 | FileCheck %s -check-prefix=CHECK-ASAN-DEBUGRTL
 // RUN: %clang_cl -fsanitize=address -c -MTd -### -- %s 2>&1 | FileCheck %s -check-prefix=CHECK-ASAN-DEBUGRTL
@@ -298,6 +331,10 @@
 // RUN: %clang -target powerpc64-unknown-linux-gnu -fsanitize=memory %s -### 2>&1 | FileCheck %s -check-prefix=CHECK-SANM
 // RUN: %clang -target powerpc64le-unknown-linux-gnu -fsanitize=memory %s -### 2>&1 | FileCheck %s -check-prefix=CHECK-SANM
 // CHECK-SANM: "-fsanitize=memory"
+
+// RUN: %clang -target aarch64-unknown-cloudabi -fsanitize=safe-stack %s -### 2>&1 | FileCheck %s -check-prefix=SAFESTACK-CLOUDABI
+// RUN: %clang -target x86_64-unknown-cloudabi -fsanitize=safe-stack %s -### 2>&1 | FileCheck %s -check-prefix=SAFESTACK-CLOUDABI
+// SAFESTACK-CLOUDABI: "-fsanitize=safe-stack"
 
 // RUN: %clang -target x86_64-scei-ps4 -fsanitize=function -fsanitize=undefined %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-FSAN-UBSAN-PS4
 // CHECK-FSAN-UBSAN-PS4: unsupported option '-fsanitize=function' for target 'x86_64-scei-ps4'

@@ -79,7 +79,7 @@ namespace {
         auto Offset = OrigBFI.Offset % C.toBits(lvalue.getAlignment());
         AtomicSizeInBits = C.toBits(
             C.toCharUnitsFromBits(Offset + OrigBFI.Size + C.getCharWidth() - 1)
-                .RoundUpToAlignment(lvalue.getAlignment()));
+                .alignTo(lvalue.getAlignment()));
         auto VoidPtrAddr = CGF.EmitCastToVoidPtr(lvalue.getBitFieldPointer());
         auto OffsetInChars =
             (C.toCharUnitsFromBits(OrigBFI.Offset) / lvalue.getAlignment()) *
@@ -323,8 +323,7 @@ static RValue emitAtomicLibcall(CodeGenFunction &CGF,
                                 QualType resultType,
                                 CallArgList &args) {
   const CGFunctionInfo &fnInfo =
-    CGF.CGM.getTypes().arrangeFreeFunctionCall(resultType, args,
-            FunctionType::ExtInfo(), RequiredArgs::All);
+    CGF.CGM.getTypes().arrangeBuiltinFunctionCall(resultType, args);
   llvm::FunctionType *fnTy = CGF.CGM.getTypes().GetFunctionType(fnInfo);
   llvm::Constant *fn = CGF.CGM.CreateRuntimeFunction(fnTy, fnName);
   return CGF.EmitCall(fnInfo, fn, ReturnValueSlot(), args);
@@ -1295,10 +1294,23 @@ bool CodeGenFunction::LValueIsSuitableForInlineAtomic(LValue LV) {
 /// performing such an operation can be performed without a libcall.
 bool CodeGenFunction::typeIsSuitableForInlineAtomic(QualType Ty,
                                                     bool IsVolatile) const {
+  // The operation must be volatile for us to make it atomic.
+  if (!IsVolatile)
+    return false;
+  // The -fms-volatile flag must be passed for us to adopt this behavior.
+  if (!CGM.getCodeGenOpts().MSVolatile)
+    return false;
+
   // An atomic is inline if we don't need to use a libcall (e.g. it is builtin).
-  bool AtomicIsInline = getContext().getTargetInfo().hasBuiltinAtomic(
-      getContext().getTypeSize(Ty), getContext().getTypeAlign(Ty));
-  return CGM.getCodeGenOpts().MSVolatile && IsVolatile && AtomicIsInline;
+  if (!getContext().getTargetInfo().hasBuiltinAtomic(
+          getContext().getTypeSize(Ty), getContext().getTypeAlign(Ty)))
+    return false;
+
+  // MSVC doesn't seem to do this for types wider than a pointer.
+  if (getContext().getTypeSize(Ty) >
+      getContext().getTypeSize(getContext().getIntPtrType()))
+    return false;
+  return true;
 }
 
 RValue CodeGenFunction::EmitAtomicLoad(LValue LV, SourceLocation SL,

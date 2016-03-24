@@ -46,6 +46,8 @@ def CplusplusAlpha : Package<"cplusplus">, InPackage<Alpha>, Hidden;
 def DeadCode : Package<"deadcode">;
 def DeadCodeAlpha : Package<"deadcode">, InPackage<Alpha>, Hidden;
 
+def Performance : Package<"performance">, InPackage<OptIn>;
+
 def Security : Package <"security">;
 def InsecureAPI : Package<"insecureAPI">, InPackage<Security>;
 def SecurityAlpha : Package<"security">, InPackage<Alpha>, Hidden;
@@ -273,6 +275,18 @@ def UnreachableCodeChecker : Checker<"UnreachableCode">,
 } // end "alpha.deadcode"
 
 //===----------------------------------------------------------------------===//
+// Performance checkers.
+//===----------------------------------------------------------------------===//
+
+let ParentPackage = Performance in {
+
+def PaddingChecker : Checker<"Padding">,
+  HelpText<"Check for excessively padded structs.">,
+  DescFile<"PaddingChecker.cpp">;
+
+} // end: "padding"
+
+//===----------------------------------------------------------------------===//
 // Security checkers.
 //===----------------------------------------------------------------------===//
 
@@ -491,13 +505,17 @@ def ObjCGenericsChecker : Checker<"ObjCGenerics">,
   HelpText<"Check for type errors when using Objective-C generics">,
   DescFile<"DynamicTypePropagation.cpp">;
 
-} // end "osx.cocoa"
-
-let ParentPackage = CocoaAlpha in {
-
 def ObjCDeallocChecker : Checker<"Dealloc">,
   HelpText<"Warn about Objective-C classes that lack a correct implementation of -dealloc">,
   DescFile<"CheckObjCDealloc.cpp">;
+
+def ObjCSuperDeallocChecker : Checker<"SuperDealloc">,
+  HelpText<"Warn about improper use of '[super dealloc]' in Objective-C">,
+  DescFile<"ObjCSuperDeallocChecker.cpp">;
+
+} // end "osx.cocoa"
+
+let ParentPackage = CocoaAlpha in {
 
 def InstanceVariableInvalidation : Checker<"InstanceVariableInvalidation">,
   HelpText<"Check that the invalidatable instance variables are invalidated in the methods annotated with objc_instance_variable_invalidator">,

@@ -484,9 +484,8 @@ namespace clang {
       /// that were modified after being deserialized and need updates.
       DECL_UPDATE_OFFSETS = 29,
 
-      /// \brief Record of updates for a declaration that was modified after
-      /// being deserialized.
-      DECL_UPDATES = 30,
+      // ID 30 used to be a decl update record. These are now in the DECLTYPES
+      // block.
       
       /// \brief Record code for the table of offsets to CXXBaseSpecifier
       /// sets.
@@ -575,7 +574,13 @@ namespace clang {
       CXX_CTOR_INITIALIZERS_OFFSETS = 53,
 
       /// \brief Delete expressions that will be analyzed later.
-      DELETE_EXPRS_TO_ANALYZE = 54
+      DELETE_EXPRS_TO_ANALYZE = 54,
+
+      /// \brief Record code for \#pragma ms_struct options.
+      MSSTRUCT_PRAGMA_OPTIONS = 55,
+
+      /// \brief Record code for \#pragma ms_struct options.
+      POINTERS_TO_MEMBERS_PRAGMA_OPTIONS = 56
     };
 
     /// \brief Record types used within a source manager block.
@@ -591,9 +596,12 @@ namespace clang {
       /// SM_SLOC_BUFFER_ENTRY record or a SM_SLOC_FILE_ENTRY with an
       /// overridden buffer.
       SM_SLOC_BUFFER_BLOB = 3,
+      /// \brief Describes a zlib-compressed blob that contains the data for
+      /// a buffer entry.
+      SM_SLOC_BUFFER_BLOB_COMPRESSED = 4,
       /// \brief Describes a source location entry (SLocEntry) for a
       /// macro expansion.
-      SM_SLOC_EXPANSION_ENTRY = 4
+      SM_SLOC_EXPANSION_ENTRY = 5
     };
 
     /// \brief Record types used within a preprocessor block.
@@ -824,7 +832,7 @@ namespace clang {
     /// These constants describe the type records that can occur within a
     /// block identified by DECLTYPES_BLOCK_ID in the AST file. Each
     /// constant describes a record for a specific type class in the
-    /// AST.
+    /// AST. Note that DeclCode values share this code space.
     enum TypeCode {
       /// \brief An ExtQualType record.
       TYPE_EXT_QUAL                 = 1,
@@ -907,7 +915,9 @@ namespace clang {
       /// \brief A DecayedType record.
       TYPE_DECAYED               = 41,
       /// \brief An AdjustedType record.
-      TYPE_ADJUSTED              = 42
+      TYPE_ADJUSTED              = 42,
+      /// \brief A PipeType record.
+      TYPE_PIPE                  = 43
     };
 
     /// \brief The type IDs for special types constructed by semantic
@@ -985,23 +995,34 @@ namespace clang {
 
       /// \brief The internal '__make_integer_seq' template.
       PREDEF_DECL_MAKE_INTEGER_SEQ_ID = 13,
+
+      /// \brief The internal '__NSConstantString' typedef.
+      PREDEF_DECL_CF_CONSTANT_STRING_ID = 14,
+
+      /// \brief The internal '__NSConstantString' tag type.
+      PREDEF_DECL_CF_CONSTANT_STRING_TAG_ID = 15,
     };
 
     /// \brief The number of declaration IDs that are predefined.
     ///
     /// For more information about predefined declarations, see the
     /// \c PredefinedDeclIDs type and the PREDEF_DECL_*_ID constants.
-    const unsigned int NUM_PREDEF_DECL_IDS = 14;
+    const unsigned int NUM_PREDEF_DECL_IDS = 16;
+
+    /// \brief Record of updates for a declaration that was modified after
+    /// being deserialized. This can occur within DECLTYPES_BLOCK_ID.
+    const unsigned int DECL_UPDATES = 49;
 
     /// \brief Record code for a list of local redeclarations of a declaration.
+    /// This can occur within DECLTYPES_BLOCK_ID.
     const unsigned int LOCAL_REDECLARATIONS = 50;
     
     /// \brief Record codes for each kind of declaration.
     ///
     /// These constants describe the declaration records that can occur within
-    /// a declarations block (identified by DECLS_BLOCK_ID). Each
+    /// a declarations block (identified by DECLTYPES_BLOCK_ID). Each
     /// constant describes a record for a specific declaration class
-    /// in the AST.
+    /// in the AST. Note that TypeCode values share this code space.
     enum DeclCode {
       /// \brief A TypedefDecl record.
       DECL_TYPEDEF = 51,
@@ -1152,6 +1173,14 @@ namespace clang {
       DECL_EMPTY,
       /// \brief An ObjCTypeParamDecl record.
       DECL_OBJC_TYPE_PARAM,
+      /// \brief An OMPCapturedExprDecl record.
+      DECL_OMP_CAPTUREDEXPR,
+      /// \brief A PragmaCommentDecl record.
+      DECL_PRAGMA_COMMENT,
+      /// \brief A PragmaDetectMismatchDecl record.
+      DECL_PRAGMA_DETECT_MISMATCH,
+      /// \brief An OMPDeclareReductionDecl record.
+      DECL_OMP_DECLARE_REDUCTION,
     };
 
     /// \brief Record codes for each kind of statement or expression.
@@ -1443,12 +1472,17 @@ namespace clang {
       STMT_OMP_ATOMIC_DIRECTIVE,
       STMT_OMP_TARGET_DIRECTIVE,
       STMT_OMP_TARGET_DATA_DIRECTIVE,
+      STMT_OMP_TARGET_ENTER_DATA_DIRECTIVE,
+      STMT_OMP_TARGET_EXIT_DATA_DIRECTIVE,
+      STMT_OMP_TARGET_PARALLEL_DIRECTIVE,
+      STMT_OMP_TARGET_PARALLEL_FOR_DIRECTIVE,
       STMT_OMP_TEAMS_DIRECTIVE,
       STMT_OMP_TASKGROUP_DIRECTIVE,
       STMT_OMP_CANCELLATION_POINT_DIRECTIVE,
       STMT_OMP_CANCEL_DIRECTIVE,
       STMT_OMP_TASKLOOP_DIRECTIVE,
       STMT_OMP_TASKLOOP_SIMD_DIRECTIVE,
+      STMT_OMP_DISTRIBUTE_DIRECTIVE,
       EXPR_OMP_ARRAY_SECTION,
 
       // ARC

@@ -204,6 +204,7 @@ def OverloadedShiftOpParentheses: DiagGroup<"overloaded-shift-op-parentheses">;
 def DanglingElse: DiagGroup<"dangling-else">;
 def DanglingField : DiagGroup<"dangling-field">;
 def DistributedObjectModifiers : DiagGroup<"distributed-object-modifiers">;
+def ExpansionToDefined : DiagGroup<"expansion-to-defined">;
 def FlagEnum : DiagGroup<"flag-enum">;
 def IncrementBool : DiagGroup<"increment-bool", [DeprecatedIncrementBool]>;
 def InfiniteRecursion : DiagGroup<"infinite-recursion">;
@@ -616,6 +617,7 @@ def Most : DiagGroup<"most", [
     CharSubscript,
     Comment,
     DeleteNonVirtualDtor,
+    ForLoopAnalysis,
     Format,
     Implicit,
     InfiniteRecursion,
@@ -663,7 +665,10 @@ def Consumed       : DiagGroup<"consumed">;
 // Note that putting warnings in -Wall will not disable them by default. If a
 // warning should be active _only_ when -Wall is passed in, mark it as
 // DefaultIgnore in addition to putting it here.
-def : DiagGroup<"all", [Most, Parentheses, Switch, SwitchBool]>;
+def All : DiagGroup<"all", [Most, Parentheses, Switch, SwitchBool]>;
+
+// Warnings that should be in clang-cl /w4.
+def : DiagGroup<"CL4", [All, Extra]>;
 
 // Warnings enabled by -pedantic.  This is magically filled in by TableGen.
 def Pedantic : DiagGroup<"pedantic">;
@@ -762,6 +767,8 @@ def MicrosoftCast : DiagGroup<"microsoft-cast">;
 def MicrosoftConstInit : DiagGroup<"microsoft-const-init">;
 def MicrosoftVoidPseudoDtor : DiagGroup<"microsoft-void-pseudo-dtor">;
 def MicrosoftAnonTag : DiagGroup<"microsoft-anon-tag">;
+def MicrosoftCommentPaste : DiagGroup<"microsoft-comment-paste">;
+def MicrosoftEndOfFile : DiagGroup<"microsoft-end-of-file">;
 // Aliases.
 def : DiagGroup<"msvc-include", [MicrosoftInclude]>;
                 // -Wmsvc-include = -Wmicrosoft-include
@@ -775,7 +782,10 @@ def Microsoft : DiagGroup<"microsoft",
      MicrosoftEnumValue, MicrosoftDefaultArgRedefinition, MicrosoftTemplate,
      MicrosoftRedeclareStatic, MicrosoftEnumForwardReference, MicrosoftGoto,
      MicrosoftFlexibleArray, MicrosoftExtraQualification, MicrosoftCast,
-     MicrosoftConstInit, MicrosoftVoidPseudoDtor, MicrosoftAnonTag]>;
+     MicrosoftConstInit, MicrosoftVoidPseudoDtor, MicrosoftAnonTag,
+     MicrosoftCommentPaste, MicrosoftEndOfFile]>;
+
+def ClangClPch : DiagGroup<"clang-cl-pch">;
 
 def ObjCNonUnifiedException : DiagGroup<"objc-nonunified-exceptions">;
 
@@ -840,3 +850,5 @@ def FutureCompat : DiagGroup<"future-compat">;
 def InvalidOrNonExistentDirectory : DiagGroup<"invalid-or-nonexistent-directory">;
 
 def OptionIgnored : DiagGroup<"option-ignored">;
+
+def UnknownArgument : DiagGroup<"unknown-argument">;

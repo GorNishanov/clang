@@ -412,6 +412,12 @@ try_again:
                                                          .getAsTemplateDecl();
     break;
 
+  case Type::Auto:
+    TP = cast<AutoType>(TP)->getDeducedType().getTypePtrOrNull();
+    if (TP)
+      goto try_again;
+    break;
+
   case Type::InjectedClassName:
     D = cast<InjectedClassNameType>(TP)->getDecl();
     break;
@@ -527,6 +533,9 @@ CXCallingConv clang_getFunctionTypeCallingConv(CXType X) {
       TCALLINGCONV(AAPCS);
       TCALLINGCONV(AAPCS_VFP);
       TCALLINGCONV(IntelOclBicc);
+      TCALLINGCONV(Swift);
+      TCALLINGCONV(PreserveMost);
+      TCALLINGCONV(PreserveAll);
     case CC_SpirFunction: return CXCallingConv_Unexposed;
     case CC_SpirKernel: return CXCallingConv_Unexposed;
       break;

@@ -1496,7 +1496,8 @@ void ItaniumCXXABI::emitVTableDefinitions(CodeGenVTables &CGVT,
       DC->getParent()->isTranslationUnit())
     EmitFundamentalRTTIDescriptors();
 
-  CGM.EmitVTableBitSetEntries(VTable, VTLayout);
+  if (!VTable->isDeclarationForLinker())
+    CGM.EmitVTableBitSetEntries(VTable, VTLayout);
 }
 
 bool ItaniumCXXABI::isVirtualOffsetNeededForVTableField(
@@ -1528,8 +1529,8 @@ ItaniumCXXABI::getVTableAddressPoint(BaseSubobject Base,
                               .getVTableLayout(VTableClass)
                               .getAddressPoint(Base);
   llvm::Value *Indices[] = {
-    llvm::ConstantInt::get(CGM.Int64Ty, 0),
-    llvm::ConstantInt::get(CGM.Int64Ty, AddressPoint)
+    llvm::ConstantInt::get(CGM.Int32Ty, 0),
+    llvm::ConstantInt::get(CGM.Int32Ty, AddressPoint)
   };
 
   return llvm::ConstantExpr::getInBoundsGetElementPtr(VTable->getValueType(),
@@ -1568,7 +1569,7 @@ llvm::GlobalVariable *ItaniumCXXABI::getAddrOfVTable(const CXXRecordDecl *RD,
   if (VTable)
     return VTable;
 
-  // Queue up this v-table for possible deferred emission.
+  // Queue up this vtable for possible deferred emission.
   CGM.addDeferredVTable(RD);
 
   SmallString<256> Name;
@@ -1601,9 +1602,7 @@ llvm::Value *ItaniumCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
   auto *MethodDecl = cast<CXXMethodDecl>(GD.getDecl());
   llvm::Value *VTable = CGF.GetVTablePtr(This, Ty, MethodDecl->getParent());
 
-  if (CGF.SanOpts.has(SanitizerKind::CFIVCall))
-    CGF.EmitVTablePtrCheckForCall(MethodDecl, VTable,
-                                  CodeGenFunction::CFITCK_VCall, Loc);
+  CGF.EmitBitSetCodeForVCall(MethodDecl->getParent(), VTable, Loc);
 
   uint64_t VTableIndex = CGM.getItaniumVTableContext().getMethodVTableIndex(GD);
   llvm::Value *VFuncPtr =
@@ -2178,22 +2177,38 @@ ItaniumCXXABI::getOrCreateThreadLocalWrapper(const VarDecl *VD,
     getMangleContext().mangleItaniumThreadLocalWrapper(VD, Out);
   }
 
+  // FIXME: If VD is a definition, we should regenerate the function attributes
+  // before returning.
   if (llvm::Value *V = CGM.getModule().getNamedValue(WrapperName))
     return cast<llvm::Function>(V);
 
-  llvm::Type *RetTy = Val->getType();
-  if (VD->getType()->isReferenceType())
-    RetTy = RetTy->getPointerElementType();
+  QualType RetQT = VD->getType();
+  if (RetQT->isReferenceType())
+    RetQT = RetQT.getNonReferenceType();
 
-  llvm::FunctionType *FnTy = llvm::FunctionType::get(RetTy, false);
+  const CGFunctionInfo &FI = CGM.getTypes().arrangeBuiltinFunctionDeclaration(
+      getContext().getPointerType(RetQT), FunctionArgList());
+
+  llvm::FunctionType *FnTy = CGM.getTypes().GetFunctionType(FI);
   llvm::Function *Wrapper =
       llvm::Function::Create(FnTy, getThreadLocalWrapperLinkage(VD, CGM),
                              WrapperName.str(), &CGM.getModule());
+
+  CGM.SetLLVMFunctionAttributes(nullptr, FI, Wrapper);
+
+  if (VD->hasDefinition())
+    CGM.SetLLVMFunctionAttributesForDefinition(nullptr, Wrapper);
+
   // Always resolve references to the wrapper at link time.
   if (!Wrapper->hasLocalLinkage() && !(isThreadWrapperReplaceable(VD, CGM) &&
       !llvm::GlobalVariable::isLinkOnceLinkage(Wrapper->getLinkage()) &&
       !llvm::GlobalVariable::isWeakODRLinkage(Wrapper->getLinkage())))
     Wrapper->setVisibility(llvm::GlobalValue::HiddenVisibility);
+
+  if (isThreadWrapperReplaceable(VD, CGM)) {
+    Wrapper->setCallingConv(llvm::CallingConv::CXX_FAST_TLS);
+    Wrapper->addFnAttr(llvm::Attribute::NoUnwind);
+  }
   return Wrapper;
 }
 
@@ -2222,6 +2237,11 @@ void ItaniumCXXABI::EmitThreadLocalInitFuncs(
     CodeGenFunction(CGM)
         .GenerateCXXGlobalInitFunc(InitFunc, CXXThreadLocalInits,
                                    Address(Guard, GuardAlign));
+    // On Darwin platforms, use CXX_FAST_TLS calling convention.
+    if (CGM.getTarget().getTriple().isOSDarwin()) {
+      InitFunc->setCallingConv(llvm::CallingConv::CXX_FAST_TLS);
+      InitFunc->addFnAttr(llvm::Attribute::NoUnwind);
+    }
   }
   for (const VarDecl *VD : CXXThreadLocals) {
     llvm::GlobalVariable *Var =
@@ -2259,6 +2279,8 @@ void ItaniumCXXABI::EmitThreadLocalInitFuncs(
       Init = llvm::Function::Create(
           FnTy, llvm::GlobalVariable::ExternalWeakLinkage, InitFnName.str(),
           &CGM.getModule());
+      const CGFunctionInfo &FI = CGM.getTypes().arrangeNullaryFunction();
+      CGM.SetLLVMFunctionAttributes(nullptr, FI, cast<llvm::Function>(Init));
     }
 
     if (Init)
@@ -2269,8 +2291,11 @@ void ItaniumCXXABI::EmitThreadLocalInitFuncs(
     llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "", Wrapper);
     CGBuilderTy Builder(CGM, Entry);
     if (InitIsInitFunc) {
-      if (Init)
-        Builder.CreateCall(Init);
+      if (Init) {
+        llvm::CallInst *CallVal = Builder.CreateCall(Init);
+        if (isThreadWrapperReplaceable(VD, CGM))
+          CallVal->setCallingConv(llvm::CallingConv::CXX_FAST_TLS);
+      }
     } else {
       // Don't know whether we have an init function. Call it if it exists.
       llvm::Value *Have = Builder.CreateIsNotNull(Init);
@@ -2305,13 +2330,16 @@ LValue ItaniumCXXABI::EmitThreadLocalVarDeclLValue(CodeGenFunction &CGF,
   llvm::Value *Val = CGF.CGM.GetAddrOfGlobalVar(VD);
   llvm::Function *Wrapper = getOrCreateThreadLocalWrapper(VD, Val);
 
-  Val = CGF.Builder.CreateCall(Wrapper);
+  llvm::CallInst *CallVal = CGF.Builder.CreateCall(Wrapper);
+  if (isThreadWrapperReplaceable(VD, CGF.CGM))
+    CallVal->setCallingConv(llvm::CallingConv::CXX_FAST_TLS);
 
   LValue LV;
   if (VD->getType()->isReferenceType())
-    LV = CGF.MakeNaturalAlignAddrLValue(Val, LValType);
+    LV = CGF.MakeNaturalAlignAddrLValue(CallVal, LValType);
   else
-    LV = CGF.MakeAddrLValue(Val, LValType, CGF.getContext().getDeclAlign(VD));
+    LV = CGF.MakeAddrLValue(CallVal, LValType,
+                            CGF.getContext().getDeclAlign(VD));
   // FIXME: need setObjCGCLValueClass?
   return LV;
 }
@@ -2483,6 +2511,11 @@ static bool TypeInfoIsInStandardLibrary(const BuiltinType *Ty) {
   //   long, unsigned long, long long, unsigned long long, float, double,
   //   long double, char16_t, char32_t, and the IEEE 754r decimal and
   //   half-precision floating point types.
+  //
+  // GCC also emits RTTI for __int128.
+  // FIXME: We do not emit RTTI information for decimal types here.
+
+  // Types added here must also be added to EmitFundamentalRTTIDescriptors.
   switch (Ty->getKind()) {
     case BuiltinType::Void:
     case BuiltinType::NullPtr:
@@ -2509,6 +2542,8 @@ static bool TypeInfoIsInStandardLibrary(const BuiltinType *Ty) {
     case BuiltinType::Char32:
     case BuiltinType::Int128:
     case BuiltinType::UInt128:
+      return true;
+
     case BuiltinType::OCLImage1d:
     case BuiltinType::OCLImage1dArray:
     case BuiltinType::OCLImage1dBuffer:
@@ -2527,7 +2562,7 @@ static bool TypeInfoIsInStandardLibrary(const BuiltinType *Ty) {
     case BuiltinType::OCLQueue:
     case BuiltinType::OCLNDRange:
     case BuiltinType::OCLReserveID:
-      return true;
+      return false;
 
     case BuiltinType::Dependent:
 #define BUILTIN_TYPE(Id, SingletonId)
@@ -2707,6 +2742,9 @@ void ItaniumRTTIBuilder::BuildVTablePointer(const Type *Ty) {
   case Type::Auto:
     llvm_unreachable("Undeduced auto type shouldn't get here");
 
+  case Type::Pipe:
+    llvm_unreachable("Pipe types shouldn't get here");
+
   case Type::Builtin:
   // GCC treats vector and complex types as fundamental types.
   case Type::Vector:
@@ -2853,7 +2891,7 @@ static llvm::GlobalVariable::LinkageTypes getTypeInfoLinkage(CodeGenModule &CGM,
 
 llvm::Constant *ItaniumRTTIBuilder::BuildTypeInfo(QualType Ty, bool Force) {
   // We want to operate on the canonical type.
-  Ty = CGM.getContext().getCanonicalType(Ty);
+  Ty = Ty.getCanonicalType();
 
   // Check if we've already emitted an RTTI descriptor for this type.
   SmallString<256> Name;
@@ -2930,6 +2968,9 @@ llvm::Constant *ItaniumRTTIBuilder::BuildTypeInfo(QualType Ty, bool Force) {
 
   case Type::Auto:
     llvm_unreachable("Undeduced auto type shouldn't get here");
+
+  case Type::Pipe:
+    llvm_unreachable("Pipe type shouldn't get here");
 
   case Type::ConstantArray:
   case Type::IncompleteArray:
@@ -3313,6 +3354,7 @@ void ItaniumCXXABI::EmitFundamentalRTTIDescriptor(QualType Type) {
 }
 
 void ItaniumCXXABI::EmitFundamentalRTTIDescriptors() {
+  // Types added here must also be added to TypeInfoIsInStandardLibrary.
   QualType FundamentalTypes[] = {
       getContext().VoidTy,             getContext().NullPtrTy,
       getContext().BoolTy,             getContext().WCharTy,
@@ -3321,7 +3363,8 @@ void ItaniumCXXABI::EmitFundamentalRTTIDescriptors() {
       getContext().UnsignedShortTy,    getContext().IntTy,
       getContext().UnsignedIntTy,      getContext().LongTy,
       getContext().UnsignedLongTy,     getContext().LongLongTy,
-      getContext().UnsignedLongLongTy, getContext().HalfTy,
+      getContext().UnsignedLongLongTy, getContext().Int128Ty,
+      getContext().UnsignedInt128Ty,   getContext().HalfTy,
       getContext().FloatTy,            getContext().DoubleTy,
       getContext().LongDoubleTy,       getContext().Char16Ty,
       getContext().Char32Ty,

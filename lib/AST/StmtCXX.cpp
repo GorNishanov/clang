@@ -67,7 +67,8 @@ CoroutineBodyStmt::CoroutineBodyStmt(SubStmt const &SubStmts, ArrayRef<Stmt *> P
     const_cast<Stmt**>(getParamMoves().data()));
 }
 
-CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range, DeclStmt *BeginEndStmt,
+CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range,
+                                 DeclStmt *BeginStmt, DeclStmt *EndStmt,
                                  Expr *Cond, Expr *Inc, DeclStmt *LoopVar,
                                  Stmt *Body, SourceLocation FL,
                                  SourceLocation CAL, SourceLocation CL,
@@ -75,7 +76,8 @@ CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range, DeclStmt *BeginEndStmt,
     : Stmt(CXXForRangeStmtClass), ForLoc(FL), CoawaitLoc(CAL), ColonLoc(CL),
       RParenLoc(RPL) {
   SubExprs[RANGE] = Range;
-  SubExprs[BEGINEND] = BeginEndStmt;
+  SubExprs[BEGINSTMT] = BeginStmt;
+  SubExprs[ENDSTMT] = EndStmt;
   SubExprs[COND] = Cond;
   SubExprs[INC] = Inc;
   SubExprs[LOOPVAR] = LoopVar;

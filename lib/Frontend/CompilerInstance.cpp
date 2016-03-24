@@ -155,7 +155,6 @@ static void SetUpDiagnosticLog(DiagnosticOptions *DiagOpts,
           << DiagOpts->DiagnosticLogFile << EC.message();
     } else {
       FileOS->SetUnbuffered();
-      FileOS->SetUseAtomicWrites(true);
       OS = FileOS.get();
       StreamOwner = std::move(FileOS);
     }
@@ -361,19 +360,19 @@ void CompilerInstance::createPreprocessor(TranslationUnitKind TUKind) {
 
   // Handle generating header include information, if requested.
   if (DepOpts.ShowHeaderIncludes)
-    AttachHeaderIncludeGen(*PP, DepOpts.ExtraDeps);
+    AttachHeaderIncludeGen(*PP, DepOpts);
   if (!DepOpts.HeaderIncludeOutputFile.empty()) {
     StringRef OutputPath = DepOpts.HeaderIncludeOutputFile;
     if (OutputPath == "-")
       OutputPath = "";
-    AttachHeaderIncludeGen(*PP, DepOpts.ExtraDeps,
+    AttachHeaderIncludeGen(*PP, DepOpts,
                            /*ShowAllHeaders=*/true, OutputPath,
                            /*ShowDepth=*/false);
   }
 
   if (DepOpts.PrintShowIncludes) {
-    AttachHeaderIncludeGen(*PP, DepOpts.ExtraDeps,
-                           /*ShowAllHeaders=*/false, /*OutputPath=*/"",
+    AttachHeaderIncludeGen(*PP, DepOpts,
+                           /*ShowAllHeaders=*/true, /*OutputPath=*/"",
                            /*ShowDepth=*/true, /*MSStyle=*/true);
   }
 }
@@ -468,7 +467,7 @@ IntrusiveRefCntPtr<ASTReader> CompilerInstance::createPCHExternalASTSource(
 // Code Completion
 
 static bool EnableCodeCompletion(Preprocessor &PP,
-                                 const std::string &Filename,
+                                 StringRef Filename,
                                  unsigned Line,
                                  unsigned Column) {
   // Tell the source manager to chop off the given file at a specific
@@ -713,16 +712,17 @@ std::unique_ptr<llvm::raw_pwrite_stream> CompilerInstance::createOutputFile(
 // Initialization Utilities
 
 bool CompilerInstance::InitializeSourceManager(const FrontendInputFile &Input){
-  return InitializeSourceManager(Input, getDiagnostics(),
-                                 getFileManager(), getSourceManager(), 
-                                 getFrontendOpts());
+  return InitializeSourceManager(
+      Input, getDiagnostics(), getFileManager(), getSourceManager(),
+      hasPreprocessor() ? &getPreprocessor().getHeaderSearchInfo() : nullptr,
+      getDependencyOutputOpts(), getFrontendOpts());
 }
 
-bool CompilerInstance::InitializeSourceManager(const FrontendInputFile &Input,
-                                               DiagnosticsEngine &Diags,
-                                               FileManager &FileMgr,
-                                               SourceManager &SourceMgr,
-                                               const FrontendOptions &Opts) {
+// static
+bool CompilerInstance::InitializeSourceManager(
+    const FrontendInputFile &Input, DiagnosticsEngine &Diags,
+    FileManager &FileMgr, SourceManager &SourceMgr, HeaderSearch *HS,
+    DependencyOutputOptions &DepOpts, const FrontendOptions &Opts) {
   SrcMgr::CharacteristicKind
     Kind = Input.isSystem() ? SrcMgr::C_System : SrcMgr::C_User;
 
@@ -738,7 +738,35 @@ bool CompilerInstance::InitializeSourceManager(const FrontendInputFile &Input,
 
   // Figure out where to get and map in the main file.
   if (InputFile != "-") {
-    const FileEntry *File = FileMgr.getFile(InputFile, /*OpenFile=*/true);
+    const FileEntry *File;
+    if (Opts.FindPchSource.empty()) {
+      File = FileMgr.getFile(InputFile, /*OpenFile=*/true);
+    } else {
+      // When building a pch file in clang-cl mode, the .h file is built as if
+      // it was included by a cc file.  Since the driver doesn't know about
+      // all include search directories, the frontend must search the input
+      // file through HeaderSearch here, as if it had been included by the
+      // cc file at Opts.FindPchSource.
+      const FileEntry *FindFile = FileMgr.getFile(Opts.FindPchSource);
+      if (!FindFile) {
+        Diags.Report(diag::err_fe_error_reading) << Opts.FindPchSource;
+        return false;
+      }
+      const DirectoryLookup *UnusedCurDir;
+      SmallVector<std::pair<const FileEntry *, const DirectoryEntry *>, 16>
+          Includers;
+      Includers.push_back(std::make_pair(FindFile, FindFile->getDir()));
+      File = HS->LookupFile(InputFile, SourceLocation(), /*isAngled=*/false,
+                            /*FromDir=*/nullptr,
+                            /*CurDir=*/UnusedCurDir, Includers,
+                            /*SearchPath=*/nullptr,
+                            /*RelativePath=*/nullptr,
+                            /*RequestingModule=*/nullptr,
+                            /*SuggestedModule=*/nullptr, /*SkipCache=*/true);
+      // Also add the header to /showIncludes output.
+      if (File)
+        DepOpts.ShowIncludesPretendHeader = File->getName();
+    }
     if (!File) {
       Diags.Report(diag::err_fe_error_reading) << InputFile;
       return false;
@@ -1387,8 +1415,7 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
   // when both the preprocessor and parser see the same import declaration.
   if (ImportLoc.isValid() && LastModuleImportLoc == ImportLoc) {
     // Make the named module visible.
-    if (LastModuleImportResult && ModuleName != getLangOpts().CurrentModule &&
-        ModuleName != getLangOpts().ImplementationOfModule)
+    if (LastModuleImportResult && ModuleName != getLangOpts().CurrentModule)
       ModuleManager->makeModuleVisible(LastModuleImportResult, Visibility,
                                        ImportLoc);
     return LastModuleImportResult;
@@ -1402,8 +1429,7 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
   if (Known != KnownModules.end()) {
     // Retrieve the cached top-level module.
     Module = Known->second;    
-  } else if (ModuleName == getLangOpts().CurrentModule ||
-             ModuleName == getLangOpts().ImplementationOfModule) {
+  } else if (ModuleName == getLangOpts().CurrentModule) {
     // This is the module we're building. 
     Module = PP->getHeaderSearchInfo().lookupModule(ModuleName);
     Known = KnownModules.insert(std::make_pair(Path[0].first, Module)).first;
@@ -1581,10 +1607,6 @@ CompilerInstance::loadModule(SourceLocation ImportLoc,
     }
   }
 
-  // Don't make the module visible if we are in the implementation.
-  if (ModuleName == getLangOpts().ImplementationOfModule)
-    return ModuleLoadResult(Module, false);
-  
   // Make the named module visible, if it's not already part of the module
   // we are parsing.
   if (ModuleName != getLangOpts().CurrentModule) {

@@ -59,6 +59,8 @@ static CXCursorKind GetCursorKind(const Attr *A) {
     case attr::CUDAHost: return CXCursor_CUDAHostAttr;
     case attr::CUDAShared: return CXCursor_CUDASharedAttr;
     case attr::Visibility: return CXCursor_VisibilityAttr;
+    case attr::DLLExport: return CXCursor_DLLExport;
+    case attr::DLLImport: return CXCursor_DLLImport;
   }
 
   return CXCursor_UnexposedAttr;
@@ -598,6 +600,18 @@ CXCursor cxcursor::MakeCXCursor(const Stmt *S, const Decl *Parent,
   case Stmt::OMPTargetDataDirectiveClass:
     K = CXCursor_OMPTargetDataDirective;
     break;
+  case Stmt::OMPTargetEnterDataDirectiveClass:
+    K = CXCursor_OMPTargetEnterDataDirective;
+    break;
+  case Stmt::OMPTargetExitDataDirectiveClass:
+    K = CXCursor_OMPTargetExitDataDirective;
+    break;
+  case Stmt::OMPTargetParallelDirectiveClass:
+    K = CXCursor_OMPTargetParallelDirective;
+    break;
+  case Stmt::OMPTargetParallelForDirectiveClass:
+    K = CXCursor_OMPTargetParallelForDirective;
+    break;
   case Stmt::OMPTeamsDirectiveClass:
     K = CXCursor_OMPTeamsDirective;
     break;
@@ -612,6 +626,9 @@ CXCursor cxcursor::MakeCXCursor(const Stmt *S, const Decl *Parent,
     break;
   case Stmt::OMPTaskLoopSimdDirectiveClass:
     K = CXCursor_OMPTaskLoopSimdDirective;
+    break;
+  case Stmt::OMPDistributeDirectiveClass:
+    K = CXCursor_OMPDistributeDirective;
     break;
   }
 

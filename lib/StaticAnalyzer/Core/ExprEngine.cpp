@@ -30,6 +30,7 @@
 #include "llvm/ADT/ImmutableList.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #ifndef NDEBUG
 #include "llvm/Support/GraphWriter.h"
@@ -476,8 +477,12 @@ void ExprEngine::ProcessInitializer(const CFGInitializer Init,
   if (BMI->isAnyMemberInitializer()) {
     // Constructors build the object directly in the field,
     // but non-objects must be copied in from the initializer.
-    const Expr *Init = BMI->getInit()->IgnoreImplicit();
-    if (!isa<CXXConstructExpr>(Init)) {
+    if (auto *CtorExpr = findDirectConstructorForCurrentCFGElement()) {
+      assert(BMI->getInit()->IgnoreImplicit() == CtorExpr);
+      (void)CtorExpr;
+      // The field was directly constructed, so there is no need to bind.
+    } else {
+      const Expr *Init = BMI->getInit()->IgnoreImplicit();
       const ValueDecl *Field;
       if (BMI->isIndirectMemberInitializer()) {
         Field = BMI->getIndirectMember();
@@ -826,11 +831,16 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::OMPAtomicDirectiveClass:
     case Stmt::OMPTargetDirectiveClass:
     case Stmt::OMPTargetDataDirectiveClass:
+    case Stmt::OMPTargetEnterDataDirectiveClass:
+    case Stmt::OMPTargetExitDataDirectiveClass:
+    case Stmt::OMPTargetParallelDirectiveClass:
+    case Stmt::OMPTargetParallelForDirectiveClass:
     case Stmt::OMPTeamsDirectiveClass:
     case Stmt::OMPCancellationPointDirectiveClass:
     case Stmt::OMPCancelDirectiveClass:
     case Stmt::OMPTaskLoopDirectiveClass:
     case Stmt::OMPTaskLoopSimdDirectiveClass:
+    case Stmt::OMPDistributeDirectiveClass:
       llvm_unreachable("Stmt should not be in analyzer evaluation loop");
 
     case Stmt::ObjCSubscriptRefExprClass:
@@ -1739,6 +1749,14 @@ static bool stackFrameDoesNotContainInitializedTemporaries(ExplodedNode &Pred) {
          }) == Set.end();
 }
 #endif
+
+void ExprEngine::processBeginOfFunction(NodeBuilderContext &BC,
+                                        ExplodedNode *Pred,
+                                        ExplodedNodeSet &Dst,
+                                        const BlockEdge &L) {
+  SaveAndRestore<const NodeBuilderContext *> NodeContextRAII(currBldrCtx, &BC);
+  getCheckerManager().runCheckersForBeginFunction(Dst, L, Pred, *this);
+}
 
 /// ProcessEndPath - Called by CoreEngine.  Used to generate end-of-path
 ///  nodes when the control reaches the end of a function.
