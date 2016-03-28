@@ -161,12 +161,13 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(AllocBB);
 
   auto AllocateCall = EmitScalarExpr(SS.Allocate);
+  auto AllocOrInvokeContBB = Builder.GetInsertBlock();
   Builder.CreateBr(InitBB);
   
   EmitBlock(InitBB);
   auto Phi = Builder.CreatePHI(VoidPtrTy, 2);
   Phi->addIncoming(CoroElide, EntryBB);
-  Phi->addIncoming(AllocateCall, AllocBB);
+  Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
   Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init),
                          Phi);
