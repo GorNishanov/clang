@@ -43,6 +43,7 @@ namespace {
 
     CodeGenFunction::OpaqueValueMapping o1;
     CodeGenFunction::OpaqueValueMapping o2;
+    CodeGenFunction::OpaqueValueMapping o3;
 
     static OpaqueValueExpr *opaque(Expr *E) {
       return cast<OpaqueValueExpr>(
@@ -53,7 +54,8 @@ namespace {
       : common(CGF.EmitMaterializeTemporaryExpr(
         cast<MaterializeTemporaryExpr>(S.getCommonExpr()))),
       o1(CGF, opaque(S.getReadyExpr()), common),
-      o2(CGF, opaque(S.getResumeExpr()), common) {}
+      o2(CGF, opaque(S.getSuspendExpr()), common),
+      o3(CGF, opaque(S.getResumeExpr()), common) {}
   };
 }
 
@@ -78,15 +80,26 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
 
   CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
   CGF.EmitBlock(SuspendBlock);
-
+#if 0
   auto bitcast = Builder.CreateBitCast(ovm.common.getPointer(), CGF.VoidPtrTy);
 
   llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   SmallVector<Value*, 2> args{bitcast, CGF.EmitScalarExpr(S.getSuspendExpr()),
     ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
+#endif
+  llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save2);
+  SmallVector<Value*, 1> args{ ConstantInt::get(CGF.Int32Ty, suspendNum) };
+  auto SaveCall = Builder.CreateCall(coroSave, args);
 
-  auto suspendResult = Builder.CreateCall(coroSuspend, args);
+  // FIXME: handle bool returning suspendExpr
+  CGF.EmitScalarExpr(S.getSuspendExpr());
+
+  llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend2);
+  SmallVector<Value*, 1> args2{ SaveCall };
+  auto suspendResult = Builder.CreateCall(coroSuspend, args2);
+
+  //auto suspendResult = Builder.CreateCall(coroSuspend, args);
   if (suspendNum == 0)
     Builder.CreateBr(cleanupBlock);
   else
