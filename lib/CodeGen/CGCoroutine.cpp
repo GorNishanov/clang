@@ -168,6 +168,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto EntryBB = Builder.GetInsertBlock();
   auto AllocBB = createBasicBlock("coro.alloc");
   auto InitBB = createBasicBlock("coro.init");
+  auto ParamCleanupBB = createBasicBlock("coro.param.cleanup");
 
   Builder.CreateCondBr(ICmp, InitBB, AllocBB);
 
@@ -189,15 +190,12 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
     EmitStmt(SS.Promise);
 
-#if 1
     for (auto PM : S.getParamMoves()) {
       EmitStmt(PM);
       // TODO: if(CoroParam(...)) need to suround ctor and dtor
       // for the copy, so that llvm can elide it if the copy is
       // not needed
-     // EmitCoroParam(*this, static_cast<DeclStmt*>(PM)); 
     }
-#endif
     getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 
     EmitStmt(SS.ReturnStmt);
@@ -205,7 +203,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     auto StartBlock = createBasicBlock("coro.start");
     llvm::Function* coroDone = CGM.getIntrinsic(llvm::Intrinsic::coro_done);
     auto doneResult = Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGM.Int8PtrTy));
-    Builder.CreateCondBr(doneResult, ReturnBlock.getBlock(), StartBlock);
+    Builder.CreateCondBr(doneResult, ParamCleanupBB, StartBlock);
 
     EmitBlock(StartBlock);
     emitSuspendExpression(*this, Builder, *SS.InitSuspend,
@@ -236,7 +234,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(DeallocBB);
 #endif
   EmitStmt(SS.Deallocate);
-  EmitBranch(ReturnBlock.getBlock());
+  EmitBranch(ParamCleanupBB);
+  
+  EmitBlock(ParamCleanupBB);
 
   CurFn->addFnAttr(llvm::Attribute::Coroutine);
 }
