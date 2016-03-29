@@ -153,7 +153,7 @@ public:
   const CGFunctionInfo *CurFnInfo;
   QualType FnRetTy;
   llvm::Function *CurFn;
-  CGCoroutine* CurCoroutine;
+  CGCoroutine* CurCoroutine; /// nullptr of not a coroutine
 
   /// CurGD - The GlobalDecl for the current function being compiled.
   GlobalDecl CurGD;
@@ -378,6 +378,9 @@ public:
 
   /// Returns true inside SEH __try blocks.
   bool isSEHTryScope() const { return !SEHTryEpilogueStack.empty(); }
+
+  /// Returns true if the current function is a coroutine
+  bool isCoroutine() const { return CurCoroutine != nullptr; }
 
   /// Returns true while emitting a cleanuppad.
   bool isCleanupPadScope() const {
