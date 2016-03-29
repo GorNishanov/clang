@@ -100,6 +100,64 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
   return PromiseType;
 }
 
+// FIXME: fix the error
+#define err_malformed_std_coroutine_handle err_malformed_std_initializer_list
+
+static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S, SourceLocation Loc) {
+  // FIXME: Cache std::coroutine_handle once we've found it.
+  NamespaceDecl *Std = S.getStdNamespace();
+  if (!Std) {
+    S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
+    return nullptr;
+  }
+
+  LookupResult Result(S, &S.PP.getIdentifierTable().get("coroutine_handle"),
+    Loc, Sema::LookupOrdinaryName);
+  if (!S.LookupQualifiedName(Result, Std)) {
+    S.Diag(Loc, diag::err_implied_std_initializer_list_not_found);
+    return nullptr;
+  }
+  ClassTemplateDecl *Template = Result.getAsSingle<ClassTemplateDecl>();
+  if (!Template) {
+    Result.suppressDiagnostics();
+    // We found something weird. Complain about the first thing we found.
+    NamedDecl *Found = *Result.begin();
+    S.Diag(Found->getLocation(), diag::err_malformed_std_coroutine_handle);
+    return nullptr;
+  }
+
+  // We found some template called std::coroutine_handle. Now verify that it's
+  // correct.
+  TemplateParameterList *Params = Template->getTemplateParameters();
+  if (Params->getMinRequiredArguments() > 1 ||
+    !isa<TemplateTypeParmDecl>(Params->getParam(0))) {
+    S.Diag(Template->getLocation(), diag::err_malformed_std_coroutine_handle);
+    return nullptr;
+  }
+
+  return Template;
+}
+
+static 
+QualType buildStdCoroutineHandle(Sema &S, QualType Element, SourceLocation Loc) {
+  // FIXME: Cache std::coroutine_handle once we've found it.
+  /*
+  if (!StdCoroutineHandle) {
+    StdCoroutineHandle = lookupStdCoroutineHandle(*this, Loc);
+    if (!StdCoroutineHandle)
+      return QualType();
+  }
+  */
+  auto StdCoroutineHandle = lookupStdCoroutineHandle(S, Loc);
+
+  TemplateArgumentListInfo Args(Loc, Loc);
+  Args.addArgument(TemplateArgumentLoc(TemplateArgument(Element),
+    S.Context.getTrivialTypeSourceInfo(Element,
+      Loc)));
+  return S.Context.getCanonicalType(
+    S.CheckTemplateIdType(TemplateName(StdCoroutineHandle), Loc, Args));
+}
+
 /// Check that this is a context in which a coroutine suspension can appear.
 static FunctionScopeInfo *
 checkCoroutineContext(Sema &S, SourceLocation Loc, StringRef Keyword) {
@@ -227,12 +285,56 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
 
     ExprResult Result;
     if (I == AwaitSuspendIndex) {
-      QualType AwaitableType = E->getType();
       QualType PromiseType = CoroutinePromise->getType();
+#if 0
+      QualType AwaitableType = E->getType();
       DeclarationName DN(&S.Context.Idents.get("_Ramp"));
       LookupResult R(S, DN, Loc, Sema::LookupOrdinaryName);
       if (!S.LookupName(R, S.TUScope))
         return Calls;
+#endif
+      // EXPERIMENT -----------
+      CXXScopeSpec SS;
+      auto xxx = buildStdCoroutineHandle(S, PromiseType, Loc);
+      auto LookupCtx = S.computeDeclContext(xxx);
+      LookupResult Found(S, &S.PP.getIdentifierTable().get("from_address"), Loc,
+        Sema::LookupOrdinaryName);
+      //Sema::LookupMemberName);
+//        Sema::LookupNestedNameSpecifierName);
+      if (S.LookupQualifiedName(Found, LookupCtx)) {
+        
+        auto Fn = Found.getAsSingle<CXXMethodDecl>();
+        DeclRefExpr *DRE = DeclRefExpr::Create(S.Context,
+          Fn->getQualifierLoc(),
+          Loc,
+          Fn,
+          /*enclosing*/ false, // FIXME?
+          Loc,
+          Fn->getType(),
+          VK_LValue);
+        S.MarkDeclRefReferenced(DRE);
+
+        auto *FramePtr =
+          buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
+
+        auto CoroHandle =
+          S.ActOnCallExpr(/*Scope=*/nullptr, DRE, Loc, { FramePtr }, Loc);
+
+        SmallVector<Expr*, 1> Args;
+        Args.push_back(CoroHandle.get());
+        Result = buildMemberCall(S, Operand, Loc, Funcs[I], Args);
+
+        //Call.get()->dump();
+    }
+      // FIXME: handle errors
+
+#if 0
+      S.BuildCXXNestedNameSpecifier(S.getCurScope(),
+        S.PP.getIdentifierTable().get("from_addr"),
+        Loc, Loc, xxx, /*EnteringContext=*/ false, SS, 
+        /*ScopeLookupResult=*/nullptr, /*ErrorRecoveryLookup=*/ false);
+
+      // EXPERIMENT -----------
 
       TemplateArgumentListInfo Args(Loc, Loc);
       Args.addArgument(TemplateArgumentLoc(
@@ -254,6 +356,7 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
           Loc, tok::kw_reinterpret_cast,
           S.Context.getTrivialTypeSourceInfo(S.Context.VoidPtrTy), Result.get(),
           Loc, {});
+#endif
       if (Result.isInvalid())
         return Calls;
     } else {
