@@ -232,7 +232,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(DeallocBB);
 #endif
   EmitStmt(SS.Deallocate);
-  EmitBranch(ParamCleanupBB);
+  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_end);
+  Builder.CreateCall(CoroEnd);
+  Builder.CreateUnreachable();
   
   EmitBlock(ParamCleanupBB);
 
