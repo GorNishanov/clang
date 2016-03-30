@@ -183,8 +183,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Phi->addIncoming(CoroElide, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
-  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init),
-                         Phi);
+  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init), Phi);
 
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
@@ -201,13 +200,12 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     EmitStmt(SS.ReturnStmt);
 
     auto StartBlock = createBasicBlock("coro.start");
-    llvm::Function* coroDone = CGM.getIntrinsic(llvm::Intrinsic::coro_done);
-    auto doneResult = Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGM.Int8PtrTy));
-    Builder.CreateCondBr(doneResult, ParamCleanupBB, StartBlock);
+    llvm::Function* CoroFork = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_fork);
+    auto ForkResult = Builder.CreateCall(CoroFork);
+    Builder.CreateCondBr(ForkResult, ParamCleanupBB, StartBlock);
 
     EmitBlock(StartBlock);
-    emitSuspendExpression(*this, Builder, *SS.InitSuspend,
-      "init", 1);
+    emitSuspendExpression(*this, Builder, *SS.InitSuspend, "init", 1);
 
     EmitStmt(SS.Body);
 
