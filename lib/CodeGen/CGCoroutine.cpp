@@ -157,8 +157,25 @@ static void EmitCoroParam(CodeGenFunction& CGF, DeclStmt* PM) {
   auto Call = CGF.Builder.CreateCall(CoroParam, args);
 }
 
+namespace {
+  struct CallMarkerIntrin final : EHScopeStack::Cleanup {
+    CallMarkerIntrin() {}
+
+    void Emit(CodeGenFunction &CGF, Flags flags) override {
+      
+      llvm::Function* coroDone = CGF.CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_fork_cleanup);
+      CGF.Builder.CreateCall(coroDone);
+//      llvm::Function* coroDone = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_done);
+//      CGF.Builder.CreateCall(coroDone, llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy));
+    }
+  };
+} // end anonymous namespace
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
+  if (getTarget().getCXXABI().areArgsDestroyedLeftToRightInCallee()) {
+    EHStack.pushCleanup<CallMarkerIntrin>(NormalAndEHCleanup);
+  }
 
   auto CoroElide = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_elide));
   auto ICmp =
@@ -168,7 +185,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto EntryBB = Builder.GetInsertBlock();
   auto AllocBB = createBasicBlock("coro.alloc");
   auto InitBB = createBasicBlock("coro.init");
-  auto ParamCleanupBB = createBasicBlock("coro.param.cleanup");
+  //auto ParamCleanupBB = createBasicBlock("coro.param.cleanup");
 
   Builder.CreateCondBr(ICmp, InitBB, AllocBB);
 
@@ -199,12 +216,12 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     EmitStmt(SS.ReturnStmt);
 
-    auto StartBlock = createBasicBlock("coro.start");
-    llvm::Function* CoroFork = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_fork);
-    auto ForkResult = Builder.CreateCall(CoroFork);
-    Builder.CreateCondBr(ForkResult, ParamCleanupBB, StartBlock);
+    //auto StartBlock = createBasicBlock("coro.start");
+    //llvm::Function* CoroFork = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_fork);
+    //auto ForkResult = Builder.CreateCall(CoroFork);
+    //Builder.CreateCondBr(ForkResult, ParamCleanupBB, StartBlock);
 
-    EmitBlock(StartBlock);
+    //EmitBlock(StartBlock);
     emitSuspendExpression(*this, Builder, *SS.InitSuspend, "init", 1);
 
     EmitStmt(SS.Body);
@@ -232,11 +249,15 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(DeallocBB);
 #endif
   EmitStmt(SS.Deallocate);
-  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_end);
-  Builder.CreateCall(CoroEnd);
-  Builder.CreateUnreachable();
+
+  llvm::Function* CoroTailFork = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_tail_fork);
+  Builder.CreateCall(CoroTailFork);
+
+//  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_end);
+//  Builder.CreateCall(CoroEnd);
+//  Builder.CreateUnreachable();
   
-  EmitBlock(ParamCleanupBB);
+  //EmitBlock(ParamCleanupBB);
 
   CurFn->addFnAttr(llvm::Attribute::Coroutine);
 }
