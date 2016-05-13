@@ -187,6 +187,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
+
     EmitStmt(SS.Promise);
 
     for (auto PM : S.getParamMoves()) {
@@ -198,6 +199,15 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 
     EmitStmt(SS.ReturnStmt);
+
+	struct CallCoroEnd final : public EHScopeStack::Cleanup {
+		void Emit(CodeGenFunction &CGF, Flags flags) override {
+			auto& CGM = CGF.CGM;
+			llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_end);
+			CGF.Builder.CreateCall(CoroEnd);
+		}
+	};
+	EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
     auto StartBlock = createBasicBlock("coro.start");
     llvm::Function* CoroFork = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_fork);
@@ -232,6 +242,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(DeallocBB);
 #endif
   EmitStmt(SS.Deallocate);
+  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_end);
+  Builder.CreateCall(CoroEnd);
+
   EmitBranch(ParamCleanupBB);
   
   EmitBlock(ParamCleanupBB);
