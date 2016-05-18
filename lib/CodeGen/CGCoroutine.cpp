@@ -186,7 +186,19 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init), Phi);
 
   {
-    CodeGenFunction::RunCleanupsScope ResumeScope(*this);
+	CodeGenFunction::RunCleanupsScope ResumeScope(*this);
+
+	struct CallCoroDelete final : public EHScopeStack::Cleanup {
+		void Emit(CodeGenFunction &CGF, Flags flags) override {
+			CGF.EmitStmt(S);
+		}
+		CallCoroDelete(LabelStmt* LS) : S(LS->getSubStmt()) {
+		}
+	private:
+		//CoroutineBodyStmt::SubStmt& SS;
+		Stmt* S;
+	};
+	EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
 
     EmitStmt(SS.Promise);
 
@@ -209,12 +221,14 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 	};
 	EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
+#if 1
     auto StartBlock = createBasicBlock("coro.start");
     llvm::Function* CoroFork = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_fork);
     auto ForkResult = Builder.CreateCall(CoroFork);
     Builder.CreateCondBr(ForkResult, ParamCleanupBB, StartBlock);
 
     EmitBlock(StartBlock);
+#endif
     emitSuspendExpression(*this, Builder, *SS.InitSuspend, "init", 1);
 
     EmitStmt(SS.Body);
@@ -245,9 +259,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_end);
   Builder.CreateCall(CoroEnd);
 
+#if 1
   EmitBranch(ParamCleanupBB);
   
   EmitBlock(ParamCleanupBB);
+#endif
 
   CurFn->addFnAttr(llvm::Attribute::Coroutine);
 }
