@@ -153,8 +153,8 @@ static void EmitCoroParam(CodeGenFunction& CGF, DeclStmt* PM) {
   auto Copy = CGF.Builder.CreateBitCast(CGF.EmitLValue(&DRE).getAddress(), CGF.VoidPtrTy);
   SmallVector<Value *, 2> args{Orig.getPointer(), Copy.getPointer()};
 
-  auto CoroParam = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_param);
-  auto Call = CGF.Builder.CreateCall(CoroParam, args);
+//  auto CoroParam = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_param);
+//  auto Call = CGF.Builder.CreateCall(CoroParam, args);
 }
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
@@ -183,8 +183,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Phi->addIncoming(CoroElide, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
-  SmallVector<Value*, 3> args{ Phi, llvm::ConstantPointerNull::get(VoidPtrTy), llvm::ConstantPointerNull::get(VoidPtrTy) };
-  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_init), args);
+  // we would like to insert coro_init at this point, but
+  // we don't have alloca for the coroutine promise yet, which 
+  // is one of the parameters for coro_init
+  llvm::Value *Undef = llvm::UndefValue::get(Int32Ty);
+  llvm::Instruction* CoroInitInsertPt = new llvm::BitCastInst(Undef, Int32Ty, "CoroInitPt", InitBB);
 
   {
 	CodeGenFunction::RunCleanupsScope ResumeScope(*this);
@@ -202,6 +205,18 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 	EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
 
     EmitStmt(SS.Promise);
+    auto DS = cast<DeclStmt>(SS.Promise);
+    auto VD = cast<VarDecl>(DS->getSingleDecl());
+
+    DeclRefExpr PromiseRef(VD, false, VD->getType().getNonReferenceType(),
+      VK_LValue, SourceLocation());
+    llvm::Value *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
+
+    llvm::Value* PromiseAddrVoidPtr = new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroInitInsertPt);
+    SmallVector<llvm::Value*, 3> args{ Phi, PromiseAddrVoidPtr, llvm::ConstantPointerNull::get(VoidPtrTy) };
+    llvm::CallInst::Create(
+      CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_init), args, "", CoroInitInsertPt);
+    CoroInitInsertPt->eraseFromParent();
 
     for (auto PM : S.getParamMoves()) {
       EmitStmt(PM);
