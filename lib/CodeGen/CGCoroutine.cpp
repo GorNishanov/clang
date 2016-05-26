@@ -212,8 +212,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       VK_LValue, SourceLocation());
     llvm::Value *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
 
+    llvm::Value* FnAddrVoidPtr = new llvm::BitCastInst(CurFn, VoidPtrTy, "", CoroInitInsertPt);
     llvm::Value* PromiseAddrVoidPtr = new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroInitInsertPt);
-    SmallVector<llvm::Value*, 3> args{ Phi, PromiseAddrVoidPtr, llvm::ConstantPointerNull::get(VoidPtrTy) };
+    SmallVector<llvm::Value*, 3> args{ Phi, PromiseAddrVoidPtr, FnAddrVoidPtr };
     llvm::CallInst::Create(
       CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_init), args, "", CoroInitInsertPt);
     CoroInitInsertPt->eraseFromParent();
