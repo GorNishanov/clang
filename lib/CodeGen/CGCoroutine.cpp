@@ -183,7 +183,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Phi->addIncoming(CoroElide, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
-  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_init), Phi);
+  SmallVector<Value*, 3> args{ Phi, llvm::ConstantPointerNull::get(VoidPtrTy), llvm::ConstantPointerNull::get(VoidPtrTy) };
+  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_init), args);
 
   {
 	CodeGenFunction::RunCleanupsScope ResumeScope(*this);
