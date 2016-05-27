@@ -232,7 +232,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 	struct CallCoroEnd final : public EHScopeStack::Cleanup {
 		void Emit(CodeGenFunction &CGF, Flags flags) override {
 			auto& CGM = CGF.CGM;
-			llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_end);
+			llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_resume_end);
 			CGF.Builder.CreateCall(CoroEnd);
 		}
 	};
@@ -273,7 +273,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(DeallocBB);
 #endif
   EmitStmt(SS.Deallocate);
-  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_end);
+  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_resume_end);
   Builder.CreateCall(CoroEnd);
 
 #if 1
