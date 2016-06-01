@@ -679,6 +679,11 @@ public:
     Expr *FramePtr =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
+    // FIXME: delete void* p argument should be the result
+    // of a call to @llvm.coro.delete, not @llvm.coro.frame, since
+    // backend may chose to have coro.frame to be at an offset from
+    // the beginning of the memory block and thus we need to use
+    // @llvm.coro.delete to move it back to the beginning.
     SmallVector<Expr *, 2> deleteArgs{ FramePtr };
 
     Expr *CoroDelete = buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_delete, { FramePtr });
