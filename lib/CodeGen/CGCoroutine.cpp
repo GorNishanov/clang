@@ -88,14 +88,14 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
     ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
 #endif
-  llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_save2);
+  llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_save);
   //SmallVector<Value*, 1> args{ ConstantInt::get(CGF.Int32Ty, suspendNum) };
   auto SaveCall = Builder.CreateCall(coroSave); //, args);
 
   // FIXME: handle bool returning suspendExpr
   CGF.EmitScalarExpr(S.getSuspendExpr());
 
-  llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_suspend2);
+  llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_suspend);
   SmallVector<Value *, 1> args2{
       SaveCall,
       llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), suspendNum == 0)};
