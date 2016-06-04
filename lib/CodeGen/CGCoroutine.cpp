@@ -216,7 +216,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     llvm::Value* FnAddrVoidPtr = new llvm::BitCastInst(CurFn, VoidPtrTy, "", CoroInitInsertPt);
     llvm::Value* PromiseAddrVoidPtr = new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroInitInsertPt);
-    SmallVector<llvm::Value*, 3> args{ Phi, PromiseAddrVoidPtr, FnAddrVoidPtr };
+    // FIXME: instead of 0, pass equivalnet of alignas(maxalign_t)
+    SmallVector<llvm::Value*, 3> args{ Phi, Builder.getInt32(0), PromiseAddrVoidPtr, FnAddrVoidPtr };
     llvm::CallInst::Create(
       CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_init), args, "", CoroInitInsertPt);
     CoroInitInsertPt->eraseFromParent();

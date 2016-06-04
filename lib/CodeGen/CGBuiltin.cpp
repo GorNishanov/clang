@@ -2156,7 +2156,10 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return RValue::get(Builder.CreateCall(F, ArgValue));
   }
   case Builtin::BI__builtin_coro_size: {
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_size);
+    auto & Context = getContext();
+    auto SizeTy = Context.getSizeType();
+    auto T = Builder.getIntNTy(Context.getTypeSize(SizeTy));
+    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_size, T);
     return RValue::get(Builder.CreateCall(F));
   }
   case Builtin::BI__builtin_coro_frame: {
