@@ -88,14 +88,14 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
     ConstantInt::get(CGF.Int32Ty, suspendNum)
   };
 #endif
-  llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_save);
+  llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
   //SmallVector<Value*, 1> args{ ConstantInt::get(CGF.Int32Ty, suspendNum) };
   auto SaveCall = Builder.CreateCall(coroSave); //, args);
 
   // FIXME: handle bool returning suspendExpr
   CGF.EmitScalarExpr(S.getSuspendExpr());
 
-  llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_suspend);
+  llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   SmallVector<Value *, 1> args2{
       SaveCall,
       llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), suspendNum == 0)};
@@ -162,7 +162,7 @@ static void EmitCoroParam(CodeGenFunction& CGF, DeclStmt* PM) {
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
 
-  auto CoroElide = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_elide));
+  auto CoroElide = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_alloc));
   auto ICmp =
     Builder.CreateICmpNE(CoroElide,
       llvm::ConstantPointerNull::get(VoidPtrTy));
@@ -219,7 +219,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // FIXME: instead of 0, pass equivalnet of alignas(maxalign_t)
     SmallVector<llvm::Value*, 3> args{ Phi, Builder.getInt32(0), PromiseAddrVoidPtr, FnAddrVoidPtr };
     llvm::CallInst::Create(
-      CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_init), args, "", CoroInitInsertPt);
+      CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args, "", CoroInitInsertPt);
     CoroInitInsertPt->eraseFromParent();
 
     for (auto PM : S.getParamMoves()) {
@@ -235,13 +235,13 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 	struct CallCoroEnd final : public EHScopeStack::Cleanup {
 		void Emit(CodeGenFunction &CGF, Flags flags) override {
 			auto& CGM = CGF.CGM;
-			llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_resume_end);
+			llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
 			CGF.Builder.CreateCall(CoroEnd);
 		}
 	};
 	EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
-#if 1
+#if 0
     auto StartBlock = createBasicBlock("coro.start");
     llvm::Function* CoroFork = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_fork);
     auto ForkResult = Builder.CreateCall(CoroFork);
@@ -276,7 +276,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(DeallocBB);
 #endif
   EmitStmt(SS.Deallocate);
-  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_resume_end);
+  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_return);
   Builder.CreateCall(CoroEnd);
 
 #if 1
