@@ -2139,46 +2139,46 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
     BitCastInst* BCI = cast<BitCastInst>(ArgValue);
     ArgValue = BCI->getOperand(0);
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_from_promise, ArgValue->getType());
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_from_promise, ArgValue->getType());
     return RValue::get(Builder.CreateCall(F, ArgValue));
   }
   case Builtin::BI__builtin_coro_promise: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
     BitCastInst* BCI = cast<BitCastInst>(ArgValue);
     llvm::Type* PromiseType = BCI->getOperand(0)->getType();
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_promise, PromiseType);
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_promise, PromiseType);
     return RValue::get(Builder.CreateCall(F, ArgValue));
   }
 
   case Builtin::BI__builtin_coro_resume: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_resume);
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_resume);
     return RValue::get(Builder.CreateCall(F, ArgValue));
   }
   case Builtin::BI__builtin_coro_size: {
     auto & Context = getContext();
     auto SizeTy = Context.getSizeType();
     auto T = Builder.getIntNTy(Context.getTypeSize(SizeTy));
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_size, T);
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_size, T);
     return RValue::get(Builder.CreateCall(F));
   }
   case Builtin::BI__builtin_coro_frame: {
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_frame);
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_frame);
     return RValue::get(Builder.CreateCall(F));
   }
-  case Builtin::BI__builtin_coro_delete: {
+  case Builtin::BI__builtin_coro_free: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_delete);
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_free);
 	  return RValue::get(Builder.CreateCall(F, ArgValue));
   }
   case Builtin::BI__builtin_coro_destroy: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_destroy);
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_destroy);
     return RValue::get(Builder.CreateCall(F, ArgValue));
   }
   case Builtin::BI__builtin_coro_done: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
-    Value *F = CGM.getIntrinsic(Intrinsic::experimental_coro_done);
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_done);
     return RValue::get(Builder.CreateCall(F, ArgValue));
   }
   // OpenCL v2.0 s6.13.16.2, Built-in pipe read and write functions

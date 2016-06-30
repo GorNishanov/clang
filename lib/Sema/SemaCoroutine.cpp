@@ -686,7 +686,8 @@ public:
     // @llvm.coro.delete to move it back to the beginning.
     SmallVector<Expr *, 2> deleteArgs{ FramePtr };
 
-    Expr *CoroDelete = buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_delete, { FramePtr });
+    Expr *CoroDelete =
+        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, {FramePtr});
 
     // Check if we need to pass the size
     const FunctionProtoType *opDeleteType =

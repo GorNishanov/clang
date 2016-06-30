@@ -1373,9 +1373,8 @@ BUILTIN(__builtin_coro_destroy, "vv*", "n")
 BUILTIN(__builtin_coro_done, "bv*", "n")
 BUILTIN(__builtin_coro_size, "z", "n")
 BUILTIN(__builtin_coro_frame, "v*", "n")
-BUILTIN(__builtin_coro_delete, "v*v*", "n")
+BUILTIN(__builtin_coro_free, "v*v*", "n")
 BUILTIN(__builtin_coro_promise, "v*v*", "n")
-BUILTIN(__builtin_coro_promise2, "v*v*v*", "n")
 BUILTIN(__builtin_coro_from_promise, "v*v*", "n")
 
 #undef BUILTIN
