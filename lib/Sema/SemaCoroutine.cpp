@@ -654,8 +654,11 @@ public:
     // set
     assert(OperatorDelete && "we need to find at least global operator new");
 
+    Expr *FramePtr =
+      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
+
     Expr *FrameSize =
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, {});
+        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, { FramePtr });
 
     ExprResult DeclRef =
         S.BuildDeclRefExpr(OperatorNew, OperatorNew->getType(), VK_LValue, Loc);
@@ -675,9 +678,6 @@ public:
         S.BuildDeclRefExpr(OperatorDelete, opDeleteQualType, VK_LValue, Loc);
     if (DeclRef.isInvalid())
       return false;
-
-    Expr *FramePtr =
-      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
     Expr *CoroFree =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, { FramePtr });
