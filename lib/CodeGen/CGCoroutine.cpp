@@ -63,6 +63,8 @@ namespace {
 static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
                                     CoroutineSuspendExpr &S, StringRef Name,
                                     unsigned suspendNum) {
+  auto const IsFinalSuspend = (suspendNum == 0);
+
   SmallString<8> suffix(Name);
   if (suspendNum > 1) {
     Twine(suspendNum).toVector(suffix);
@@ -75,8 +77,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   buffer.clear();
   BasicBlock *SuspendBlock = CGF.createBasicBlock((suffix + Twine(".suspend")).toStringRef(buffer));
   buffer.clear();
-  BasicBlock *cleanupBlock = CGF.createBasicBlock((suffix + Twine(".cleanup")).toStringRef(buffer));
-  BasicBlock *ResumeBB = CGF.createBasicBlock(suffix + Twine(".resume"));
+  BasicBlock *CleanupBlock = CGF.createBasicBlock((suffix + Twine(".cleanup")).toStringRef(buffer));
 
   CodeGenFunction::RunCleanupsScope AwaitExprScope(CGF);
 
@@ -91,7 +92,8 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   };
 #endif
   llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
-  SmallVector<Value*, 1> args{ llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), suspendNum == 0) };
+  SmallVector<Value *, 1> args{
+      llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), IsFinalSuspend)};
   auto SaveCall = Builder.CreateCall(coroSave, args);
 
   // FIXME: handle bool returning suspendExpr
@@ -102,6 +104,12 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
       SaveCall
       };
   auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
+  auto Switch =
+      Builder.CreateSwitch(SuspendResult, CGF.getCGCoroutine().SuspendBB, 2);
+  Switch->addCase(Builder.getInt8(0), ReadyBlock);
+  Switch->addCase(Builder.getInt8(1), CleanupBlock);
+
+#if 0
   auto SuspCond = Builder.CreateICmpSLT(SuspendResult, Builder.getInt8(0));
   Builder.CreateCondBr(SuspCond, CGF.getCGCoroutine().SuspendBB, ResumeBB);
 
@@ -112,14 +120,15 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
     Builder.CreateBr(cleanupBlock);
   else
     Builder.CreateCondBr(ResumeCond, ReadyBlock, cleanupBlock);
-
-  CGF.EmitBlock(cleanupBlock);
+#endif
+  CGF.EmitBlock(CleanupBlock);
 
   auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
   CGF.EmitBranchThroughCleanup(jumpDest);
 
   CGF.EmitBlock(ReadyBlock);
-  return CGF.EmitScalarExpr(S.getResumeExpr());
+  return IsFinalSuspend ? CGF.EmitTrapCall(llvm::Intrinsic::trap)
+                        : CGF.EmitScalarExpr(S.getResumeExpr());
 }
 
 Value *clang::CodeGen::CGCoroutine::EmitCoawait(CoawaitExpr &S) {
