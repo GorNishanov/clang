@@ -43,6 +43,7 @@ private:
 
 public:
   LabelDecl *DeleteLabel = nullptr;
+  llvm::BasicBlock *SuspendBB = nullptr;
 
   static CGCoroutine *Create(CodeGenFunction &);
   void functionFinished();
