@@ -275,8 +275,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     DeclRefExpr PromiseRef(VD, false, VD->getType().getNonReferenceType(),
       VK_LValue, SourceLocation());
     llvm::Value *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
-
-    llvm::Value* FnAddrVoidPtr = new llvm::BitCastInst(CurFn, VoidPtrTy, "", CoroInitInsertPt);
     llvm::Value* PromiseAddrVoidPtr = new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroInitInsertPt);
     // FIXME: instead of 0, pass equivalnet of alignas(maxalign_t)
     //     enum { kMem, kAlloc, kAlign, kPromise, kInfo };
