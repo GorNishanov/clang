@@ -76,6 +76,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   BasicBlock *SuspendBlock = CGF.createBasicBlock((suffix + Twine(".suspend")).toStringRef(buffer));
   buffer.clear();
   BasicBlock *cleanupBlock = CGF.createBasicBlock((suffix + Twine(".cleanup")).toStringRef(buffer));
+  BasicBlock *ResumeBB = CGF.createBasicBlock(suffix + Twine(".resume"));
 
   CodeGenFunction::RunCleanupsScope AwaitExprScope(CGF);
 
@@ -101,13 +102,16 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
       SaveCall
       };
   auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
-  auto Cond = Builder.CreateICmp(llvm::CmpInst::ICMP_EQ, SuspendResult,
-                                 Builder.getInt8(0));
+  auto SuspCond = Builder.CreateICmpSLT(SuspendResult, Builder.getInt8(0));
+  Builder.CreateCondBr(SuspCond, CGF.getCGCoroutine().SuspendBB, ResumeBB);
+
+  CGF.EmitBlock(ResumeBB);
+  auto ResumeCond = Builder.CreateICmpEQ(SuspendResult, Builder.getInt8(0));
 
   if (suspendNum == 0)
     Builder.CreateBr(cleanupBlock);
   else
-    Builder.CreateCondBr(Cond, ReadyBlock, cleanupBlock);
+    Builder.CreateCondBr(ResumeCond, ReadyBlock, cleanupBlock);
 
   CGF.EmitBlock(cleanupBlock);
 
@@ -215,7 +219,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto EntryBB = Builder.GetInsertBlock();
   auto AllocBB = createBasicBlock("coro.alloc");
   auto InitBB = createBasicBlock("coro.init");
+  auto RetBB = createBasicBlock("coro.ret");
   auto ParamCleanupBB = createBasicBlock("coro.param.cleanup");
+  getCGCoroutine().SuspendBB = RetBB;
 
   Builder.CreateCondBr(ICmp, InitBB, AllocBB);
 
@@ -334,6 +340,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitStmt(SS.Deallocate);
   FixUpDelete(*this);
 
+  EmitBlock(RetBB);
   llvm::Function* CoroReturn = CGM.getIntrinsic(llvm::Intrinsic::coro_return);
   Builder.CreateCall(CoroReturn, NullPtr);
 
