@@ -13,7 +13,8 @@
 
 #include "CGCoroutine.h"
 #include "CodeGenFunction.h"
-#include "llvm/IR/Intrinsics.h"
+#include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/StmtCXX.h"
 
@@ -89,23 +90,24 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   };
 #endif
   llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
-  //SmallVector<Value*, 1> args{ ConstantInt::get(CGF.Int32Ty, suspendNum) };
-  auto SaveCall = Builder.CreateCall(coroSave); //, args);
+  SmallVector<Value*, 1> args{ llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), suspendNum == 0) };
+  auto SaveCall = Builder.CreateCall(coroSave, args);
 
   // FIXME: handle bool returning suspendExpr
   CGF.EmitScalarExpr(S.getSuspendExpr());
 
   llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   SmallVector<Value *, 1> args2{
-      SaveCall,
-      llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), suspendNum == 0)};
-  auto suspendResult = Builder.CreateCall(coroSuspend, args2);
+      SaveCall
+      };
+  auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
+  auto Cond = Builder.CreateICmp(llvm::CmpInst::ICMP_EQ, SuspendResult,
+                                 Builder.getInt8(0));
 
-  //auto suspendResult = Builder.CreateCall(coroSuspend, args);
   if (suspendNum == 0)
     Builder.CreateBr(cleanupBlock);
   else
-    Builder.CreateCondBr(suspendResult, ReadyBlock, cleanupBlock);
+    Builder.CreateCondBr(Cond, ReadyBlock, cleanupBlock);
 
   CGF.EmitBlock(cleanupBlock);
 
@@ -159,13 +161,56 @@ static void EmitCoroParam(CodeGenFunction& CGF, DeclStmt* PM) {
 //  auto Call = CGF.Builder.CreateCall(CoroParam, args);
 }
 
+// Converts this code:
+//   S(coro_free(coro_frame())
+// To this:
+//
+//   %0 = coro_free(coro_frame())
+//   if (%0) S(%0)
+//   coro_end(%0)
+// Scans from the end of the block to find coro_frame and then adds what is 
+// needed
+static void FixUpDelete(CodeGenFunction& CGF) {
+  auto BB = CGF.Builder.GetInsertBlock();
+  assert(!BB->empty());
+  llvm::IntrinsicInst* CoroFree = nullptr;
+  auto BI = &BB->back();
+  auto BE = &BB->front();
+  do {
+    if (auto II = dyn_cast<llvm::IntrinsicInst>(BI))
+      if (II->getIntrinsicID() == llvm::Intrinsic::coro_free) {
+        CoroFree = II;
+        break;
+      }
+    BI = BI->getPrevNode();
+  }
+  while (BI != BE);
+  assert(CoroFree);
+
+  auto EndBB =
+    BasicBlock::Create(BB->getContext(), "EndBB", BB->getParent());
+  CGF.Builder.CreateBr(EndBB);
+
+  auto FreeBB = BB->splitBasicBlock(CoroFree->getNextNode(), "FreeBB");
+
+  auto NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
+
+  CGF.Builder.SetInsertPoint(CoroFree->getNextNode());
+  auto Cond = CGF.Builder.CreateICmpNE(CoroFree, NullPtr);
+  CGF.Builder.CreateCondBr(Cond, FreeBB, EndBB);
+  BB->getTerminator()->eraseFromParent();
+
+  CGF.Builder.SetInsertPoint(EndBB);
+  llvm::Function *CoroEnd = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+  CGF.Builder.CreateCall(CoroEnd, CoroFree);
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
+  auto NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
-  auto CoroElide = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_alloc));
-  auto ICmp =
-    Builder.CreateICmpNE(CoroElide,
-      llvm::ConstantPointerNull::get(VoidPtrTy));
+  auto CoroAlloc = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_alloc));
+  auto ICmp = Builder.CreateICmpNE(CoroAlloc, NullPtr);
 
   auto EntryBB = Builder.GetInsertBlock();
   auto AllocBB = createBasicBlock("coro.alloc");
@@ -182,14 +227,15 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   
   EmitBlock(InitBB);
   auto Phi = Builder.CreatePHI(VoidPtrTy, 2);
-  Phi->addIncoming(CoroElide, EntryBB);
+  Phi->addIncoming(CoroAlloc, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
   // we would like to insert coro_init at this point, but
   // we don't have alloca for the coroutine promise yet, which 
   // is one of the parameters for coro_init
   llvm::Value *Undef = llvm::UndefValue::get(Int32Ty);
-  llvm::Instruction* CoroInitInsertPt = new llvm::BitCastInst(Undef, Int32Ty, "CoroInitPt", InitBB);
+  llvm::Instruction *CoroInitInsertPt =
+      new llvm::BitCastInst(Undef, Int32Ty, "CoroInitPt", InitBB);
 
   {
 	CodeGenFunction::RunCleanupsScope ResumeScope(*this);
@@ -197,6 +243,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 	struct CallCoroDelete final : public EHScopeStack::Cleanup {
 		void Emit(CodeGenFunction &CGF, Flags flags) override {
 			CGF.EmitStmt(S);
+      FixUpDelete(CGF);
 		}
 		CallCoroDelete(LabelStmt* LS) : S(LS->getSubStmt()) {
 		}
@@ -217,7 +264,15 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     llvm::Value* FnAddrVoidPtr = new llvm::BitCastInst(CurFn, VoidPtrTy, "", CoroInitInsertPt);
     llvm::Value* PromiseAddrVoidPtr = new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroInitInsertPt);
     // FIXME: instead of 0, pass equivalnet of alignas(maxalign_t)
-    SmallVector<llvm::Value*, 3> args{ Phi, Builder.getInt32(0), PromiseAddrVoidPtr, FnAddrVoidPtr };
+    //     enum { kMem, kAlloc, kAlign, kPromise, kInfo };
+
+    SmallVector<llvm::Value*, 5> args{ 
+      Phi, 
+      CoroAlloc,
+      Builder.getInt32(0), 
+      PromiseAddrVoidPtr, 
+      NullPtr };
+
     llvm::CallInst::Create(
       CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args, "", CoroInitInsertPt);
     CoroInitInsertPt->eraseFromParent();
@@ -232,16 +287,17 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     EmitStmt(SS.ReturnStmt);
 
-	struct CallCoroEnd final : public EHScopeStack::Cleanup {
-		void Emit(CodeGenFunction &CGF, Flags flags) override {
-			auto& CGM = CGF.CGM;
-			llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-			CGF.Builder.CreateCall(CoroEnd);
-		}
-	};
-	EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
-
+    struct CallCoroEnd final : public EHScopeStack::Cleanup {
+      void Emit(CodeGenFunction &CGF, Flags flags) override {
+        auto &CGM = CGF.CGM;
+        auto NullPtr = llvm::ConstantPointerNull::get(CGM.Int8PtrTy);
+        llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+        CGF.Builder.CreateCall(CoroEnd, NullPtr);
+      }
+    };
+    EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 #if 0
+
     auto StartBlock = createBasicBlock("coro.start");
     llvm::Function* CoroFork = CGM.getIntrinsic(llvm::Intrinsic::experimental_coro_fork);
     auto ForkResult = Builder.CreateCall(CoroFork);
@@ -276,8 +332,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(DeallocBB);
 #endif
   EmitStmt(SS.Deallocate);
-  llvm::Function* CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_return);
-  Builder.CreateCall(CoroEnd);
+  FixUpDelete(*this);
+
+  llvm::Function* CoroReturn = CGM.getIntrinsic(llvm::Intrinsic::coro_return);
+  Builder.CreateCall(CoroReturn, NullPtr);
 
 #if 1
   EmitBranch(ParamCleanupBB);
