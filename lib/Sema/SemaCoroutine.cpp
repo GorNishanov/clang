@@ -679,15 +679,10 @@ public:
     Expr *FramePtr =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
-    // FIXME: delete void* p argument should be the result
-    // of a call to @llvm.coro.delete, not @llvm.coro.frame, since
-    // backend may chose to have coro.frame to be at an offset from
-    // the beginning of the memory block and thus we need to use
-    // @llvm.coro.delete to move it back to the beginning.
-    SmallVector<Expr *, 2> deleteArgs{ FramePtr };
+    Expr *CoroFree =
+      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, { FramePtr });
 
-    Expr *CoroDelete =
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, {FramePtr});
+    SmallVector<Expr *, 2> deleteArgs{ CoroFree };
 
     // Check if we need to pass the size
     const FunctionProtoType *opDeleteType =
@@ -700,22 +695,40 @@ public:
                                Loc, nullptr);
     if (CallExpr.isInvalid())
       return false;
-
 #if 0
-    auto CondExpr = S.ActOnConditionalOp(Loc, Loc, CoroDelete, CallExpr.get(), CoroDelete);
+    CallExpr = S.ActOnBinOp(S.getCurScope(), Loc, tok::comma,
+      CallExpr.get(), CoroFree);
+
+    if (CallExpr.isInvalid())
+      return false;
+
+    auto CondExpr = S.ActOnConditionalOp(Loc, Loc, CoroFree, CallExpr.get(), CoroFree);
+    if (CondExpr.isInvalid())
+      return false;
+
+    CallExpr = CondExpr;
+#endif
+#if 0
+    CallExpr = S.ActOnBinOp(S.getCurScope(), Loc, tok::comma,
+      CallExpr.get(), CoroFree);
+
+#if 1
+#if 1
+    auto CondExpr = S.ActOnConditionalOp(Loc, Loc, CoroFree, CallExpr.get(), CoroFree);
     if (CondExpr.isInvalid())
       return false;
 #else
-    auto IfStmt = S.ActOnIfStmt(Loc, S.MakeFullExpr(CoroDelete), nullptr,
+    auto IfStmt = S.ActOnIfStmt(Loc, S.MakeFullExpr(CoroFree), nullptr,
       CallExpr.get(), Loc,
       nullptr);
     if (IfStmt.isInvalid())
       return false;
     
 #endif
-
+#endif
+#endif
     // make it a labeled statement
-    StmtResult res = S.ActOnLabelStmt(Loc, label, Loc, IfStmt.get());
+    StmtResult res = S.ActOnLabelStmt(Loc, label, Loc, CallExpr.get());
 
     if (res.isInvalid())
       return false;
