@@ -127,8 +127,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   CGF.EmitBranchThroughCleanup(jumpDest);
 
   CGF.EmitBlock(ReadyBlock);
-  return IsFinalSuspend ? CGF.EmitTrapCall(llvm::Intrinsic::trap)
-                        : CGF.EmitScalarExpr(S.getResumeExpr());
+  return CGF.EmitScalarExpr(S.getResumeExpr());
 }
 
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
