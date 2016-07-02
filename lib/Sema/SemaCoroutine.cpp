@@ -747,7 +747,7 @@ public:
     if (ReturnObject.isInvalid())
       return false;
 
-    RetType = FD.getReturnType();
+    RetType = ReturnObject.get()->getType();
     if (!RetType->isDependentType()) {
       InitializedEntity Entity =
           InitializedEntity::InitializeResult(Loc, RetType, false);
@@ -783,7 +783,7 @@ public:
   }
 
   bool makeReturnStmt() {
-#if 0
+#if 1
     assert(RetDecl && "makeResultDecl must be invoked before makeReturnStmt");
     auto declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
     if (declRef.isInvalid())
@@ -904,7 +904,15 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
         << (isa<CoawaitExpr>(First) ? 0 : isa<CoyieldExpr>(First) ? 1 : 2);
   }
 
-  // FIXME: remove this check.
+#if 0
+  // FIXME: remove this diagnostics, it is legal per P0057R1
+  // 8.4.4/1
+  // A function is acoroutine if it contains a 
+  //   coroutine-return-statement(6.6.3.1), 
+  //   an await-expression(5.3.8), 
+  //   a yield-expression(5.21), or a 
+  //   range-based-for (6.5.4) with co_await
+
   bool AnyCoawaits = false;
   bool AnyCoyields = false;
   for (auto *CoroutineStmt : Fn->CoroutineStmts) {
@@ -915,7 +923,7 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
   if (!AnyCoawaits && !AnyCoyields)
     Diag(Fn->CoroutineStmts.front()->getLocStart(),
          diag::ext_coroutine_without_co_await_co_yield);
-
+#endif
   SubStmtBuilder Builder(*this, *FD, *Fn, Body);
   if (Builder.isInvalid())
     return FD->setInvalidDecl();
