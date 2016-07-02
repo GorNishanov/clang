@@ -14,14 +14,6 @@
 #ifndef LLVM_CLANG_LIB_CODEGEN_CGCOROUTINE_H
 #define LLVM_CLANG_LIB_CODEGEN_CGCOROUTINE_H
 
-#include "clang/AST/Type.h"
-#include "clang/AST/ExprCXX.h"
-#include "clang/Basic/SourceLocation.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/StringMap.h"
-#include "llvm/IR/ValueHandle.h"
-
 namespace llvm {
 class BasicBlock;
 class Value;
@@ -29,12 +21,12 @@ class Value;
 
 namespace clang {
 class VarDecl;
+class CoawaitExpr;
+class CoyieldExpr;
+class LabelDecl;
 
 namespace CodeGen {
-class Address;
 class CodeGenFunction;
-class CodeGenModule;
-class CGBuilderTy;
 
 class CGCoroutine {
 private:
