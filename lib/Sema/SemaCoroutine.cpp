@@ -527,8 +527,8 @@ namespace {
 struct RewriteParams : TreeTransform<RewriteParams> {
   typedef TreeTransform<RewriteParams> BaseTransform;
 
-  ArrayRef<Stmt *> ParamsMove;
   ArrayRef<ParmVarDecl *> Params;
+  ArrayRef<Stmt *> ParamsMove;
   RewriteParams(Sema &SemaRef, ArrayRef<ParmVarDecl *> P, ArrayRef<Stmt *> PM)
       : BaseTransform(SemaRef), Params(P), ParamsMove(PM) {}
 
