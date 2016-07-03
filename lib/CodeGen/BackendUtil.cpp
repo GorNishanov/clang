@@ -404,10 +404,10 @@ void EmitAssemblyHelper::CreatePasses(ModuleSummaryIndex *ModuleSummary) {
     PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
                            addDataFlowSanitizerPass);
   }
-#if 0
+
   if (LangOpts.Coroutines)
-    addCoroutinePassesToExtensionPoints(Builder);
-#endif
+    addCoroutinePassesToExtensionPoints(PMBuilder);
+
   // Set up the per-function pass manager.
   legacy::FunctionPassManager *FPM = getPerFunctionPasses();
   if (CodeGenOpts.VerifyModule)
