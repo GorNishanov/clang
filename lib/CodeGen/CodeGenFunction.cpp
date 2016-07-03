@@ -14,6 +14,7 @@
 #include "CodeGenFunction.h"
 #include "CGBlocks.h"
 #include "CGCleanup.h"
+#include "CGCoroutine.h"
 #include "CGCUDARuntime.h"
 #include "CGCXXABI.h"
 #include "CGDebugInfo.h"
@@ -41,16 +42,14 @@ CodeGenFunction::CodeGenFunction(CodeGenModule &cgm, bool suppressNewContext)
     : CodeGenTypeCache(cgm), CGM(cgm), Target(cgm.getTarget()),
       Builder(cgm, cgm.getModule().getContext(), llvm::ConstantFolder(),
               CGBuilderInserterTy(this)),
-      CurFn(nullptr), ReturnValue(Address::invalid()),
-      CapturedStmtInfo(nullptr),
-      SanOpts(CGM.getLangOpts().Sanitize), IsSanitizerScope(false),
-      CurFuncIsThunk(false), AutoreleaseResult(false), SawAsmBlock(false),
-      IsOutlinedSEHHelper(false),
-      BlockInfo(nullptr), BlockPointer(nullptr),
-      LambdaThisCaptureField(nullptr), NormalCleanupDest(nullptr),
-      NextCleanupDestIndex(1), FirstBlockInfo(nullptr), EHResumeBlock(nullptr),
-      ExceptionSlot(nullptr), EHSelectorSlot(nullptr),
-      DebugInfo(CGM.getModuleDebugInfo()),
+      CurFn(nullptr), CurCoroutine(nullptr), ReturnValue(Address::invalid()),
+      CapturedStmtInfo(nullptr), SanOpts(CGM.getLangOpts().Sanitize),
+      IsSanitizerScope(false), CurFuncIsThunk(false), AutoreleaseResult(false),
+      SawAsmBlock(false), IsOutlinedSEHHelper(false), BlockInfo(nullptr),
+      BlockPointer(nullptr), LambdaThisCaptureField(nullptr),
+      NormalCleanupDest(nullptr), NextCleanupDestIndex(1),
+      FirstBlockInfo(nullptr), EHResumeBlock(nullptr), ExceptionSlot(nullptr),
+      EHSelectorSlot(nullptr), DebugInfo(CGM.getModuleDebugInfo()),
       DisableDebugInfo(false), DidCallStackSave(false), IndirectBranch(nullptr),
       PGO(cgm), SwitchInsn(nullptr), SwitchWeights(nullptr),
       CaseRangeBlock(nullptr), UnreachableBlock(nullptr), NumReturnExprs(0),
@@ -93,6 +92,9 @@ CodeGenFunction::~CodeGenFunction() {
 
   if (getLangOpts().OpenMP) {
     CGM.getOpenMPRuntime().functionFinished(*this);
+  }
+  if (CurCoroutine) {
+    CurCoroutine->functionFinished();
   }
 }
 
@@ -1042,7 +1044,8 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
   //   If the '}' that terminates a function is reached, and the value of the
   //   function call is used by the caller, the behavior is undefined.
   if (getLangOpts().CPlusPlus && !FD->hasImplicitReturnZero() && !SawAsmBlock &&
-      !FD->getReturnType()->isVoidType() && Builder.GetInsertBlock()) {
+      !FD->getReturnType()->isVoidType() && Builder.GetInsertBlock() &&
+      !isCoroutine()) {
     if (SanOpts.has(SanitizerKind::Return)) {
       SanitizerScope SanScope(this);
       llvm::Value *IsFalse = Builder.getFalse();
@@ -1872,6 +1875,14 @@ Address CodeGenFunction::EmitFieldAnnotations(const FieldDecl *D,
 }
 
 CodeGenFunction::CGCapturedStmtInfo::~CGCapturedStmtInfo() { }
+
+CGCoroutine & clang::CodeGen::CodeGenFunction::getCGCoroutine()
+{
+  if (!CurCoroutine) {
+    CurCoroutine = CGCoroutine::Create(*this);
+  }
+  return *CurCoroutine;
+}
 
 CodeGenFunction::SanitizerScope::SanitizerScope(CodeGenFunction *CGF)
     : CGF(CGF) {

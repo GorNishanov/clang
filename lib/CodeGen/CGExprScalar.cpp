@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CodeGenFunction.h"
+#include "CGCoroutine.h"
 #include "CGCXXABI.h"
 #include "CGDebugInfo.h"
 #include "CGObjCRuntime.h"
@@ -220,6 +221,13 @@ public:
   Value *VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     return Visit(GE->getResultExpr());
   }
+  Value *VisitCoawaitExpr(CoawaitExpr* S) {
+    return CGF.getCGCoroutine().EmitCoawait(*S);
+  }
+  Value *VisitCoyieldExpr(CoyieldExpr* S) {
+    return CGF.getCGCoroutine().EmitCoyield(*S);
+  }
+
 
   // Leaves.
   Value *VisitIntegerLiteral(const IntegerLiteral *E) {

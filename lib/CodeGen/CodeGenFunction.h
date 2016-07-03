@@ -81,6 +81,7 @@ class CGFunctionInfo;
 class CGRecordLayout;
 class CGBlockInfo;
 class CGCXXABI;
+class CGCoroutine;
 class BlockByrefHelpers;
 class BlockByrefInfo;
 class BlockFlags;
@@ -154,6 +155,7 @@ public:
   const CGFunctionInfo *CurFnInfo;
   QualType FnRetTy;
   llvm::Function *CurFn;
+  CGCoroutine* CurCoroutine; /// nullptr of not a coroutine
 
   /// CurGD - The GlobalDecl for the current function being compiled.
   GlobalDecl CurGD;
@@ -393,6 +395,9 @@ public:
 
   /// Returns true inside SEH __try blocks.
   bool isSEHTryScope() const { return !SEHTryEpilogueStack.empty(); }
+
+  /// Returns true if the current function is a coroutine
+  bool isCoroutine() const { return CurCoroutine != nullptr; }
 
   /// Returns true while emitting a cleanuppad.
   bool isCleanupPadScope() const {
@@ -1237,6 +1242,8 @@ public:
 
   const TargetInfo &getTarget() const { return Target; }
   llvm::LLVMContext &getLLVMContext() { return CGM.getLLVMContext(); }
+
+  CGCoroutine& getCGCoroutine();
 
   //===--------------------------------------------------------------------===//
   //                                  Cleanups
@@ -2285,6 +2292,9 @@ public:
   void EmitObjCAtThrowStmt(const ObjCAtThrowStmt &S);
   void EmitObjCAtSynchronizedStmt(const ObjCAtSynchronizedStmt &S);
   void EmitObjCAutoreleasePoolStmt(const ObjCAutoreleasePoolStmt &S);
+  
+  void EmitCoroutineBody(const CoroutineBodyStmt &S);
+  void EmitCoreturnStmt(const CoreturnStmt &S);
 
   void EnterCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);
   void ExitCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);

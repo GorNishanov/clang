@@ -14,6 +14,7 @@
 #include "CodeGenFunction.h"
 #include "CGDebugInfo.h"
 #include "CodeGenModule.h"
+#include "CGCoroutine.h"
 #include "TargetInfo.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Builtins.h"
@@ -142,8 +143,10 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   case Stmt::GCCAsmStmtClass:   // Intentional fall-through.
   case Stmt::MSAsmStmtClass:    EmitAsmStmt(cast<AsmStmt>(*S));           break;
   case Stmt::CoroutineBodyStmtClass:
+    EmitCoroutineBody(cast<CoroutineBodyStmt>(*S));
+    break;
   case Stmt::CoreturnStmtClass:
-    CGM.ErrorUnsupported(S, "coroutine");
+    EmitCoreturnStmt(cast<CoreturnStmt>(*S));
     break;
   case Stmt::CapturedStmtClass: {
     const CapturedStmt *CS = cast<CapturedStmt>(S);
@@ -1033,7 +1036,8 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
     ++NumSimpleReturnExprs;
 
   cleanupScope.ForceCleanup();
-  EmitBranchThroughCleanup(ReturnBlock);
+  if (CurCoroutine == nullptr)
+    EmitBranchThroughCleanup(ReturnBlock);
 }
 
 void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
