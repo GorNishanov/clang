@@ -613,7 +613,13 @@ public:
     if (InitialSuspend.isInvalid())
       return false;
 
-    this->InitSuspend = cast<CoawaitExpr>(InitialSuspend.get());
+    auto Expr = InitialSuspend.get();
+
+    // BIG HACK
+    if (auto EWC = dyn_cast<ExprWithCleanups>(Expr))
+      Expr = EWC->getSubExpr();
+
+    this->InitSuspend = cast<CoawaitExpr>(Expr);
     return true;
   }
 
@@ -628,7 +634,13 @@ public:
     if (FinalSuspend.isInvalid())
       return false;
 
-    this->FinalSuspend = cast<CoawaitExpr>(FinalSuspend.get());
+    auto Expr = FinalSuspend.get();
+
+    // BIG HACK
+    if (auto EWC = dyn_cast<ExprWithCleanups>(Expr))
+      Expr = EWC->getSubExpr();
+
+    this->FinalSuspend = cast<CoawaitExpr>(Expr);
     return true;
   }
 
