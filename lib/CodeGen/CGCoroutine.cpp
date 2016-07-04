@@ -135,13 +135,31 @@ void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
 }
 
 Value *clang::CodeGen::CGCoroutine::EmitCoawait(CoawaitExpr &S) {
-  return emitSuspendExpression(CGF, CGF.Builder, S, "await", ++suspendNum);
+  StringRef Name;
+  unsigned No;
+
+  switch (CurrentAwaitKind) {
+  case AwaitKind::Init:
+    No = ++SuspendNum;
+    Name = "init";
+    break;
+  case AwaitKind::Normal:
+    No = ++SuspendNum;
+    Name = "await";
+    break;
+  case AwaitKind::Final:
+    No = 0;
+    Name = "final";
+    break;
+  }
+
+  return emitSuspendExpression(CGF, CGF.Builder, S, Name, No);
 }
 Value *clang::CodeGen::CGCoroutine::EmitCoyield(CoyieldExpr &S) {
-  return emitSuspendExpression(CGF, CGF.Builder, S, "yield", ++suspendNum);
+  return emitSuspendExpression(CGF, CGF.Builder, S, "yield", ++SuspendNum);
 }
 clang::CodeGen::CGCoroutine::CGCoroutine(CodeGenFunction &F)
-    : CGF(F), suspendNum(1) {}
+    : CGF(F), SuspendNum(0) {}
 
 clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 
@@ -233,6 +251,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto InitBB = createBasicBlock("coro.init");
   auto RetBB = createBasicBlock("coro.ret");
   getCGCoroutine().SuspendBB = RetBB;
+  getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
 
   Builder.CreateCondBr(ICmp, InitBB, AllocBB);
 
@@ -255,9 +274,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       new llvm::BitCastInst(Undef, Int32Ty, "CoroInitPt", InitBB);
 
   {
-	CodeGenFunction::RunCleanupsScope ResumeScope(*this);
 
-	struct CallCoroDelete final : public EHScopeStack::Cleanup {
+    struct CallCoroDelete final : public EHScopeStack::Cleanup {
 		void Emit(CodeGenFunction &CGF, Flags flags) override {
 			CGF.EmitStmt(S);
       FixUpDelete(CGF);
@@ -292,7 +310,15 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args, "", CoroInitInsertPt);
     CoroInitInsertPt->eraseFromParent();
 
-    EmitStmt(SS.ResultDecl);
+    if (SS.ResultDecl) {
+      EmitStmt(SS.ResultDecl);
+    }
+    else {
+      EmitStmt(SS.ReturnStmt);
+    }
+
+    CodeGenFunction::RunCleanupsScope ResumeScope(*this);
+    // TODO: make sure that promise dtor is called
 
     for (auto PM : S.getParamMoves()) {
       EmitStmt(PM);
@@ -300,7 +326,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       // for the copy, so that llvm can elide it if the copy is
       // not needed
     }
-    getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
     
     struct CallCoroEnd final : public EHScopeStack::Cleanup {
       void Emit(CodeGenFunction &CGF, Flags flags) override {
@@ -312,16 +337,18 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     };
     EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
-    emitSuspendExpression(*this, Builder, *SS.InitSuspend, "init", 1);
+    getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Init;
+    EmitStmt(SS.InitSuspend);
 
+    getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Normal;
     EmitStmt(SS.Body);
 
     if (Builder.GetInsertBlock()) {
       // create final block if we we don't have an endless loop
-      auto FinalBlock = createBasicBlock("coro.fin");
-      EmitBlock(FinalBlock);
-      emitSuspendExpression(*this, Builder, *SS.FinalSuspend,
-        "final", 0);
+      //auto FinalBlock = createBasicBlock("coro.fin");
+      //EmitBlock(FinalBlock);
+      getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Final;
+      EmitStmt(SS.FinalSuspend);
     }
   }
   EmitStmt(SS.Deallocate);
@@ -331,7 +358,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   llvm::Function* CoroReturn = CGM.getIntrinsic(llvm::Intrinsic::coro_return);
   Builder.CreateCall(CoroReturn, NullPtr);
 
-  EmitStmt(SS.ReturnStmt);
+  if (SS.ResultDecl) {
+    EmitStmt(SS.ReturnStmt);
+  }
 
   CurFn->addFnAttr(llvm::Attribute::Coroutine);
 }

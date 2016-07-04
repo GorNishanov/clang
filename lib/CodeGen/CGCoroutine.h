@@ -29,13 +29,12 @@ namespace CodeGen {
 class CodeGenFunction;
 
 class CGCoroutine {
-private:
-  CodeGenFunction &CGF;
-  unsigned suspendNum;
-
 public:
+  enum AwaitKind{ Init, Normal, Final };
+
   LabelDecl *DeleteLabel = nullptr;
   llvm::BasicBlock *SuspendBB = nullptr;
+  AwaitKind CurrentAwaitKind;
 
   static CGCoroutine *Create(CodeGenFunction &);
   void functionFinished();
@@ -45,6 +44,9 @@ public:
 private:
   CGCoroutine(CodeGenFunction &);
   ~CGCoroutine();
+
+  CodeGenFunction &CGF;
+  unsigned SuspendNum;
 };
 }
 }

@@ -203,7 +203,7 @@ checkCoroutineContext(Sema &S, SourceLocation Loc, StringRef Keyword) {
       // Create and default-initialize the promise.
       ScopeInfo->CoroutinePromise =
           VarDecl::Create(S.Context, FD, FD->getLocation(), FD->getLocation(),
-                          &S.PP.getIdentifierTable().get("__promise"), T,
+                          &S.PP.getIdentifierTable().get("coro.promise"), T,
                           S.Context.getTrivialTypeSourceInfo(T, Loc), SC_None);
       S.CheckVariableDeclarationType(ScopeInfo->CoroutinePromise);
       if (!ScopeInfo->CoroutinePromise->isInvalidDecl())
@@ -613,13 +613,7 @@ public:
     if (InitialSuspend.isInvalid())
       return false;
 
-    auto Expr = InitialSuspend.get();
-
-    // BIG HACK
-    if (auto EWC = dyn_cast<ExprWithCleanups>(Expr))
-      Expr = EWC->getSubExpr();
-
-    this->InitSuspend = cast<CoawaitExpr>(Expr);
+    this->InitSuspend = InitialSuspend.get();
     return true;
   }
 
@@ -634,20 +628,17 @@ public:
     if (FinalSuspend.isInvalid())
       return false;
 
-    auto Expr = FinalSuspend.get();
-
-    // BIG HACK
-    if (auto EWC = dyn_cast<ExprWithCleanups>(Expr))
-      Expr = EWC->getSubExpr();
-
-    this->FinalSuspend = cast<CoawaitExpr>(Expr);
+    this->FinalSuspend = FinalSuspend.get();
     return true;
   }
 
   // FIXME: Perform analysis of set_exception call.
 
   bool makeOnException() { return true; }
-  bool makeOnFallthrough() { return true; } // CR: March 2016, what is this?
+
+  // FIXME: add a call to p.return_void().
+
+  bool makeOnFallthrough() { return true; }
 
   bool makeNewAndDeleteExpr(LabelDecl *label) {
     TypeSourceInfo *TInfo = Fn.CoroutinePromise->getTypeSourceInfo();
@@ -760,6 +751,16 @@ public:
       return false;
 
     RetType = ReturnObject.get()->getType();
+    if (RetType == FD.getReturnType()) {
+      // GRO is same type as return type of the function
+      // don't need to create GRO temporary.
+      // Maybe there is a way to make it work efficiently, with NRVO, but I
+      // was not able to make it work.
+      this->RetDecl = nullptr;
+      this->ResultDecl = nullptr;
+      return true;
+    }
+
     if (!RetType->isDependentType()) {
       InitializedEntity Entity =
           InitializedEntity::InitializeResult(Loc, RetType, false);
@@ -771,7 +772,7 @@ public:
 
     RetDecl = VarDecl::Create(
         S.Context, &FD, FD.getLocation(), FD.getLocation(),
-        &S.PP.getIdentifierTable().get("__return"), RetType,
+        &S.PP.getIdentifierTable().get("coro.gro"), RetType,
         S.Context.getTrivialTypeSourceInfo(RetType, Loc), SC_None);
 
     S.CheckVariableDeclarationType(RetDecl);
@@ -795,30 +796,31 @@ public:
   }
 
   bool makeReturnStmt() {
-#if 1
-    assert(RetDecl && "makeResultDecl must be invoked before makeReturnStmt");
-    auto declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
-    if (declRef.isInvalid())
-      return false;
-    StmtResult ReturnStmt =
-      S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
-#else
-    ExprResult ReturnObject = buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
-    if (ReturnObject.isInvalid())
-      return false;
-
-    RetType = FD.getReturnType();
-    if (!RetType->isDependentType()) {
-      InitializedEntity Entity =
-        InitializedEntity::InitializeResult(Loc, RetType, false);
-      ReturnObject = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
-        ReturnObject.get());
+    StmtResult ReturnStmt;
+    if (RetDecl) {
+      auto declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
+      if (declRef.isInvalid())
+        return false;
+      ReturnStmt =
+        S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
+    }
+    else {
+      ExprResult ReturnObject = buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
       if (ReturnObject.isInvalid())
         return false;
+
+      RetType = FD.getReturnType();
+      if (!RetType->isDependentType()) {
+        InitializedEntity Entity =
+          InitializedEntity::InitializeResult(Loc, RetType, false);
+        ReturnObject = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
+          ReturnObject.get());
+        if (ReturnObject.isInvalid())
+          return false;
+      }
+      ReturnStmt =
+        S.ActOnReturnStmt(Loc, ReturnObject.get(), S.getCurScope());
     }
-    StmtResult ReturnStmt =
-      S.ActOnReturnStmt(Loc, ReturnObject.get(), S.getCurScope());
-#endif
     this->ReturnStmt = ReturnStmt.get();
 
     return !ReturnStmt.isInvalid();
