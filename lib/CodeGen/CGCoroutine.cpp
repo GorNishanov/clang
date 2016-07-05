@@ -344,9 +344,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     EmitStmt(SS.Body);
 
     if (Builder.GetInsertBlock()) {
-      // create final block if we we don't have an endless loop
-      //auto FinalBlock = createBasicBlock("coro.fin");
-      //EmitBlock(FinalBlock);
       getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Final;
       EmitStmt(SS.FinalSuspend);
     }
