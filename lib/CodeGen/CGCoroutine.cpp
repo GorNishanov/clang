@@ -13,14 +13,14 @@
 
 #include "CGCoroutine.h"
 #include "CodeGenFunction.h"
-#include <llvm/IR/Intrinsics.h>
-#include <llvm/IR/IntrinsicInst.h>
-#include "clang/AST/StmtVisitor.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtVisitor.h"
+#include <llvm/IR/IntrinsicInst.h>
+#include <llvm/IR/Intrinsics.h>
 
-#include "llvm/Pass.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
@@ -39,25 +39,25 @@ clang::CodeGen::CGCoroutine::Create(CodeGenFunction &F) {
 void clang::CodeGen::CGCoroutine::functionFinished() { delete this; }
 
 namespace {
-  struct OpaqueValueMappings {
-    LValue common;
+struct OpaqueValueMappings {
+  LValue common;
 
-    CodeGenFunction::OpaqueValueMapping o1;
-    CodeGenFunction::OpaqueValueMapping o2;
-    CodeGenFunction::OpaqueValueMapping o3;
+  CodeGenFunction::OpaqueValueMapping o1;
+  CodeGenFunction::OpaqueValueMapping o2;
+  CodeGenFunction::OpaqueValueMapping o3;
 
-    static OpaqueValueExpr *opaque(Expr *E) {
-      return cast<OpaqueValueExpr>(
+  static OpaqueValueExpr *opaque(Expr *E) {
+    return cast<OpaqueValueExpr>(
         cast<CXXMemberCallExpr>(E)->getImplicitObjectArgument());
-    }
+  }
 
-    OpaqueValueMappings(CodeGenFunction &CGF, CoroutineSuspendExpr &S)
+  OpaqueValueMappings(CodeGenFunction &CGF, CoroutineSuspendExpr &S)
       : common(CGF.EmitMaterializeTemporaryExpr(
-        cast<MaterializeTemporaryExpr>(S.getCommonExpr()))),
-      o1(CGF, opaque(S.getReadyExpr()), common),
-      o2(CGF, opaque(S.getSuspendExpr()), common),
-      o3(CGF, opaque(S.getResumeExpr()), common) {}
-  };
+            cast<MaterializeTemporaryExpr>(S.getCommonExpr()))),
+        o1(CGF, opaque(S.getReadyExpr()), common),
+        o2(CGF, opaque(S.getSuspendExpr()), common),
+        o3(CGF, opaque(S.getResumeExpr()), common) {}
+};
 }
 
 static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
@@ -72,18 +72,21 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   OpaqueValueMappings ovm(CGF, S);
 
   SmallString<16> buffer;
-  BasicBlock *ReadyBlock = CGF.createBasicBlock((suffix + Twine(".ready")).toStringRef(buffer));
+  BasicBlock *ReadyBlock =
+      CGF.createBasicBlock((suffix + Twine(".ready")).toStringRef(buffer));
   buffer.clear();
-  BasicBlock *SuspendBlock = CGF.createBasicBlock((suffix + Twine(".suspend")).toStringRef(buffer));
+  BasicBlock *SuspendBlock =
+      CGF.createBasicBlock((suffix + Twine(".suspend")).toStringRef(buffer));
   buffer.clear();
-  BasicBlock *CleanupBlock = CGF.createBasicBlock((suffix + Twine(".cleanup")).toStringRef(buffer));
+  BasicBlock *CleanupBlock =
+      CGF.createBasicBlock((suffix + Twine(".cleanup")).toStringRef(buffer));
 
   CodeGenFunction::RunCleanupsScope AwaitExprScope(CGF);
 
   CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
   CGF.EmitBlock(SuspendBlock);
 
-  llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
+  llvm::Function *coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
   SmallVector<Value *, 1> args{
       llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), IsFinalSuspend)};
   auto SaveCall = Builder.CreateCall(coroSave, args);
@@ -91,7 +94,8 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   // FIXME: Handle bool returning suspendExpr.
   CGF.EmitScalarExpr(S.getSuspendExpr());
 
-  llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
+  llvm::Function *coroSuspend =
+      CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   SmallVector<Value *, 1> args2{SaveCall};
   auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
   auto Switch =
@@ -143,42 +147,45 @@ clang::CodeGen::CGCoroutine::CGCoroutine(CodeGenFunction &F)
 clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 
 namespace {
-  struct GetParamRef : public StmtVisitor<GetParamRef> {
-  public:
-    DeclRefExpr* Expr = nullptr;
-    GetParamRef() { }
-    void VisitDeclRefExpr(DeclRefExpr *E) {
-      assert(Expr == nullptr && "multilple declref in param move");
-      Expr = E;
-    }
-  };
+struct GetParamRef : public StmtVisitor<GetParamRef> {
+public:
+  DeclRefExpr *Expr = nullptr;
+  GetParamRef() {}
+  void VisitDeclRefExpr(DeclRefExpr *E) {
+    assert(Expr == nullptr && "multilple declref in param move");
+    Expr = E;
+  }
+};
 }
 
-static void EmitCoroParam(CodeGenFunction& CGF, DeclStmt* PM) {
+static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
   assert(PM->isSingleDecl());
-  VarDecl* VD = static_cast<VarDecl*>(PM->getSingleDecl());
-  Expr* InitExpr = VD->getInit();
+  VarDecl *VD = static_cast<VarDecl *>(PM->getSingleDecl());
+  Expr *InitExpr = VD->getInit();
   GetParamRef Visitor;
-  Visitor.Visit(InitExpr);// InitExpr);
-//  Visitor.TraverseStmtExpr(InitExpr);// InitExpr);
+  Visitor.Visit(InitExpr); // InitExpr);
+                           //  Visitor.TraverseStmtExpr(InitExpr);// InitExpr);
   assert(Visitor.Expr);
   auto DREOrig = cast<DeclRefExpr>(Visitor.Expr);
 
-  DeclRefExpr DRE(VD, /* RefersToEnclosingVariableOrCapture= */false,
+  DeclRefExpr DRE(VD, /* RefersToEnclosingVariableOrCapture= */ false,
                   VD->getType(), VK_LValue, SourceLocation{});
-  auto Orig = CGF.Builder.CreateBitCast(CGF.EmitLValue(DREOrig).getAddress(), CGF.VoidPtrTy);
-  auto Copy = CGF.Builder.CreateBitCast(CGF.EmitLValue(&DRE).getAddress(), CGF.VoidPtrTy);
+  auto Orig = CGF.Builder.CreateBitCast(CGF.EmitLValue(DREOrig).getAddress(),
+                                        CGF.VoidPtrTy);
+  auto Copy = CGF.Builder.CreateBitCast(CGF.EmitLValue(&DRE).getAddress(),
+                                        CGF.VoidPtrTy);
   SmallVector<Value *, 2> args{Orig.getPointer(), Copy.getPointer()};
 
-//  auto CoroParam = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_param);
-//  auto Call = CGF.Builder.CreateCall(CoroParam, args);
+  //  auto CoroParam = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_param);
+  //  auto Call = CGF.Builder.CreateCall(CoroParam, args);
 }
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
   auto NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
-  auto CoroAlloc = Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_alloc));
+  auto CoroAlloc =
+      Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_alloc));
   auto ICmp = Builder.CreateICmpNE(CoroAlloc, NullPtr);
 
   auto EntryBB = Builder.GetInsertBlock();
@@ -195,14 +202,14 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto AllocateCall = EmitScalarExpr(SS.Allocate);
   auto AllocOrInvokeContBB = Builder.GetInsertBlock();
   Builder.CreateBr(InitBB);
-  
+
   EmitBlock(InitBB);
   auto Phi = Builder.CreatePHI(VoidPtrTy, 2);
   Phi->addIncoming(CoroAlloc, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
   // we would like to insert coro_init at this point, but
-  // we don't have alloca for the coroutine promise yet, which 
+  // we don't have alloca for the coroutine promise yet, which
   // is one of the parameters for coro_init
   llvm::Value *Undef = llvm::UndefValue::get(Int32Ty);
   llvm::Instruction *CoroInitInsertPt =
@@ -223,27 +230,23 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     auto VD = cast<VarDecl>(DS->getSingleDecl());
 
     DeclRefExpr PromiseRef(VD, false, VD->getType().getNonReferenceType(),
-      VK_LValue, SourceLocation());
+                           VK_LValue, SourceLocation());
     llvm::Value *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
-    llvm::Value* PromiseAddrVoidPtr = new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroInitInsertPt);
+    llvm::Value *PromiseAddrVoidPtr =
+        new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroInitInsertPt);
     // FIXME: instead of 0, pass equivalnet of alignas(maxalign_t)
     //     enum { kMem, kAlloc, kAlign, kPromise, kInfo };
 
-    SmallVector<llvm::Value*, 5> args{ 
-      Phi, 
-      CoroAlloc,
-      Builder.getInt32(0), 
-      PromiseAddrVoidPtr, 
-      NullPtr };
+    SmallVector<llvm::Value *, 5> args{Phi, CoroAlloc, Builder.getInt32(0),
+                                       PromiseAddrVoidPtr, NullPtr};
 
-    llvm::CallInst::Create(
-      CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args, "", CoroInitInsertPt);
+    llvm::CallInst::Create(CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args,
+                           "", CoroInitInsertPt);
     CoroInitInsertPt->eraseFromParent();
 
     if (SS.ResultDecl) {
       EmitStmt(SS.ResultDecl);
-    }
-    else {
+    } else {
       EmitStmt(SS.ReturnStmt);
     }
 
@@ -256,7 +259,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       // for the copy, so that llvm can elide it if the copy is
       // not needed
     }
-    
+
     struct CallCoroEnd final : public EHScopeStack::Cleanup {
       void Emit(CodeGenFunction &CGF, Flags flags) override {
         auto &CGM = CGF.CGM;
@@ -280,7 +283,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitStmt(SS.Deallocate);
 
   EmitBlock(RetBB);
-  llvm::Function* CoroReturn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+  llvm::Function *CoroReturn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
   Builder.CreateCall(CoroReturn, Builder.getInt1(0));
 
   if (SS.ResultDecl) {
