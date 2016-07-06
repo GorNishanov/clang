@@ -195,50 +195,6 @@ static void EmitCoroParam(CodeGenFunction& CGF, DeclStmt* PM) {
 //  auto Call = CGF.Builder.CreateCall(CoroParam, args);
 }
 
-// Converts this code:
-//   S(coro_free(coro_frame())
-// To this:
-//
-//   %0 = coro_free(coro_frame())
-//   if (%0) S(%0)
-//   coro_end(%0)
-// Scans from the end of the block to find coro_frame and then adds what is 
-// needed
-static void FixUpDelete(CodeGenFunction& CGF) {
-  auto BB = CGF.Builder.GetInsertBlock();
-  assert(!BB->empty());
-  llvm::IntrinsicInst* CoroFree = nullptr;
-  auto BI = &BB->back();
-  auto BE = &BB->front();
-  do {
-    if (auto II = dyn_cast<llvm::IntrinsicInst>(BI))
-      if (II->getIntrinsicID() == llvm::Intrinsic::coro_free) {
-        CoroFree = II;
-        break;
-      }
-    BI = BI->getPrevNode();
-  }
-  while (BI != BE);
-  assert(CoroFree);
-
-  auto EndBB =
-    BasicBlock::Create(BB->getContext(), "EndBB", BB->getParent());
-  CGF.Builder.CreateBr(EndBB);
-
-  auto FreeBB = BB->splitBasicBlock(CoroFree->getNextNode(), "FreeBB");
-
-  auto NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
-
-  CGF.Builder.SetInsertPoint(CoroFree->getNextNode());
-  auto Cond = CGF.Builder.CreateICmpNE(CoroFree, NullPtr);
-  CGF.Builder.CreateCondBr(Cond, FreeBB, EndBB);
-  BB->getTerminator()->eraseFromParent();
-
-  CGF.Builder.SetInsertPoint(EndBB);
-  llvm::Function *CoroEnd = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-  CGF.Builder.CreateCall(CoroEnd, CoroFree);
-}
-
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
   auto NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
@@ -274,19 +230,14 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       new llvm::BitCastInst(Undef, Int32Ty, "CoroInitPt", InitBB);
 
   {
-
     struct CallCoroDelete final : public EHScopeStack::Cleanup {
-		void Emit(CodeGenFunction &CGF, Flags flags) override {
-			CGF.EmitStmt(S);
-      FixUpDelete(CGF);
-		}
-		CallCoroDelete(LabelStmt* LS) : S(LS->getSubStmt()) {
-		}
-	private:
-		//CoroutineBodyStmt::SubStmt& SS;
-		Stmt* S;
-	};
-	EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
+      void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
+      CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
+
+    private:
+      Stmt *S;
+    };
+    EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
 
     EmitStmt(SS.Promise);
     auto DS = cast<DeclStmt>(SS.Promise);
@@ -330,9 +281,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     struct CallCoroEnd final : public EHScopeStack::Cleanup {
       void Emit(CodeGenFunction &CGF, Flags flags) override {
         auto &CGM = CGF.CGM;
-        auto NullPtr = llvm::ConstantPointerNull::get(CGM.Int8PtrTy);
         llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-        CGF.Builder.CreateCall(CoroEnd, NullPtr);
+        CGF.Builder.CreateCall(CoroEnd, CGF.Builder.getInt1(true));
       }
     };
     EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
@@ -349,11 +299,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     }
   }
   EmitStmt(SS.Deallocate);
-  FixUpDelete(*this);
 
   EmitBlock(RetBB);
-  llvm::Function* CoroReturn = CGM.getIntrinsic(llvm::Intrinsic::coro_return);
-  Builder.CreateCall(CoroReturn, NullPtr);
+  llvm::Function* CoroReturn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+  Builder.CreateCall(CoroReturn, Builder.getInt1(0));
 
   if (SS.ResultDecl) {
     EmitStmt(SS.ReturnStmt);

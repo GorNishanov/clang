@@ -100,9 +100,6 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
   return PromiseType;
 }
 
-// FIXME: fix the error
-#define err_malformed_std_coroutine_handle err_malformed_std_initializer_list
-
 static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S, SourceLocation Loc) {
   // FIXME: Cache std::coroutine_handle once we've found it.
   NamespaceDecl *Std = S.getStdNamespace();
@@ -682,6 +679,11 @@ public:
     if (DeclRef.isInvalid())
       return false;
 
+    // FIXME: want to generate
+    //   if (void* p = coro.free(coro_frame())) delete(p);
+    // At the moment, we generate slightly fatter, but still acceptable:
+    //   if (coro.free(coro_frame())) delete(coro.free(coro_frame()));
+
     Expr *CoroFree =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, { FramePtr });
 
@@ -698,40 +700,17 @@ public:
                                Loc, nullptr);
     if (CallExpr.isInvalid())
       return false;
-#if 0
-    CallExpr = S.ActOnBinOp(S.getCurScope(), Loc, tok::comma,
-      CallExpr.get(), CoroFree);
 
-    if (CallExpr.isInvalid())
-      return false;
+    auto Cond = S.ActOnCondition(S.getCurScope(), Loc, CoroFree,
+                               Sema::ConditionKind::Boolean);
 
-    auto CondExpr = S.ActOnConditionalOp(Loc, Loc, CoroFree, CallExpr.get(), CoroFree);
-    if (CondExpr.isInvalid())
-      return false;
-
-    CallExpr = CondExpr;
-#endif
-#if 0
-    CallExpr = S.ActOnBinOp(S.getCurScope(), Loc, tok::comma,
-      CallExpr.get(), CoroFree);
-
-#if 1
-#if 1
-    auto CondExpr = S.ActOnConditionalOp(Loc, Loc, CoroFree, CallExpr.get(), CoroFree);
-    if (CondExpr.isInvalid())
-      return false;
-#else
-    auto IfStmt = S.ActOnIfStmt(Loc, S.MakeFullExpr(CoroFree), nullptr,
-      CallExpr.get(), Loc,
-      nullptr);
+    auto IfStmt =
+        S.ActOnIfStmt(Loc, false, nullptr, Cond, CallExpr.get(), Loc, nullptr);
     if (IfStmt.isInvalid())
       return false;
-    
-#endif
-#endif
-#endif
+
     // make it a labeled statement
-    StmtResult res = S.ActOnLabelStmt(Loc, label, Loc, CallExpr.get());
+    StmtResult res = S.ActOnLabelStmt(Loc, label, Loc, IfStmt.get());
 
     if (res.isInvalid())
       return false;
@@ -852,14 +831,6 @@ public:
     return Decl;
   }
 
-  //DeclRefExpr *buildDeclRefExpr(VarDecl *D, QualType Ty, SourceLocation Loc) {
-  //  D->setReferenced();
-  //  D->markUsed(S.Context);
-  //  return DeclRefExpr::Create(S.getASTContext(), NestedNameSpecifierLoc(),
-  //    SourceLocation(), D, /*RefersToCapture=*/false, Loc, Ty,
-  //    VK_LValue);
-  //}
-
   bool makeParamMoves() {
     // FIXME: Perform move-initialization of parameters into frame-local copies.
     // xxx Go through list of parameters, find UDT's passed by value and do copies
@@ -921,7 +892,7 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
 #if 0
   // FIXME: remove this diagnostics, it is legal per P0057R1
   // 8.4.4/1
-  // A function is acoroutine if it contains a 
+  // A function is a coroutine if it contains a 
   //   coroutine-return-statement(6.6.3.1), 
   //   an await-expression(5.3.8), 
   //   a yield-expression(5.21), or a 
