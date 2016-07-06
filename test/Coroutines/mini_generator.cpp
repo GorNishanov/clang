@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -triple i686-pc-windows-msvc18.0.0 -O3 -fcoroutines -std=c++14 -emit-llvm -o - %s | FileCheck %s
-#include "inputs/coroutine.h"
+#include "coroutine.h"
 
 struct minig {
   struct promise_type {
@@ -33,8 +33,8 @@ private:
   std::coroutine_handle<promise_type> p;
 };
 
-minig fib() { // no parameters, no exceptions, no dtors
-  for (int i = 0; i < 5; i++) {
+minig fib(int n) { 
+  for (int i = 0; i < n; i++) {
     co_yield i;
   }
 }
@@ -42,7 +42,7 @@ minig fib() { // no parameters, no exceptions, no dtors
 // CHECK-LABEL: define i32 @main()
 int main() {
   int sum = 0;
-  auto g = fib();
+  auto g = fib(5);
   while (g.move_next()) {
      sum += g.current_value();
   }
