@@ -183,8 +183,11 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
                                         CGF.VoidPtrTy);
   SmallVector<Value *, 2> args{Orig.getPointer(), Copy.getPointer()};
 
-  //  auto CoroParam = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_param);
-  //  auto Call = CGF.Builder.CreateCall(CoroParam, args);
+  // TODO:
+  //  Surround CTOR and DTOR for parameters with
+  //     if (coro.param(alloca.copy, alloca.original)) CTOR(...);
+  //     if (coro.param(alloca.copy, alloca.original)) DTOR(...);
+  //  declare i1 @llvm.coro.param(i8* copy, i8* original)
 }
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
