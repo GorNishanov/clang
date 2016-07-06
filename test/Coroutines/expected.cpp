@@ -1,59 +1,83 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines -emit-llvm %s -o - -std=c++14 -O3 | FileCheck %s
 #include "coroutine.h"
 
-struct Data {
-  int val = -1;
-  int error = 0;
-};
-struct DataPtr {
-  Data *p;
-};
+namespace std {
+template <class _Ty> struct remove_reference { typedef _Ty type; };
+
+template <class _Ty> struct remove_reference<_Ty &> { typedef _Ty type; };
+
+template <class _Ty> struct remove_reference<_Ty &&> { typedef _Ty type; };
+
+template <class _Ty>
+inline constexpr typename remove_reference<_Ty>::type &&
+move(_Ty &&_Arg) noexcept {
+  return (static_cast<typename remove_reference<_Ty>::type &&>(_Arg));
+}
+}
 
 struct error {};
 
-struct exp_int {
-  int val;
-  int error = 0;
+//#define BUG
+#ifdef BUG
+  // Blows up in while trying to find from_address in coroutine_handle
+  template <typename T, typename Error = int> struct expected;
+  using expected_int = expected<int>;
+  template <typename T, typename Error>
+#else
+  using T = int;
+  using Error = int;
+  struct expected;
+  using expected_int = expected;
+#endif
+struct expected {
 
-  exp_int() {}
-  exp_int(int val) : val(val) {}
-  exp_int(struct error, int error) : error(error) {}
-  exp_int(DataPtr p) : val(p.p->val), error(p.p->error) {}
+  struct Data {
+    T val;
+    Error error;
+  };
+  Data data;
+
+  struct DataPtr {
+    Data *p;
+  };
+
+  expected() {}
+  expected(T val) : data{std::move(val),{}} {}
+  expected(struct error, Error error) : data{{}, std::move(error)} {}
+  expected(DataPtr p) : data{std::move(p.p->val), std::move(p.p->error)} {}
 
   struct promise_type {
     Data data;
-    DataPtr get_return_object() {
-      std::coroutine_handle<promise_type>{};
-      return {&data};
-    }
+    DataPtr get_return_object() { return {&data}; }
     std::suspend_never initial_suspend() { return {}; }
     std::suspend_never final_suspend() { return {}; }
-    void return_value(int v) { data.val = v; }
+    void return_value(T v) { data.val = std::move(v); }
   };
 
-  bool await_ready() { return error == 0; }
-  int await_resume() { return val; }
+  bool await_ready() { return !data.error; }
+  T await_resume() { return std::move(data.val); }
   void await_suspend(std::coroutine_handle<promise_type> h) {
-    h.promise().data.error = error;
+    h.promise().data.error =std::move(data.error);
     h.destroy();
   }
 
-  ~exp_int() {}
+  T const& value() { return data.val; }
+  Error const& error() { return data.error; }
 };
 
-extern "C" exp_int g() { return {0}; }
-extern "C" exp_int h() { return {error{}, 42}; }
+extern "C" expected_int g() { return {0}; }
+extern "C" expected_int h() { return {error{}, 42}; }
 
 extern "C" void yield(int);
 
-extern "C" exp_int f1() {
+extern "C" expected_int f1() {
   yield(11);
   co_await g();
   yield(12);
   co_return 100;
 }
 
-extern "C" exp_int f2() {
+extern "C" expected_int f2() {
   yield(21);
   co_await h();
   yield(22);
@@ -68,13 +92,13 @@ int main() {
 // CHECK: call void @yield(i32 0)
  
   auto c1 = f1();
-  yield(c1.val);
-  yield(c1.error);
+  yield(c1.value());
+  yield(c1.error());
 
 // CHECK: call void @yield(i32 21)
-// CHECK: call void @yield(i32 -1)
+// CHECK: call void @yield(i32 0)
 // CHECK: call void @yield(i32 42)
   auto c2 = f2();
-  yield(c2.val);
-  yield(c2.error);
+  yield(c2.value());
+  yield(c2.error());
 }
