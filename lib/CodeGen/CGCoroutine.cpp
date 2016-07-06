@@ -31,25 +31,22 @@ using llvm::ConstantInt;
 using llvm::APInt;
 
 namespace {
-  enum class AwaitKind { Init, Normal, Yield, Final };
-  char const* AwaitKindStr[] = { "init", "await", "yield", "final" };
+enum class AwaitKind { Init, Normal, Yield, Final };
+char const *AwaitKindStr[] = {"init", "await", "yield", "final"};
 }
 
 namespace clang {
 namespace CodeGen {
 
-  // TODO: make it struct in CodeGenFunction.h
-  struct CGCoroData {
-    AwaitKind CurrentAwaitKind = AwaitKind::Init;
-    LabelDecl *DeleteLabel = nullptr;
-    llvm::BasicBlock *SuspendBB = nullptr;
+struct CGCoroData {
+  AwaitKind CurrentAwaitKind = AwaitKind::Init;
+  LabelDecl *DeleteLabel = nullptr;
+  llvm::BasicBlock *SuspendBB = nullptr;
 
-    CodeGenFunction &CGF;
-    unsigned AwaitNum = 0;
-    unsigned YieldNum = 0;
+  unsigned AwaitNum = 0;
+  unsigned YieldNum = 0;
+};
 
-    CGCoroData(CodeGenFunction &CGF) : CGF(CGF) {}
-  };
 }
 }
 
@@ -80,8 +77,7 @@ struct OpaqueValueMappings {
 };
 }
 
-static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro,
-                                             AwaitKind Kind) {
+static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
   unsigned No = 0;
   switch (Kind) {
   default:
@@ -100,11 +96,10 @@ static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro,
   return Suffix;
 }
 
-static Value *emitSuspendExpression(CGCoroData &Coro,
+static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     CoroutineSuspendExpr const &S,
                                     AwaitKind Kind) {
-  CodeGenFunction &CGF = Coro.CGF;
-  auto& Builder = CGF.Builder;
+  auto &Builder = CGF.Builder;
   const bool IsFinalSuspend = Kind == AwaitKind::Final;
   auto Suffix = buildSuspendSuffixStr(Coro, Kind);
 
@@ -131,8 +126,7 @@ static Value *emitSuspendExpression(CGCoroData &Coro,
       CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   SmallVector<Value *, 1> args2{SaveCall};
   auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
-  auto Switch =
-      Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
+  auto Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
   Switch->addCase(Builder.getInt8(0), ReadyBlock);
   Switch->addCase(Builder.getInt8(1), CleanupBlock);
 
@@ -152,11 +146,11 @@ void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
 }
 
 Value *CodeGenFunction::EmitCoawaitExpr(CoawaitExpr const &S) {
-  return emitSuspendExpression(*CurCoro.Data, S,
+  return emitSuspendExpression(*this, *CurCoro.Data, S,
                                CurCoro.Data->CurrentAwaitKind);
 }
-Value *CodeGenFunction::EmitCoyieldExpr(CoyieldExpr const&S) {
-  return emitSuspendExpression(*CurCoro.Data, S, AwaitKind::Yield);
+Value *CodeGenFunction::EmitCoyieldExpr(CoyieldExpr const &S) {
+  return emitSuspendExpression(*this, *CurCoro.Data, S, AwaitKind::Yield);
 }
 
 namespace {
@@ -206,7 +200,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto InitBB = createBasicBlock("coro.init");
   auto RetBB = createBasicBlock("coro.ret");
 
-  CurCoro.Data = std::make_unique<CGCoroData>(*this);
+  CurCoro.Data = std::make_unique<CGCoroData>();
   CurCoro.Data->SuspendBB = RetBB;
   CurCoro.Data->DeleteLabel = SS.Deallocate->getDecl();
 
@@ -223,48 +217,66 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Phi->addIncoming(CoroAlloc, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
-  // we would like to insert coro_init at this point, but
-  // we don't have alloca for the coroutine promise yet, which
-  // is one of the parameters for coro_init
+  // We would like to insert coro_begin at this point, but we don't have an
+  // alloca for the coroutine promise yet, which is one of the parameters for
+  // coro_begin. So will will mark the spot and come back to it later.
   llvm::Value *Undef = llvm::UndefValue::get(Int32Ty);
-  llvm::Instruction *CoroInitInsertPt =
+  auto *CoroBeginInsertPt =
       new llvm::BitCastInst(Undef, Int32Ty, "CoroInitPt", InitBB);
 
-  {
-    struct CallCoroDelete final : public EHScopeStack::Cleanup {
-      void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
-      CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
+  // Make sure that we free the memory on any exceptions that happens
+  // prior to the first suspend.
+  struct CallCoroDelete final : public EHScopeStack::Cleanup {
+    void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
+    CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
 
-    private:
-      Stmt *S;
-    };
-    EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
+  private:
+    Stmt *S;
+  };
+  EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
 
-    EmitStmt(SS.Promise);
-    auto DS = cast<DeclStmt>(SS.Promise);
-    auto VD = cast<VarDecl>(DS->getSingleDecl());
+  EmitStmt(SS.Promise);
+  auto DS = cast<DeclStmt>(SS.Promise);
+  auto VD = cast<VarDecl>(DS->getSingleDecl());
 
-    DeclRefExpr PromiseRef(VD, false, VD->getType().getNonReferenceType(),
-                           VK_LValue, SourceLocation());
-    llvm::Value *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
-    llvm::Value *PromiseAddrVoidPtr =
-        new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroInitInsertPt);
-    // FIXME: instead of 0, pass equivalnet of alignas(maxalign_t)
-    //     enum { kMem, kAlloc, kAlign, kPromise, kInfo };
+  DeclRefExpr PromiseRef(VD, false, VD->getType().getNonReferenceType(),
+                         VK_LValue, SourceLocation());
+  llvm::Value *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
+  llvm::Value *PromiseAddrVoidPtr =
+      new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroBeginInsertPt);
+  // FIXME: Instead of 0, pass equivalnet of alignas(maxalign_t).
 
-    SmallVector<llvm::Value *, 5> args{Phi, CoroAlloc, Builder.getInt32(0),
-                                       PromiseAddrVoidPtr, NullPtr};
+  SmallVector<llvm::Value *, 5> args{Phi, CoroAlloc, Builder.getInt32(0),
+                                     PromiseAddrVoidPtr, NullPtr};
 
-    llvm::CallInst::Create(CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args,
-                           "", CoroInitInsertPt);
-    CoroInitInsertPt->eraseFromParent();
+  llvm::CallInst::Create(CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args,
+                         "", CoroBeginInsertPt);
+  CoroBeginInsertPt->eraseFromParent();
 
-    if (SS.ResultDecl) {
-      EmitStmt(SS.ResultDecl);
-    } else {
-      EmitStmt(SS.ReturnStmt);
+  // If SS.ResultDecl is not null, an object returned by get_return_object 
+  // requires a conversion to a return type. In this case, we declare at this
+  // point and will emit a return statement at the end. Otherwise, emit return
+  // statement here. Note, EmitReturnStmt omits branch to cleanup if current
+  // function is a coroutine.
+  if (SS.ResultDecl) {
+    EmitStmt(SS.ResultDecl);
+  } else {
+    EmitStmt(SS.ReturnStmt);
+  }
+
+  // We will insert coro.end to cut any of the destructors for objects that
+  // do not need to be destroyed onces the coroutine is resumed.
+  struct CallCoroEnd final : public EHScopeStack::Cleanup {
+    void Emit(CodeGenFunction &CGF, Flags flags) override {
+      auto &CGM = CGF.CGM;
+      llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+      CGF.Builder.CreateCall(CoroEnd, CGF.Builder.getInt1(true));
     }
+  };
+  EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
+  // Body of the coroutine.
+  {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
     // TODO: make sure that promise dtor is called
 
@@ -274,15 +286,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       // for the copy, so that llvm can elide it if the copy is
       // not needed
     }
-
-    struct CallCoroEnd final : public EHScopeStack::Cleanup {
-      void Emit(CodeGenFunction &CGF, Flags flags) override {
-        auto &CGM = CGF.CGM;
-        llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-        CGF.Builder.CreateCall(CoroEnd, CGF.Builder.getInt1(true));
-      }
-    };
-    EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     EmitStmt(SS.InitialSuspend);
@@ -298,9 +301,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitStmt(SS.Deallocate);
 
   EmitBlock(RetBB);
-  llvm::Function *CoroReturn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-  Builder.CreateCall(CoroReturn, Builder.getInt1(0));
+  llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+  Builder.CreateCall(CoroEnd, Builder.getInt1(0));
 
+  // Emit return statement only if we are doing two stage return intialization.
+  // I.e. when get_return_object requires a conversion to a return type.
   if (SS.ResultDecl) {
     EmitStmt(SS.ReturnStmt);
   }
