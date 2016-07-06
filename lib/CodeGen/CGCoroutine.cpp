@@ -62,12 +62,11 @@ namespace {
 
 static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
                                     CoroutineSuspendExpr &S, StringRef Name,
-                                    unsigned suspendNum) {
-  auto const IsFinalSuspend = (suspendNum == 0);
-
-  SmallString<8> suffix(Name);
-  if (suspendNum > 1) {
-    Twine(suspendNum).toVector(suffix);
+                                    unsigned SuspendNum,
+                                    bool IsFinalSuspend = false) {
+  SmallString<16> suffix(Name);
+  if (SuspendNum > 1) {
+    Twine(SuspendNum).toVector(suffix);
   }
 
   OpaqueValueMappings ovm(CGF, S);
@@ -83,46 +82,27 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
 
   CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
   CGF.EmitBlock(SuspendBlock);
-#if 0
-  auto bitcast = Builder.CreateBitCast(ovm.common.getPointer(), CGF.VoidPtrTy);
 
-  llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
-  SmallVector<Value*, 2> args{bitcast, CGF.EmitScalarExpr(S.getSuspendExpr()),
-    ConstantInt::get(CGF.Int32Ty, suspendNum)
-  };
-#endif
   llvm::Function* coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
   SmallVector<Value *, 1> args{
       llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), IsFinalSuspend)};
   auto SaveCall = Builder.CreateCall(coroSave, args);
 
-  // FIXME: handle bool returning suspendExpr
+  // FIXME: Handle bool returning suspendExpr.
   CGF.EmitScalarExpr(S.getSuspendExpr());
 
   llvm::Function* coroSuspend = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
-  SmallVector<Value *, 1> args2{
-      SaveCall
-      };
+  SmallVector<Value *, 1> args2{SaveCall};
   auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
   auto Switch =
       Builder.CreateSwitch(SuspendResult, CGF.getCGCoroutine().SuspendBB, 2);
   Switch->addCase(Builder.getInt8(0), ReadyBlock);
   Switch->addCase(Builder.getInt8(1), CleanupBlock);
 
-#if 0
-  auto SuspCond = Builder.CreateICmpSLT(SuspendResult, Builder.getInt8(0));
-  Builder.CreateCondBr(SuspCond, CGF.getCGCoroutine().SuspendBB, ResumeBB);
-
-  CGF.EmitBlock(ResumeBB);
-  auto ResumeCond = Builder.CreateICmpEQ(SuspendResult, Builder.getInt8(0));
-
-  if (suspendNum == 0)
-    Builder.CreateBr(cleanupBlock);
-  else
-    Builder.CreateCondBr(ResumeCond, ReadyBlock, cleanupBlock);
-#endif
   CGF.EmitBlock(CleanupBlock);
 
+  // FIXME: This does not work if co_await exp result is used
+  //   see clang/test/Coroutines/brokenIR.cpp
   auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
   CGF.EmitBranchThroughCleanup(jumpDest);
 
@@ -136,30 +116,29 @@ void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
 
 Value *clang::CodeGen::CGCoroutine::EmitCoawait(CoawaitExpr &S) {
   StringRef Name;
-  unsigned No;
+  unsigned No = 0;
 
   switch (CurrentAwaitKind) {
   case AwaitKind::Init:
-    No = ++SuspendNum;
     Name = "init";
     break;
   case AwaitKind::Normal:
-    No = ++SuspendNum;
+    No = ++AwaitNum;
     Name = "await";
     break;
   case AwaitKind::Final:
-    No = 0;
     Name = "final";
     break;
   }
 
-  return emitSuspendExpression(CGF, CGF.Builder, S, Name, No);
+  return emitSuspendExpression(CGF, CGF.Builder, S, Name, No,
+                               CurrentAwaitKind == AwaitKind::Final);
 }
 Value *clang::CodeGen::CGCoroutine::EmitCoyield(CoyieldExpr &S) {
-  return emitSuspendExpression(CGF, CGF.Builder, S, "yield", ++SuspendNum);
+  return emitSuspendExpression(CGF, CGF.Builder, S, "yield", ++YieldNum);
 }
 clang::CodeGen::CGCoroutine::CGCoroutine(CodeGenFunction &F)
-    : CGF(F), SuspendNum(0) {}
+    : CGF(F), AwaitNum(0), YieldNum(0) {}
 
 clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 
