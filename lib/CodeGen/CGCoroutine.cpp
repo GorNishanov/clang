@@ -1,4 +1,4 @@
-//===----- CGCoroutine.cpp - Emit LLVM Code for C++ coroutines ------------===//
+//===----- CGCoroData.cpp - Emit LLVM Code for C++ coroutines ------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CGCoroutine.h"
 #include "CodeGenFunction.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
@@ -31,12 +30,33 @@ using llvm::BasicBlock;
 using llvm::ConstantInt;
 using llvm::APInt;
 
-clang::CodeGen::CGCoroutine *
-clang::CodeGen::CGCoroutine::Create(CodeGenFunction &F) {
-  return new CGCoroutine(F);
+namespace {
+  enum class AwaitKind { Init, Normal, Yield, Final };
+  char const* AwaitKindStr[] = { "init", "await", "yield", "final" };
 }
 
-void clang::CodeGen::CGCoroutine::functionFinished() { delete this; }
+namespace clang {
+namespace CodeGen {
+
+  // TODO: make it struct in CodeGenFunction.h
+  struct CGCoroData {
+    AwaitKind CurrentAwaitKind = AwaitKind::Init;
+    LabelDecl *DeleteLabel = nullptr;
+    llvm::BasicBlock *SuspendBB = nullptr;
+
+    CodeGenFunction &CGF;
+    unsigned AwaitNum = 0;
+    unsigned YieldNum = 0;
+
+    CGCoroData(CodeGenFunction &CGF) : CGF(CGF) {}
+  };
+}
+}
+
+clang::CodeGen::CodeGenFunction::CGCoroInfo::CGCoroInfo() {}
+CodeGenFunction::CGCoroInfo::~CGCoroInfo() {}
+
+bool CodeGenFunction::isCoroutine() const { return CurCoro.Data != nullptr; }
 
 namespace {
 struct OpaqueValueMappings {
@@ -51,7 +71,7 @@ struct OpaqueValueMappings {
         cast<CXXMemberCallExpr>(E)->getImplicitObjectArgument());
   }
 
-  OpaqueValueMappings(CodeGenFunction &CGF, CoroutineSuspendExpr &S)
+  OpaqueValueMappings(CodeGenFunction &CGF, CoroutineSuspendExpr const &S)
       : common(CGF.EmitMaterializeTemporaryExpr(
             cast<MaterializeTemporaryExpr>(S.getCommonExpr()))),
         o1(CGF, opaque(S.getReadyExpr()), common),
@@ -60,26 +80,39 @@ struct OpaqueValueMappings {
 };
 }
 
-static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
-                                    CoroutineSuspendExpr &S, StringRef Name,
-                                    unsigned SuspendNum,
-                                    bool IsFinalSuspend = false) {
-  SmallString<16> suffix(Name);
-  if (SuspendNum > 1) {
-    Twine(SuspendNum).toVector(suffix);
+static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro,
+                                             AwaitKind Kind) {
+  unsigned No = 0;
+  switch (Kind) {
+  default:
+    break;
+  case AwaitKind::Normal:
+    No = ++Coro.AwaitNum;
+    break;
+  case AwaitKind::Yield:
+    No = ++Coro.YieldNum;
+    break;
   }
+  SmallString<32> Suffix(AwaitKindStr[static_cast<int>(Kind)]);
+  if (No > 1) {
+    Twine(No).toVector(Suffix);
+  }
+  return Suffix;
+}
+
+static Value *emitSuspendExpression(CGCoroData &Coro,
+                                    CoroutineSuspendExpr const &S,
+                                    AwaitKind Kind) {
+  CodeGenFunction &CGF = Coro.CGF;
+  auto& Builder = CGF.Builder;
+  const bool IsFinalSuspend = Kind == AwaitKind::Final;
+  auto Suffix = buildSuspendSuffixStr(Coro, Kind);
 
   OpaqueValueMappings ovm(CGF, S);
 
-  SmallString<16> buffer;
-  BasicBlock *ReadyBlock =
-      CGF.createBasicBlock((suffix + Twine(".ready")).toStringRef(buffer));
-  buffer.clear();
-  BasicBlock *SuspendBlock =
-      CGF.createBasicBlock((suffix + Twine(".suspend")).toStringRef(buffer));
-  buffer.clear();
-  BasicBlock *CleanupBlock =
-      CGF.createBasicBlock((suffix + Twine(".cleanup")).toStringRef(buffer));
+  BasicBlock *ReadyBlock = CGF.createBasicBlock(Suffix + Twine(".ready"));
+  BasicBlock *SuspendBlock = CGF.createBasicBlock(Suffix + Twine(".suspend"));
+  BasicBlock *CleanupBlock = CGF.createBasicBlock(Suffix + Twine(".cleanup"));
 
   CodeGenFunction::RunCleanupsScope AwaitExprScope(CGF);
 
@@ -99,7 +132,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
   SmallVector<Value *, 1> args2{SaveCall};
   auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
   auto Switch =
-      Builder.CreateSwitch(SuspendResult, CGF.getCGCoroutine().SuspendBB, 2);
+      Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
   Switch->addCase(Builder.getInt8(0), ReadyBlock);
   Switch->addCase(Builder.getInt8(1), CleanupBlock);
 
@@ -107,7 +140,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGBuilderTy &Builder,
 
   // FIXME: This does not work if co_await exp result is used
   //   see clang/test/Coroutines/brokenIR.cpp
-  auto jumpDest = CGF.getJumpDestForLabel(CGF.getCGCoroutine().DeleteLabel);
+  auto jumpDest = CGF.getJumpDestForLabel(Coro.DeleteLabel);
   CGF.EmitBranchThroughCleanup(jumpDest);
 
   CGF.EmitBlock(ReadyBlock);
@@ -118,33 +151,13 @@ void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   EmitStmt(S.getPromiseCall());
 }
 
-Value *clang::CodeGen::CGCoroutine::EmitCoawait(CoawaitExpr &S) {
-  StringRef Name;
-  unsigned No = 0;
-
-  switch (CurrentAwaitKind) {
-  case AwaitKind::Init:
-    Name = "init";
-    break;
-  case AwaitKind::Normal:
-    No = ++AwaitNum;
-    Name = "await";
-    break;
-  case AwaitKind::Final:
-    Name = "final";
-    break;
-  }
-
-  return emitSuspendExpression(CGF, CGF.Builder, S, Name, No,
-                               CurrentAwaitKind == AwaitKind::Final);
+Value *CodeGenFunction::EmitCoawaitExpr(CoawaitExpr const &S) {
+  return emitSuspendExpression(*CurCoro.Data, S,
+                               CurCoro.Data->CurrentAwaitKind);
 }
-Value *clang::CodeGen::CGCoroutine::EmitCoyield(CoyieldExpr &S) {
-  return emitSuspendExpression(CGF, CGF.Builder, S, "yield", ++YieldNum);
+Value *CodeGenFunction::EmitCoyieldExpr(CoyieldExpr const&S) {
+  return emitSuspendExpression(*CurCoro.Data, S, AwaitKind::Yield);
 }
-clang::CodeGen::CGCoroutine::CGCoroutine(CodeGenFunction &F)
-    : CGF(F), AwaitNum(0), YieldNum(0) {}
-
-clang::CodeGen::CGCoroutine::~CGCoroutine() {}
 
 namespace {
 struct GetParamRef : public StmtVisitor<GetParamRef> {
@@ -192,8 +205,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto AllocBB = createBasicBlock("coro.alloc");
   auto InitBB = createBasicBlock("coro.init");
   auto RetBB = createBasicBlock("coro.ret");
-  getCGCoroutine().SuspendBB = RetBB;
-  getCGCoroutine().DeleteLabel = SS.Deallocate->getDecl();
+
+  CurCoro.Data = std::make_unique<CGCoroData>(*this);
+  CurCoro.Data->SuspendBB = RetBB;
+  CurCoro.Data->DeleteLabel = SS.Deallocate->getDecl();
 
   Builder.CreateCondBr(ICmp, InitBB, AllocBB);
 
@@ -269,14 +284,14 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     };
     EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
-    getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Init;
+    CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     EmitStmt(SS.InitialSuspend);
 
-    getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Normal;
+    CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
     EmitStmt(SS.Body);
 
     if (Builder.GetInsertBlock()) {
-      getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Final;
+      CurCoro.Data->CurrentAwaitKind = AwaitKind::Final;
       EmitStmt(SS.FinalSuspend);
     }
   }

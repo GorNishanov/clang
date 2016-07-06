@@ -14,7 +14,6 @@
 #include "CodeGenFunction.h"
 #include "CGBlocks.h"
 #include "CGCleanup.h"
-#include "CGCoroutine.h"
 #include "CGCUDARuntime.h"
 #include "CGCXXABI.h"
 #include "CGDebugInfo.h"
@@ -43,7 +42,7 @@ CodeGenFunction::CodeGenFunction(CodeGenModule &cgm, bool suppressNewContext)
     : CodeGenTypeCache(cgm), CGM(cgm), Target(cgm.getTarget()),
       Builder(cgm, cgm.getModule().getContext(), llvm::ConstantFolder(),
               CGBuilderInserterTy(this)),
-      CurFn(nullptr), CurCoroutine(nullptr), ReturnValue(Address::invalid()),
+      CurFn(nullptr), ReturnValue(Address::invalid()),
       CapturedStmtInfo(nullptr), SanOpts(CGM.getLangOpts().Sanitize),
       IsSanitizerScope(false), CurFuncIsThunk(false), AutoreleaseResult(false),
       SawAsmBlock(false), IsOutlinedSEHHelper(false), BlockInfo(nullptr),
@@ -93,9 +92,6 @@ CodeGenFunction::~CodeGenFunction() {
 
   if (getLangOpts().OpenMP) {
     CGM.getOpenMPRuntime().functionFinished(*this);
-  }
-  if (CurCoroutine) {
-    CurCoroutine->functionFinished();
   }
 }
 
@@ -1946,14 +1942,6 @@ Address CodeGenFunction::EmitFieldAnnotations(const FieldDecl *D,
 }
 
 CodeGenFunction::CGCapturedStmtInfo::~CGCapturedStmtInfo() { }
-
-CGCoroutine & clang::CodeGen::CodeGenFunction::getCGCoroutine()
-{
-  if (!CurCoroutine) {
-    CurCoroutine = CGCoroutine::Create(*this);
-  }
-  return *CurCoroutine;
-}
 
 CodeGenFunction::SanitizerScope::SanitizerScope(CodeGenFunction *CGF)
     : CGF(CGF) {
