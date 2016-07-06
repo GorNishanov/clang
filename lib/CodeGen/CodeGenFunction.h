@@ -81,7 +81,6 @@ class CGFunctionInfo;
 class CGRecordLayout;
 class CGBlockInfo;
 class CGCXXABI;
-class CGCoroutine;
 class BlockByrefHelpers;
 class BlockByrefInfo;
 class BlockFlags;
@@ -89,6 +88,7 @@ class BlockFieldFlags;
 class RegionCodeGenTy;
 class TargetCodeGenInfo;
 struct OMPTaskDataTy;
+struct CGCoroData;
 
 /// The kind of evaluation to perform on values of a particular
 /// type.  Basically, is the code in CGExprScalar, CGExprComplex, or
@@ -155,7 +155,13 @@ public:
   const CGFunctionInfo *CurFnInfo;
   QualType FnRetTy;
   llvm::Function *CurFn;
-  CGCoroutine* CurCoroutine; /// nullptr of not a coroutine
+
+  struct CGCoroInfo {
+    std::unique_ptr<CGCoroData> Data;
+    CGCoroInfo();
+    ~CGCoroInfo();
+  };
+  CGCoroInfo CurCoro;
 
   /// CurGD - The GlobalDecl for the current function being compiled.
   GlobalDecl CurGD;
@@ -397,7 +403,7 @@ public:
   bool isSEHTryScope() const { return !SEHTryEpilogueStack.empty(); }
 
   /// Returns true if the current function is a coroutine
-  bool isCoroutine() const { return CurCoroutine != nullptr; }
+  bool isCoroutine() const;
 
   /// Returns true while emitting a cleanuppad.
   bool isCleanupPadScope() const {
@@ -1242,8 +1248,6 @@ public:
 
   const TargetInfo &getTarget() const { return Target; }
   llvm::LLVMContext &getLLVMContext() { return CGM.getLLVMContext(); }
-
-  CGCoroutine& getCGCoroutine();
 
   //===--------------------------------------------------------------------===//
   //                                  Cleanups
@@ -2299,6 +2303,8 @@ public:
   
   void EmitCoroutineBody(const CoroutineBodyStmt &S);
   void EmitCoreturnStmt(const CoreturnStmt &S);
+  llvm::Value *EmitCoawaitExpr(const CoawaitExpr &E);
+  llvm::Value *EmitCoyieldExpr(const CoyieldExpr &E);
 
   void EnterCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);
   void ExitCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);
