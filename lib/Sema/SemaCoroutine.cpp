@@ -283,32 +283,18 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
     ExprResult Result;
     if (I == AwaitSuspendIndex) {
       QualType PromiseType = CoroutinePromise->getType();
-#if 0
-      QualType AwaitableType = E->getType();
-      DeclarationName DN(&S.Context.Idents.get("_Ramp"));
-      LookupResult R(S, DN, Loc, Sema::LookupOrdinaryName);
-      if (!S.LookupName(R, S.TUScope))
-        return Calls;
-#endif
-      // EXPERIMENT -----------
+
       CXXScopeSpec SS;
-      auto xxx = buildStdCoroutineHandle(S, PromiseType, Loc);
-      auto LookupCtx = S.computeDeclContext(xxx);
+      auto CoroHandle = buildStdCoroutineHandle(S, PromiseType, Loc);
+      auto LookupCtx = S.computeDeclContext(CoroHandle);
       LookupResult Found(S, &S.PP.getIdentifierTable().get("from_address"), Loc,
-        Sema::LookupOrdinaryName);
-      //Sema::LookupMemberName);
-//        Sema::LookupNestedNameSpecifierName);
+                         Sema::LookupOrdinaryName);
       if (S.LookupQualifiedName(Found, LookupCtx)) {
         
         auto Fn = Found.getAsSingle<CXXMethodDecl>();
-        DeclRefExpr *DRE = DeclRefExpr::Create(S.Context,
-          Fn->getQualifierLoc(),
-          Loc,
-          Fn,
-          /*enclosing*/ false, // FIXME?
-          Loc,
-          Fn->getType(),
-          VK_LValue);
+        DeclRefExpr *DRE = DeclRefExpr::Create(
+            S.Context, Fn->getQualifierLoc(), Loc, Fn,
+            /*enclosing*/ false, Loc, Fn->getType(), VK_LValue);
         S.MarkDeclRefReferenced(DRE);
 
         auto *FramePtr =
@@ -321,41 +307,10 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
         Args.push_back(CoroHandle.get());
         Result = buildMemberCall(S, Operand, Loc, Funcs[I], Args);
 
-        //Call.get()->dump();
-    }
-      // FIXME: handle errors
-
-#if 0
-      S.BuildCXXNestedNameSpecifier(S.getCurScope(),
-        S.PP.getIdentifierTable().get("from_addr"),
-        Loc, Loc, xxx, /*EnteringContext=*/ false, SS, 
-        /*ScopeLookupResult=*/nullptr, /*ErrorRecoveryLookup=*/ false);
-
-      // EXPERIMENT -----------
-
-      TemplateArgumentListInfo Args(Loc, Loc);
-      Args.addArgument(TemplateArgumentLoc(
-          TemplateArgument(AwaitableType),
-          S.Context.getTrivialTypeSourceInfo(AwaitableType, Loc)));
-      Args.addArgument(TemplateArgumentLoc(
-          TemplateArgument(PromiseType),
-          S.Context.getTrivialTypeSourceInfo(PromiseType, Loc)));
-      Result = S.BuildTemplateIdExpr({}, {}, R, false, &Args);
-      if (Result.isInvalid())
-        return Calls;
-
-      Result = S.BuildUnaryOp(S.getCurScope(), Loc,
-                              UnaryOperatorKind::UO_AddrOf, Result.get());
-      if (Result.isInvalid())
-        return Calls;
-
-      Result = S.BuildCXXNamedCast(
-          Loc, tok::kw_reinterpret_cast,
-          S.Context.getTrivialTypeSourceInfo(S.Context.VoidPtrTy), Result.get(),
-          Loc, {});
-#endif
-      if (Result.isInvalid())
-        return Calls;
+        if (Result.isInvalid())
+          return Calls;
+      }
+      // FIXME: Handle errors
     } else {
       Result = buildMemberCall(S, Operand, Loc, Funcs[I], {});
     }
@@ -375,11 +330,14 @@ ExprResult Sema::ActOnCoawaitExpr(Scope *S, SourceLocation Loc, Expr *E) {
     E = R.get();
   }
 
-  //ExprResult Awaitable = buildOperatorCoawaitCall(*this, S, Loc, E);
-  //if (Awaitable.isInvalid())
-  //  return ExprError();
-  //return BuildCoawaitExpr(Loc, Awaitable.get());
+#if 0 // FIXME: debug why this does not work
+  ExprResult Awaitable = buildOperatorCoawaitCall(*this, S, Loc, E);
+  if (Awaitable.isInvalid())
+    return ExprError();
+  return BuildCoawaitExpr(Loc, Awaitable.get());
+#else
   return BuildCoawaitExpr(Loc, E);
+#endif
 }
 ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
   auto *Coroutine = checkCoroutineContext(*this, Loc, "co_await");
@@ -442,12 +400,13 @@ ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
   if (Awaitable.isInvalid())
     return ExprError();
 
-  // FIXME: restore operator co_await handling
+#if 0
+  // FIXME: debug why this does not work
   // Build 'operator co_await' call.
-  // Awaitable = buildOperatorCoawaitCall(*this, S, Loc, Awaitable.get());
-  // if (Awaitable.isInvalid())
-  //  return ExprError();
-
+   Awaitable = buildOperatorCoawaitCall(*this, S, Loc, Awaitable.get());
+   if (Awaitable.isInvalid())
+    return ExprError();
+#endif
   return BuildCoyieldExpr(Loc, Awaitable.get());
 }
 ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
@@ -650,8 +609,6 @@ public:
                               OperatorNew, OperatorDelete);
 
     assert(OperatorNew && "we need to find at least global operator new");
-    // FIXME: FindAllocationFunction will not find delete unless -fexceptions is
-    // set
     assert(OperatorDelete && "we need to find at least global operator new");
 
     Expr *FramePtr =
@@ -659,6 +616,8 @@ public:
 
     Expr *FrameSize =
         buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, { FramePtr });
+
+    ///////////////////// Make new Call ///////////////////////
 
     ExprResult DeclRef =
         S.BuildDeclRefExpr(OperatorNew, OperatorNew->getType(), VK_LValue, Loc);
@@ -671,6 +630,8 @@ public:
       return false;
 
     this->Allocate = CallExpr.get();
+
+    ///////////////////// Make Delete Call ///////////////////////
 
     QualType opDeleteQualType = OperatorDelete->getType();
 
@@ -721,9 +682,6 @@ public:
   }
 
   bool makeResultDecl() {
-    // FIXME: Try to form 'p.return_void();' expression statement to handle
-    // control flowing off the end of the coroutine.
-
     ExprResult ReturnObject =
         buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
     if (ReturnObject.isInvalid())
@@ -832,9 +790,6 @@ public:
   }
 
   bool makeParamMoves() {
-    // FIXME: Perform move-initialization of parameters into frame-local copies.
-    // xxx Go through list of parameters, find UDT's passed by value and do copies
-
     for (auto* paramDecl : FD.parameters()) {
       auto Ty = paramDecl->getType();
       if (Ty->isDependentType())
@@ -889,26 +844,6 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
         << (isa<CoawaitExpr>(First) ? 0 : isa<CoyieldExpr>(First) ? 1 : 2);
   }
 
-#if 0
-  // FIXME: remove this diagnostics, it is legal per P0057R1
-  // 8.4.4/1
-  // A function is a coroutine if it contains a 
-  //   coroutine-return-statement(6.6.3.1), 
-  //   an await-expression(5.3.8), 
-  //   a yield-expression(5.21), or a 
-  //   range-based-for (6.5.4) with co_await
-
-  bool AnyCoawaits = false;
-  bool AnyCoyields = false;
-  for (auto *CoroutineStmt : Fn->CoroutineStmts) {
-    AnyCoawaits |= isa<CoawaitExpr>(CoroutineStmt);
-    AnyCoyields |= isa<CoyieldExpr>(CoroutineStmt);
-  }
-
-  if (!AnyCoawaits && !AnyCoyields)
-    Diag(Fn->CoroutineStmts.front()->getLocStart(),
-         diag::ext_coroutine_without_co_await_co_yield);
-#endif
   SubStmtBuilder Builder(*this, *FD, *Fn, Body);
   if (Builder.isInvalid())
     return FD->setInvalidDecl();
