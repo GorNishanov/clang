@@ -46,7 +46,8 @@ private:
   ~CGCoroutine();
 
   CodeGenFunction &CGF;
-  unsigned SuspendNum;
+  unsigned AwaitNum;
+  unsigned YieldNum;
 };
 }
 }
