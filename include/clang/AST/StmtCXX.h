@@ -23,7 +23,6 @@
 namespace clang {
 
 class VarDecl;
-class CoawaitExpr;
 
 /// CXXCatchStmt - This represents a C++ catch block.
 ///
@@ -304,7 +303,7 @@ public:
   struct SubStmt {
     Stmt *Body;                ///< The body of the coroutine.
     Stmt *Promise;             ///< The promise statement.
-    Expr *InitSuspend;         ///< The initial suspend, run after the body.
+    Expr *InitialSuspend;      ///< The initial suspend, run after the body.
     Expr *FinalSuspend;        ///< The final suspend, run after the body.
     Stmt *OnException;         ///< Handler for exceptions thrown in the body.
     Stmt *OnFallthrough;       ///< Handler for control flow falling off the body.

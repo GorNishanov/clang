@@ -610,7 +610,7 @@ public:
     if (InitialSuspend.isInvalid())
       return false;
 
-    this->InitSuspend = InitialSuspend.get();
+    this->InitialSuspend = InitialSuspend.get();
     return true;
   }
 
