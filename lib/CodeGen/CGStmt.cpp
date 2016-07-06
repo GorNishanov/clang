@@ -14,7 +14,6 @@
 #include "CodeGenFunction.h"
 #include "CGDebugInfo.h"
 #include "CodeGenModule.h"
-#include "CGCoroutine.h"
 #include "TargetInfo.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Builtins.h"
@@ -1043,7 +1042,10 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
     ++NumSimpleReturnExprs;
 
   cleanupScope.ForceCleanup();
-  if (CurCoroutine == nullptr)
+  // CGCoroutine.cpp uses EmitReturn statement to build return value
+  // for the coroutine which will be followed by the coroutine body. We don't
+  // need to branch to ReturnBlock in this case.
+  if (!isCoroutine())
     EmitBranchThroughCleanup(ReturnBlock);
 }
 
