@@ -8564,10 +8564,8 @@ def err_coroutine_constexpr : Error<
   "'%0' cannot be used in a constexpr function">;
 def err_coroutine_varargs : Error<
   "'%0' cannot be used in a varargs function">;
-def ext_coroutine_without_co_await_co_yield : ExtWarn<
-  "'co_return' used in a function "
-  "that uses neither 'co_await' nor 'co_yield'">,
-  InGroup<DiagGroup<"coreturn-without-coawait">>;
+def err_malformed_std_coroutine_handle : Error<
+  "std::coroutine_handle must be a class template with a single type parameter">;
 def err_implied_std_coroutine_traits_not_found : Error<
   "you need to include <coroutine> before defining a coroutine">;
 def err_malformed_std_coroutine_traits : Error<
