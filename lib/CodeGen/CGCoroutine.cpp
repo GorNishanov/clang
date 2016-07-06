@@ -288,7 +288,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
     getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Init;
-    EmitStmt(SS.InitSuspend);
+    EmitStmt(SS.InitialSuspend);
 
     getCGCoroutine().CurrentAwaitKind = CGCoroutine::AwaitKind::Normal;
     EmitStmt(SS.Body);
