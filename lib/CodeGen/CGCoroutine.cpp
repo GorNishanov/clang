@@ -190,6 +190,46 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
   //  declare i1 @llvm.coro.param(i8* copy, i8* original)
 }
 
+static void fixUpDelete(CodeGenFunction& CGF) {
+  // Converts this code:
+  //   Whatever(coro_free(coro_frame()))
+  // To this:
+  //
+  //   %0 = coro_free(coro_frame())
+  //   if (%0) Whatever(%0)
+  // Scans from the end of the block to find coro_frame and then adds what is 
+  // needed.
+  auto BB = CGF.Builder.GetInsertBlock();
+  assert(!BB->empty());
+  llvm::IntrinsicInst* CoroFree = nullptr;
+  auto BI = &BB->back();
+  auto BE = &BB->front();
+  do {
+    if (auto II = dyn_cast<llvm::IntrinsicInst>(BI))
+      if (II->getIntrinsicID() == llvm::Intrinsic::coro_free) {
+        CoroFree = II;
+        break;
+      }
+    BI = BI->getPrevNode();
+  } while (BI != BE);
+  assert(CoroFree);
+
+  auto EndBB =
+    BasicBlock::Create(BB->getContext(), "EndBB", BB->getParent());
+  CGF.Builder.CreateBr(EndBB);
+
+  auto FreeBB = BB->splitBasicBlock(CoroFree->getNextNode(), "FreeBB");
+
+  auto NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
+
+  CGF.Builder.SetInsertPoint(CoroFree->getNextNode());
+  auto Cond = CGF.Builder.CreateICmpNE(CoroFree, NullPtr);
+  CGF.Builder.CreateCondBr(Cond, FreeBB, EndBB);
+  BB->getTerminator()->eraseFromParent();
+
+  CGF.Builder.SetInsertPoint(EndBB);
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
   auto NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
@@ -230,10 +270,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   // Make sure that we free the memory on any exceptions that happens
   // prior to the first suspend.
   struct CallCoroDelete final : public EHScopeStack::Cleanup {
-    void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
+    void Emit(CodeGenFunction &CGF, Flags flags) override {
+      CGF.EmitStmt(S);
+      fixUpDelete(CGF);
+    }
     CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
-
-  private:
     Stmt *S;
   };
   EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
@@ -302,6 +343,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     }
   }
   EmitStmt(SS.Deallocate);
+  fixUpDelete(*this);
 
   EmitBlock(RetBB);
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);

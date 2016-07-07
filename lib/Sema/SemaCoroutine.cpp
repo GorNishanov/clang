@@ -619,64 +619,51 @@ public:
 
     ///////////////////// Make new Call ///////////////////////
 
-    ExprResult DeclRef =
+    ExprResult NewRef =
         S.BuildDeclRefExpr(OperatorNew, OperatorNew->getType(), VK_LValue, Loc);
-    if (DeclRef.isInvalid())
+    if (NewRef.isInvalid())
       return false;
 
-    ExprResult CallExpr = S.ActOnCallExpr(S.getCurScope(), DeclRef.get(), Loc,
-                                          FrameSize, Loc, nullptr);
-    if (CallExpr.isInvalid())
+    ExprResult NewExpr = S.ActOnCallExpr(S.getCurScope(), NewRef.get(), Loc,
+                                         FrameSize, Loc, nullptr);
+    if (NewExpr.isInvalid())
       return false;
 
-    this->Allocate = CallExpr.get();
+    this->Allocate = NewExpr.get();
 
     ///////////////////// Make Delete Call ///////////////////////
 
     QualType opDeleteQualType = OperatorDelete->getType();
 
-    DeclRef =
+    auto DeleteRef =
         S.BuildDeclRefExpr(OperatorDelete, opDeleteQualType, VK_LValue, Loc);
-    if (DeclRef.isInvalid())
+    if (DeleteRef.isInvalid())
       return false;
-
-    // FIXME: want to generate
-    //   if (void* p = coro.free(coro_frame())) delete(p);
-    // At the moment, we generate slightly fatter, but still acceptable:
-    //   if (coro.free(coro_frame())) delete(coro.free(coro_frame()));
 
     Expr *CoroFree =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, { FramePtr });
 
-    SmallVector<Expr *, 2> deleteArgs{ CoroFree };
+    SmallVector<Expr *, 2> DeleteArgs{ CoroFree };
 
-    // Check if we need to pass the size
+    // Check if we need to pass the size.
     const FunctionProtoType *opDeleteType =
         opDeleteQualType.getTypePtr()->getAs<FunctionProtoType>();
     if (opDeleteType->getNumParams() > 1) {
-      deleteArgs.push_back(FrameSize);
+      DeleteArgs.push_back(FrameSize);
     }
 
-    CallExpr = S.ActOnCallExpr(S.getCurScope(), DeclRef.get(), Loc, deleteArgs,
-                               Loc, nullptr);
-    if (CallExpr.isInvalid())
+    auto DeleteExpr = S.ActOnCallExpr(S.getCurScope(), DeleteRef.get(), Loc,
+                                      DeleteArgs, Loc, nullptr);
+    if (DeleteExpr.isInvalid())
       return false;
 
-    auto Cond = S.ActOnCondition(S.getCurScope(), Loc, CoroFree,
-                               Sema::ConditionKind::Boolean);
+    // Make it a labeled statement.
+    StmtResult Stmt = S.ActOnLabelStmt(Loc, label, Loc, DeleteExpr.get());
 
-    auto IfStmt =
-        S.ActOnIfStmt(Loc, false, nullptr, Cond, CallExpr.get(), Loc, nullptr);
-    if (IfStmt.isInvalid())
+    if (Stmt.isInvalid())
       return false;
 
-    // make it a labeled statement
-    StmtResult res = S.ActOnLabelStmt(Loc, label, Loc, IfStmt.get());
-
-    if (res.isInvalid())
-      return false;
-
-    this->Deallocate = cast<LabelStmt>(res.get());
+    this->Deallocate = cast<LabelStmt>(Stmt.get());
 
     return true;
   }
