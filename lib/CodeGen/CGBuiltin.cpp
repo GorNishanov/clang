@@ -463,6 +463,15 @@ CodeGenFunction::emitBuiltinObjectSize(const Expr *E, unsigned Type,
   return Builder.CreateCall(F, {EmitScalarExpr(E), CI});
 }
 
+static RValue emitSimpleIntrinsic(CodeGenFunction &CGF, const CallExpr *E,
+                                  Intrinsic::ID ID) {
+  SmallVector<Value*, 8> Args;
+  for (auto &Arg : E->arguments())
+    Args.push_back(CGF.EmitScalarExpr(Arg));
+  Value *F = CGF.CGM.getIntrinsic(ID);
+  return RValue::get(CGF.Builder.CreateCall(F, Args));
+}
+
 RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
                                         unsigned BuiltinID, const CallExpr *E,
                                         ReturnValueSlot ReturnValue) {
@@ -2149,12 +2158,6 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *F = CGM.getIntrinsic(Intrinsic::coro_promise, PromiseType);
     return RValue::get(Builder.CreateCall(F, ArgValue));
   }
-
-  case Builtin::BI__builtin_coro_resume: {
-    Value *ArgValue = EmitScalarExpr(E->getArg(0));
-    Value *F = CGM.getIntrinsic(Intrinsic::coro_resume);
-    return RValue::get(Builder.CreateCall(F, ArgValue));
-  }
   case Builtin::BI__builtin_coro_size: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
     auto & Context = getContext();
@@ -2163,25 +2166,17 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *F = CGM.getIntrinsic(Intrinsic::coro_size, T);
     return RValue::get(Builder.CreateCall(F, ArgValue));
   }
-  case Builtin::BI__builtin_coro_frame: {
-    Value *F = CGM.getIntrinsic(Intrinsic::coro_frame);
-    return RValue::get(Builder.CreateCall(F));
-  }
-  case Builtin::BI__builtin_coro_free: {
-    Value *ArgValue = EmitScalarExpr(E->getArg(0));
-    Value *F = CGM.getIntrinsic(Intrinsic::coro_free);
-	  return RValue::get(Builder.CreateCall(F, ArgValue));
-  }
-  case Builtin::BI__builtin_coro_destroy: {
-    Value *ArgValue = EmitScalarExpr(E->getArg(0));
-    Value *F = CGM.getIntrinsic(Intrinsic::coro_destroy);
-    return RValue::get(Builder.CreateCall(F, ArgValue));
-  }
-  case Builtin::BI__builtin_coro_done: {
-    Value *ArgValue = EmitScalarExpr(E->getArg(0));
-    Value *F = CGM.getIntrinsic(Intrinsic::coro_done);
-    return RValue::get(Builder.CreateCall(F, ArgValue));
-  }
+
+  case Builtin::BI__builtin_coro_resume:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_resume);
+  case Builtin::BI__builtin_coro_frame:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_frame);
+  case Builtin::BI__builtin_coro_free: 
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_free);
+  case Builtin::BI__builtin_coro_destroy: 
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_destroy);
+  case Builtin::BI__builtin_coro_done:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_done);
   // OpenCL v2.0 s6.13.16.2, Built-in pipe read and write functions
   case Builtin::BIread_pipe:
   case Builtin::BIwrite_pipe: {
