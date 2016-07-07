@@ -59,8 +59,9 @@ CoroutineBodyStmt *CoroutineBodyStmt::Create(const ASTContext &C,
   return new (Mem) CoroutineBodyStmt(SubStmts, ParamMoves);
 }
 
-CoroutineBodyStmt::CoroutineBodyStmt(SubStmt const &SubStmts, ArrayRef<Stmt *> ParamMoves)
-  : Stmt(CoroutineBodyStmtClass), NumParams(ParamMoves.size()) {
+CoroutineBodyStmt::CoroutineBodyStmt(SubStmt const &SubStmts,
+                                     ArrayRef<Stmt *> ParamMoves)
+    : Stmt(CoroutineBodyStmtClass), NumParams(ParamMoves.size()) {
 
   getSubStmts() = SubStmts;
   std::copy(ParamMoves.begin(), ParamMoves.end(), 
