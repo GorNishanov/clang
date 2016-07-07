@@ -243,7 +243,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto InitBB = createBasicBlock("coro.init");
   auto RetBB = createBasicBlock("coro.ret");
 
-  CurCoro.Data = std::make_unique<CGCoroData>();
+  CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
   CurCoro.Data->SuspendBB = RetBB;
   CurCoro.Data->DeleteLabel = SS.Deallocate->getDecl();
 
