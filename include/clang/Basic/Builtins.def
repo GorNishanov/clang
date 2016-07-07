@@ -1330,6 +1330,23 @@ BUILTIN(__builtin___get_unsafe_stack_ptr, "v*", "Fn")
 BUILTIN(__builtin_nontemporal_store, "v.", "t")
 BUILTIN(__builtin_nontemporal_load, "v.", "t")
 
+// Coroutine intrinsics.
+BUILTIN(__builtin_coro_resume, "vv*", "")
+BUILTIN(__builtin_coro_destroy, "vv*", "n")
+BUILTIN(__builtin_coro_done, "bv*", "n")
+BUILTIN(__builtin_coro_promise, "v*v*", "n")
+BUILTIN(__builtin_coro_from_promise, "v*v*", "n")
+
+BUILTIN(__builtin_coro_size, "zv*", "n")
+BUILTIN(__builtin_coro_frame, "v*", "n")
+BUILTIN(__builtin_coro_free, "v*v*", "n")
+
+BUILTIN(__builtin_coro_alloc, "v*", "n")
+BUILTIN(__builtin_coro_begin, "v*v*v*iv*v*", "n")
+BUILTIN(__builtin_coro_end, "vb", "n")
+BUILTIN(__builtin_coro_save, "v*", "n")
+BUILTIN(__builtin_coro_suspend, "cv*b", "n")
+BUILTIN(__builtin_coro_param, "bv*v*", "n")
 // OpenCL v2.0 s6.13.16, s9.17.3.5 - Pipe functions.
 // We need the generic prototype, since the packet type could be anything.
 LANGBUILTIN(read_pipe, "i.", "tn", OCLC20_LANG)
