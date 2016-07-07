@@ -115,16 +115,14 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   CGF.EmitBlock(SuspendBlock);
 
   llvm::Function *coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
-  SmallVector<Value *, 1> args{
-      llvm::ConstantInt::get(CGF.Builder.getInt1Ty(), IsFinalSuspend)};
-  auto SaveCall = Builder.CreateCall(coroSave, args);
+  auto SaveCall = Builder.CreateCall(coroSave, {});
 
   // FIXME: Handle bool returning suspendExpr.
   CGF.EmitScalarExpr(S.getSuspendExpr());
 
   llvm::Function *coroSuspend =
       CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
-  SmallVector<Value *, 1> args2{SaveCall};
+  SmallVector<Value *, 1> args2{SaveCall, Builder.getInt1(IsFinalSuspend)};
   auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
   auto Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
   Switch->addCase(Builder.getInt8(0), ReadyBlock);
