@@ -24,7 +24,7 @@ template <> struct coroutine_handle<void> {
   }
   coroutine_handle(decltype(nullptr)) : ptr(nullptr) {}
   coroutine_handle() : ptr(nullptr) {}
-//  void reset() { ptr = nullptr; }
+//  void reset() { ptr = nullptr; } // add to P0057?
   explicit operator bool() const { return ptr; }
 
 protected:
@@ -74,9 +74,4 @@ struct suspend_never {
   void await_suspend(coroutine_handle<>) {}
   void await_resume() {}
 };
-}
-
-// FIXME: generate in the FE?
-template <typename Awaitable, typename Promise> void _Ramp(void *a, void *b) {
-  static_cast<Awaitable *>(a)->await_suspend(std::coroutine_handle<Promise>::from_address(b)); 
 }
