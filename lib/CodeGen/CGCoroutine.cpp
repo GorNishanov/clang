@@ -270,12 +270,12 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   // Make sure that we free the memory on any exceptions that happens
   // prior to the first suspend.
   struct CallCoroDelete final : public EHScopeStack::Cleanup {
+    Stmt *S;
     void Emit(CodeGenFunction &CGF, Flags flags) override {
       CGF.EmitStmt(S);
       fixUpDelete(CGF);
     }
     CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
-    Stmt *S;
   };
   EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
 
@@ -288,7 +288,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   llvm::Value *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
   llvm::Value *PromiseAddrVoidPtr =
       new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroBeginInsertPt);
-  // FIXME: Instead of 0, pass equivalnet of alignas(maxalign_t).
+  // FIXME: Instead of 0, pass equivalent of alignas(maxalign_t).
 
   SmallVector<llvm::Value *, 5> args{Phi, CoroAlloc, Builder.getInt32(0),
                                      PromiseAddrVoidPtr, NullPtr};
