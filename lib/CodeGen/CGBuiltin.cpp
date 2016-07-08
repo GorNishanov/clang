@@ -2177,6 +2177,20 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_destroy);
   case Builtin::BI__builtin_coro_done:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_done);
+  case Builtin::BI__builtin_coro_alloc:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_alloc);
+  case Builtin::BI__builtin_coro_begin:
+    CurFn->addFnAttr(Attribute::Coroutine);
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_begin);
+  case Builtin::BI__builtin_coro_end:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_end);
+  case Builtin::BI__builtin_coro_save:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_save);
+  case Builtin::BI__builtin_coro_suspend:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_suspend);
+  case Builtin::BI__builtin_coro_param:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_param);
+
   // OpenCL v2.0 s6.13.16.2, Built-in pipe read and write functions
   case Builtin::BIread_pipe:
   case Builtin::BIwrite_pipe: {
