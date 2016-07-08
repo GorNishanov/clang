@@ -2,38 +2,40 @@
 
 void yield(int);
 
-#define SUSPEND(IsFinal)                                                       \
+#define CORO_SUSPEND(IsFinal)                                                  \
   switch (__builtin_coro_suspend(__builtin_coro_save(), IsFinal)) {            \
   case 0:                                                                      \
     if (IsFinal)                                                               \
       __builtin_trap();                                                        \
     break;                                                                     \
   case 1:                                                                      \
-    goto Cleanup;                                                              \
+    goto coro_Cleanup;                                                         \
   default:                                                                     \
-    goto Suspend;                                                              \
+    goto coro_Suspend;                                                         \
   }
 
-void* f() {
-  void* ca = __builtin_coro_alloc();
-  void* mem = ca;
-  if (!mem) mem = malloc(__builtin_coro_size(__builtin_coro_frame()));
+#define CORO_BEGIN(AllocFunc)                                                  \
+  void *coro_hdl =                                                             \
+      __builtin_coro_begin(AllocFunc(__builtin_coro_size(0)), 0, 0, 0, 0);
 
-  void* hdl = __builtin_coro_begin(mem,ca,0,0,0);
+#define CORO_END(FreeFunc)                                                     \
+  coro_Cleanup:                                                                \
+  FreeFunc(__builtin_coro_free(coro_hdl));                                     \
+  coro_Suspend:                                                                \
+  __builtin_coro_end(0);                                                       \
+  return coro_hdl;
+
+void free(void *ptr);
+
+void* f() {
+  CORO_BEGIN(malloc);
 
   for (int i = 0;; ++i) {
     yield(i);
-    SUSPEND(0);
+    CORO_SUSPEND(0);
   }
 
-Cleanup:
-  {
-    void* mem_to_free = __builtin_coro_free(__builtin_coro_frame());
-    if (mem_to_free) free(mem_to_free);
-  }
-Suspend:  
-  __builtin_coro_end(0);
-  return hdl;
+  CORO_END(free);
 }
 
 // CHECK-LABEL: @main
