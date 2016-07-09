@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines -emit-llvm %s -o - -std=c++14 -O3 | FileCheck %s
-#include "coroutine.h"
+#include "Inputs/coroutine.h"
 
 // This file tests, one shot, movable std::function like thing using coroutine
 // for compile-time type erasure and unerasure. At the moment supports only

@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines -emit-llvm %s -o - -std=c++14 -O3 | FileCheck %s
-#include "coroutine.h"
+#include "Inputs/coroutine.h"
 
 namespace std {
 template <class _Ty> struct remove_reference { typedef _Ty type; };

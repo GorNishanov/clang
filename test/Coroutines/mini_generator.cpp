@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -triple i686-pc-windows-msvc18.0.0 -O3 -fcoroutines -std=c++14 -emit-llvm -o - %s | FileCheck %s
-#include "coroutine.h"
+#include "Inputs/coroutine.h"
 
 struct minig {
   struct promise_type {
