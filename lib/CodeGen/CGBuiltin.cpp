@@ -2180,7 +2180,6 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   case Builtin::BI__builtin_coro_alloc:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_alloc);
   case Builtin::BI__builtin_coro_begin:
-    CurFn->addFnAttr(Attribute::Coroutine);
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_begin);
   case Builtin::BI__builtin_coro_end:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_end);

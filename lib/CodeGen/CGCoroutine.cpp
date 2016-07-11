@@ -115,7 +115,8 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   CGF.EmitBlock(SuspendBlock);
 
   llvm::Function *coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
-  auto SaveCall = Builder.CreateCall(coroSave, {});
+  auto NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
+  auto SaveCall = Builder.CreateCall(coroSave, {NullPtr});
 
   // FIXME: Handle bool returning suspendExpr.
   CGF.EmitScalarExpr(S.getSuspendExpr());
@@ -288,7 +289,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroBeginInsertPt);
   // FIXME: Instead of 0, pass equivalent of alignas(maxalign_t).
 
-  SmallVector<llvm::Value *, 5> args{Phi, CoroAlloc, Builder.getInt32(0),
+  SmallVector<llvm::Value *, 5> args{Phi, Builder.getInt32(0),
                                      PromiseAddrVoidPtr, NullPtr};
 
   llvm::CallInst::Create(CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args,
@@ -311,8 +312,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   struct CallCoroEnd final : public EHScopeStack::Cleanup {
     void Emit(CodeGenFunction &CGF, Flags flags) override {
       auto &CGM = CGF.CGM;
+      auto NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
       llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-      CGF.Builder.CreateCall(CoroEnd, CGF.Builder.getInt1(true));
+      CGF.Builder.CreateCall(CoroEnd, {NullPtr, CGF.Builder.getInt1(true)});
     }
   };
   EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
@@ -345,13 +347,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   EmitBlock(RetBB);
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-  Builder.CreateCall(CoroEnd, Builder.getInt1(0));
+  Builder.CreateCall(CoroEnd, {NullPtr, Builder.getInt1(0)});
 
   // Emit return statement only if we are doing two stage return intialization.
   // I.e. when get_return_object requires a conversion to a return type.
   if (SS.ResultDecl) {
     EmitStmt(SS.ReturnStmt);
   }
-
-  CurFn->addFnAttr(llvm::Attribute::Coroutine);
 }
