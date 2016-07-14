@@ -1914,7 +1914,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.Blocks = Args.hasArg(OPT_fblocks) || (Opts.OpenCL
     && Opts.OpenCLVersion >= 200);
   Opts.BlocksRuntimeOptional = Args.hasArg(OPT_fblocks_runtime_optional);
-  Opts.Coroutines = Args.hasArg(OPT_fcoroutines);
+  Opts.Coroutines = true || Args.hasArg(OPT_fcoroutines);
   Opts.ModulesTS = Args.hasArg(OPT_fmodules_ts);
   Opts.Modules = Args.hasArg(OPT_fmodules) || Opts.ModulesTS;
   Opts.ModulesStrictDeclUse = Args.hasArg(OPT_fmodules_strict_decluse);
