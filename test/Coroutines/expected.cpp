@@ -17,18 +17,7 @@ move(_Ty &&_Arg) noexcept {
 
 struct error {};
 
-//#define BUG
-#ifdef BUG
-  // Blows up in while trying to find from_address in coroutine_handle
-  template <typename T, typename Error = int> struct expected;
-  using expected_int = expected<int>;
-  template <typename T, typename Error>
-#else
-  using T = int;
-  using Error = int;
-  struct expected;
-  using expected_int = expected;
-#endif
+template <typename T, typename Error = int>
 struct expected {
 
   struct Data {
@@ -65,19 +54,23 @@ struct expected {
   Error const& error() { return data.error; }
 };
 
-extern "C" expected_int g() { return {0}; }
-extern "C" expected_int h() { return {error{}, 42}; }
+extern "C" expected<int> g() { return {0}; }
+extern "C" expected<int> h() { return {error{}, 42}; }
 
 extern "C" void yield(int);
 
-extern "C" expected_int f1() {
+void WORKAROUND_FOR_SEMACOROUTINE_BUG() {
+  std::coroutine_handle<expected<int>::promise_type>::from_address(0);
+}
+
+extern "C" expected<int> f1() {
   yield(11);
   co_await g();
   yield(12);
   co_return 100;
 }
 
-extern "C" expected_int f2() {
+extern "C" expected<int> f2() {
   yield(21);
   co_await h();
   yield(22);
