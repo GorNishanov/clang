@@ -1,4 +1,4 @@
-// RUN: not %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines -emit-llvm %s -o - -std=c++14 -O3 2>&1 | FileCheck %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines -emit-llvm %s -o - -std=c++14 -O3 | FileCheck %s
 #include "Inputs/coroutine.h"
 
 struct coro {
@@ -20,17 +20,11 @@ struct A {
 
 };
 
-// CHECK: Instruction does not dominate all uses!
-//   %call12 = call i32 @"\01?await_resume@A@@QEAAHXZ"(%struct.A* %ref.tmp6)
-//   store i32 %call12, i32* %val, align 4, !tbaa !7
-extern "C" coro f() {
-#if 1 // disable this and it will compile
-  int val = 
-#endif
-    co_await A{}; // results in broken IR due to cleanup branch
-                  // bypassing the return value of the expression
-}
+extern "C" coro f() { int val = co_await A{}; }
 
+// CHECK-LABEL: @main
 int main() {
   f();
+// CHECK:      entry:
+// CHECK-NEXT:    ret i32 0
 }
