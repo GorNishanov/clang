@@ -394,12 +394,6 @@ ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
   if (!Coroutine)
     return ExprError();
 
-  // Build yield_value call.
-  ExprResult Awaitable =
-      buildPromiseCall(*this, Coroutine, Loc, "yield_value", E);
-  if (Awaitable.isInvalid())
-    return ExprError();
-
 #if 0
   // FIXME: debug why this does not work
   // Build 'operator co_await' call.
@@ -407,7 +401,7 @@ ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
    if (Awaitable.isInvalid())
     return ExprError();
 #endif
-  return BuildCoyieldExpr(Loc, Awaitable.get());
+  return BuildCoyieldExpr(Loc, E);
 }
 ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   auto *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
@@ -425,6 +419,14 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
     Coroutine->CoroutineStmts.push_back(Res);
     return Res;
   }
+
+  // Build yield_value call.
+  ExprResult Awaitable =
+    buildPromiseCall(*this, Coroutine, Loc, "yield_value", E);
+  if (Awaitable.isInvalid())
+    return ExprError();
+
+  E = Awaitable.get();
 
   // If the expression is a temporary, materialize it as an lvalue so that we
   // can use it multiple times.
@@ -529,6 +531,11 @@ public:
                     makeOnFallthrough() && makeNewAndDeleteExpr(label) &&
                     makeResultDecl() && makeReturnStmt() && makeParamMoves();
     if (IsValid) {
+#if 0
+      // FIXME: parameter handling needs more work.
+      //   Disabled the following code since 
+      //   buildCoyield/rebuildCoyield/actOnCoyield are not exactly right and
+      //   cause multishot_func.cpp test to fail.
       RewriteParams RP(S, getParams(), getParamMoves());
       auto NewBody = RP.TransformStmt(Body);
       if (NewBody.isInvalid()) {
@@ -536,6 +543,7 @@ public:
         return;
       }
       this->Body = NewBody.get();
+#endif
     }
   }
 
