@@ -1,5 +1,4 @@
-// XFAIL: *
-// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines -emit-llvm %s -o - -std=c++14 -O3
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines -emit-llvm %s -o - -std=c++14 -O3 | FileCheck %s
 #include "Inputs/coroutine.h"
 
 // This file tests, multishot, movable std::function like thing using coroutine
@@ -12,10 +11,13 @@ template <typename R> struct func {
     Input* I;
     R result;
     func get_return_object() { return {this}; }
-    std::suspend_never initial_suspend() { return {}; }
+    std::suspend_always initial_suspend() { return {}; }
     std::suspend_never final_suspend() { return {}; }
     template <typename F>
-    void yield_value(F& f) { result = f(I->a, I->b); }
+    std::suspend_always yield_value(F&& f) { 
+      result = f(I->a, I->b); 
+      return {};
+    }
   };
 
   R operator()(Input I) {
@@ -67,8 +69,9 @@ int Do(int acc, int n, func<int> f) {
   return acc;
 }
 
+// CHECK: @main
 int main() {
   int result = Do(1, 10, [](int a, int b) {return a + b;});
-  //printf("%d\n", result);
   return result;
+// CHECK:  ret i32 46
 }
