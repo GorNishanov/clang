@@ -181,22 +181,28 @@ static void fixBrokenUse(Use& U) {
   Instruction& D = *cast<Instruction>(U.get());
 
   BasicBlock* DefBlock = D.getParent();
+  BasicBlock* PostDefBlock = DefBlock->getSingleSuccessor();
+  if (!PostDefBlock)
+    return;
+  if (PostDefBlock->getSinglePredecessor() != nullptr)
+    return;
+
+  // Do a few more sanity checks.
   BasicBlock* FallthruBB = I.getParent();
   BasicBlock* CommonCleanupBB = FallthruBB->getSinglePredecessor();
   if (!CommonCleanupBB)
-    return;
-  if (DefBlock->getSingleSuccessor() != CommonCleanupBB)
     return;
   SwitchInst* SI = dyn_cast<SwitchInst>(CommonCleanupBB->getTerminator());
   if (!SI)
     return;
 
-  auto Phi = PHINode::Create(D.getType(), 2, "", &CommonCleanupBB->front());
+  // Okay, looks like it is cleanup related break that we can fix.
+  auto Phi = PHINode::Create(D.getType(), 2, "", &PostDefBlock->front());
   auto Undef = llvm::UndefValue::get(D.getType());
-  for (BasicBlock* Pred : predecessors(CommonCleanupBB))
+  for (BasicBlock* Pred : predecessors(PostDefBlock))
     Phi->addIncoming(Pred == DefBlock ? (Value*)&D : Undef, Pred);
 
-  D.replaceUsesOutsideBlock(Phi, CommonCleanupBB);
+  D.replaceUsesOutsideBlock(Phi, PostDefBlock);
 }
 
 static void runHorribleHackToFixupCleanupBlocks(Function& F) {
@@ -206,7 +212,7 @@ static void runHorribleHackToFixupCleanupBlocks(Function& F) {
   for (Instruction& I : instructions(F)) {
     for (Use& U: I.uses()) {
       if (isa<llvm::PHINode>(U.getUser()))
-        continue;
+        break;
       if (!DT.dominates(&I, U)) {
         BrokenUses.push_back(&U);
         break; // Go to the next instruction.
