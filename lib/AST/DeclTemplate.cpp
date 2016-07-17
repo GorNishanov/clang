@@ -461,8 +461,7 @@ ClassTemplateDecl::getInjectedClassNameSpecialization() {
   GenerateInjectedTemplateArgs(getASTContext(), Params, TemplateArgs.data());
   CommonPtr->InjectedClassNameType
     = Context.getTemplateSpecializationType(TemplateName(this),
-                                            &TemplateArgs[0],
-                                            TemplateArgs.size());
+                                            TemplateArgs);
   return CommonPtr->InjectedClassNameType;
 }
 
@@ -757,7 +756,7 @@ void ClassTemplateSpecializationDecl::getNameForDiagnostic(
 
   const TemplateArgumentList &TemplateArgs = getTemplateArgs();
   TemplateSpecializationType::PrintTemplateArgumentList(
-      OS, TemplateArgs.data(), TemplateArgs.size(), Policy);
+      OS, TemplateArgs.asArray(), Policy);
 }
 
 ClassTemplateDecl *
@@ -779,7 +778,7 @@ ClassTemplateSpecializationDecl::getSourceRange() const {
              getSpecializationKind() == TSK_ExplicitInstantiationDefinition);
       if (getExternLoc().isValid())
         Begin = getExternLoc();
-      SourceLocation End = getRBraceLoc();
+      SourceLocation End = getBraceRange().getEnd();
       if (End.isInvalid())
         End = getTypeAsWritten()->getTypeLoc().getEndLoc();
       return SourceRange(Begin, End);
@@ -1089,7 +1088,7 @@ void VarTemplateSpecializationDecl::getNameForDiagnostic(
 
   const TemplateArgumentList &TemplateArgs = getTemplateArgs();
   TemplateSpecializationType::PrintTemplateArgumentList(
-      OS, TemplateArgs.data(), TemplateArgs.size(), Policy);
+      OS, TemplateArgs.asArray(), Policy);
 }
 
 VarTemplateDecl *VarTemplateSpecializationDecl::getSpecializedTemplate() const {

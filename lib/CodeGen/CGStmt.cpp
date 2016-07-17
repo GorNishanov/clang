@@ -293,6 +293,10 @@ void CodeGenFunction::EmitStmt(const Stmt *S) {
   case Stmt::OMPDistributeSimdDirectiveClass:
     EmitOMPDistributeSimdDirective(cast<OMPDistributeSimdDirective>(*S));
     break;
+  case Stmt::OMPTargetParallelForSimdDirectiveClass:
+    EmitOMPTargetParallelForSimdDirective(
+        cast<OMPTargetParallelForSimdDirective>(*S));
+    break;
   }
 }
 
@@ -570,6 +574,9 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
   // unequal to 0.  The condition must be a scalar type.
   LexicalScope ConditionScope(*this, S.getCond()->getSourceRange());
 
+  if (S.getInit())
+    EmitStmt(S.getInit());
+
   if (S.getConditionVariable())
     EmitAutoVarDecl(*S.getConditionVariable());
 
@@ -615,7 +622,14 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
     RunCleanupsScope ThenScope(*this);
     EmitStmt(S.getThen());
   }
-  EmitBranch(ContBlock);
+  {
+    auto CurBlock = Builder.GetInsertBlock();
+    EmitBranch(ContBlock);
+    // Eliminate any empty blocks that may have been created by nested
+    // control flow statements in the 'then' clause.
+    if (CurBlock)
+      SimplifyForwardingBlocks(CurBlock); 
+  }
 
   // Emit the 'else' code if present.
   if (const Stmt *Else = S.getElse()) {
@@ -631,7 +645,12 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
     {
       // There is no need to emit line number for an unconditional branch.
       auto NL = ApplyDebugLocation::CreateEmpty(*this);
+      auto CurBlock = Builder.GetInsertBlock();
       EmitBranch(ContBlock);
+      // Eliminate any empty blocks that may have been created by nested
+      // control flow statements emitted in the 'else' clause.
+      if (CurBlock)
+        SimplifyForwardingBlocks(CurBlock); 
     }
   }
 
@@ -1478,6 +1497,9 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
         incrementProfileCounter(Case);
       RunCleanupsScope ExecutedScope(*this);
 
+      if (S.getInit())
+        EmitStmt(S.getInit());
+
       // Emit the condition variable if needed inside the entire cleanup scope
       // used by this special case for constant folded switches.
       if (S.getConditionVariable())
@@ -1505,6 +1527,10 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
   JumpDest SwitchExit = getJumpDestInCurrentScope("sw.epilog");
 
   RunCleanupsScope ConditionScope(*this);
+
+  if (S.getInit())
+    EmitStmt(S.getInit());
+
   if (S.getConditionVariable())
     EmitAutoVarDecl(*S.getConditionVariable());
   llvm::Value *CondV = EmitScalarExpr(S.getCond());

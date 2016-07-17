@@ -3485,6 +3485,11 @@ static EvalStmtResult EvaluateSwitch(StmtResult &Result, EvalInfo &Info,
   APSInt Value;
   {
     FullExpressionRAII Scope(Info);
+    if (const Stmt *Init = SS->getInit()) {
+      EvalStmtResult ESR = EvaluateStmt(Result, Info, Init);
+      if (ESR != ESR_Succeeded)
+        return ESR;
+    }
     if (SS->getConditionVariable() &&
         !EvaluateDecl(Info, SS->getConditionVariable()))
       return ESR_Failed;
@@ -3667,6 +3672,11 @@ static EvalStmtResult EvaluateStmt(StmtResult &Result, EvalInfo &Info,
 
     // Evaluate the condition, as either a var decl or as an expression.
     BlockScopeRAII Scope(Info);
+    if (const Stmt *Init = IS->getInit()) {
+      EvalStmtResult ESR = EvaluateStmt(Result, Info, Init);
+      if (ESR != ESR_Succeeded)
+        return ESR;
+    }
     bool Cond;
     if (!EvaluateCond(Info, IS->getConditionVariable(), IS->getCond(), Cond))
       return ESR_Failed;
@@ -9392,6 +9402,7 @@ static ICEDiag CheckICE(const Expr* E, const ASTContext &Ctx) {
   case Expr::ObjCPropertyRefExprClass:
   case Expr::ObjCSubscriptRefExprClass:
   case Expr::ObjCIsaExprClass:
+  case Expr::ObjCAvailabilityCheckExprClass:
   case Expr::ShuffleVectorExprClass:
   case Expr::ConvertVectorExprClass:
   case Expr::BlockExprClass:

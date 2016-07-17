@@ -519,6 +519,38 @@ AST_MATCHER(Decl, isPrivate) {
   return Node.getAccess() == AS_private;
 }
 
+/// \brief Matches non-static data members that are bit-fields.
+///
+/// Given
+/// \code
+///   class C {
+///     int a : 2;
+///     int b;
+///   };
+/// \endcode
+/// fieldDecl(isBitField())
+///   matches 'int a;' but not 'int b;'.
+AST_MATCHER(FieldDecl, isBitField) {
+  return Node.isBitField();
+}
+
+/// \brief Matches non-static data members that are bit-fields.
+///
+/// Given
+/// \code
+///   class C {
+///     int a : 2;
+///     int b : 4;
+///     int c : 2;
+///   };
+/// \endcode
+/// fieldDecl(isBitField())
+///   matches 'int a;' and 'int c;' but not 'int b;'.
+AST_MATCHER_P(FieldDecl, hasBitWidth, unsigned, Width) {
+  return Node.isBitField() &&
+         Node.getBitWidthValue(Finder->getASTContext()) == Width;
+}
+
 /// \brief Matches a declaration that has been implicitly added
 /// by the compiler (eg. implicit default/copy constructors).
 AST_MATCHER(Decl, isImplicit) {
@@ -3154,8 +3186,11 @@ AST_MATCHER_P2(FunctionDecl, hasParameter,
 ///   int y;
 ///   f(y);
 /// \endcode
-/// callExpr(declRefExpr(to(varDecl(hasName("y")))),
-/// parmVarDecl(hasType(isInteger())))
+/// callExpr(
+///   forEachArgumentWithParam(
+///     declRefExpr(to(varDecl(hasName("y")))),
+///     parmVarDecl(hasType(isInteger()))
+/// ))
 ///   matches f(y);
 /// with declRefExpr(...)
 ///   matching int y
@@ -4030,6 +4065,34 @@ AST_MATCHER(MemberExpr, isArrow) {
 /// matches "a(int)", "b(long)", but not "c(double)".
 AST_MATCHER(QualType, isInteger) {
     return Node->isIntegerType();
+}
+
+/// \brief Matches QualType nodes that are of unsigned integer type.
+///
+/// Given
+/// \code
+///   void a(int);
+///   void b(unsigned long);
+///   void c(double);
+/// \endcode
+/// functionDecl(hasAnyParameter(hasType(isInteger())))
+/// matches "b(unsigned long)", but not "a(int)" and "c(double)".
+AST_MATCHER(QualType, isUnsignedInteger) {
+    return Node->isUnsignedIntegerType();
+}
+
+/// \brief Matches QualType nodes that are of signed integer type.
+///
+/// Given
+/// \code
+///   void a(int);
+///   void b(unsigned long);
+///   void c(double);
+/// \endcode
+/// functionDecl(hasAnyParameter(hasType(isInteger())))
+/// matches "a(int)", but not "b(unsigned long)" and "c(double)".
+AST_MATCHER(QualType, isSignedInteger) {
+    return Node->isSignedIntegerType();
 }
 
 /// \brief Matches QualType nodes that are of character type.
