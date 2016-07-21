@@ -1337,7 +1337,7 @@ BUILTIN(__builtin_coro_done, "bv*", "n")
 BUILTIN(__builtin_coro_promise, "v*v*", "n")
 BUILTIN(__builtin_coro_from_promise, "v*v*", "n")
 
-BUILTIN(__builtin_coro_size, "zv*", "n")
+BUILTIN(__builtin_coro_size, "z", "n")
 BUILTIN(__builtin_coro_frame, "v*", "n")
 BUILTIN(__builtin_coro_free, "v*v*", "n")
 
