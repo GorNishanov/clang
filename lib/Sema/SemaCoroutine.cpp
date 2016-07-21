@@ -625,7 +625,7 @@ public:
     Expr *NullPtr = S.ActOnCXXNullPtrLiteral(Loc).get();
 
     Expr *FrameSize =
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, {NullPtr});
+        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, {});
 
     ///////////////////// Make new Call ///////////////////////
 
