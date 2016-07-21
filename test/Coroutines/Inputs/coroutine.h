@@ -41,11 +41,12 @@ template <typename Promise> struct coroutine_handle : coroutine_handle<> {
   }
 
   Promise &promise() const {
-    return *reinterpret_cast<Promise *>(__builtin_coro_promise((Promise*)ptr));
+    return *reinterpret_cast<Promise *>(
+        __builtin_coro_promise(ptr, alignof(Promise), false));
   }
   static coroutine_handle from_promise(Promise &promise) {
     coroutine_handle p;
-    p.ptr = __builtin_coro_from_promise(&promise);
+    p.ptr = __builtin_coro_promise(&promise, alignof(Promise), true);
     return p;
   }
 };
