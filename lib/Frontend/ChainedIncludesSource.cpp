@@ -17,6 +17,7 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Parse/ParseAST.h"
 #include "clang/Sema/MultiplexExternalSemaSource.h"
 #include "clang/Serialization/ASTReader.h"
@@ -54,6 +55,10 @@ private:
 /// Members of ChainedIncludesSource, factored out so we can initialize
 /// them before we initialize the ExternalSemaSource base class.
 struct ChainedIncludesSourceMembers {
+  ChainedIncludesSourceMembers(
+      std::vector<std::unique_ptr<CompilerInstance>> CIs,
+      IntrusiveRefCntPtr<ExternalSemaSource> FinalReader)
+      : Impl(std::move(CIs)), FinalReader(std::move(FinalReader)) {}
   ChainedIncludesSourceImpl Impl;
   IntrusiveRefCntPtr<ExternalSemaSource> FinalReader;
 };
@@ -66,7 +71,7 @@ class ChainedIncludesSource
 public:
   ChainedIncludesSource(std::vector<std::unique_ptr<CompilerInstance>> CIs,
                         IntrusiveRefCntPtr<ExternalSemaSource> FinalReader)
-      : ChainedIncludesSourceMembers{{std::move(CIs)}, std::move(FinalReader)},
+      : ChainedIncludesSourceMembers(std::move(CIs), std::move(FinalReader)),
         MultiplexExternalSemaSource(Impl, *this->FinalReader) {}
 };
 }

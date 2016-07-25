@@ -365,6 +365,26 @@ def warn_modifying_shadowing_decl :
           "field of %1">,
   InGroup<ShadowFieldInConstructorModified>, DefaultIgnore;
 
+// C++ decomposition declarations
+def err_decomp_decl_context : Error<
+  "decomposition declaration not permitted in this context">;
+def warn_cxx14_compat_decomp_decl : Warning<
+  "decomposition declarations are incompatible with "
+  "C++ standards before C++1z">, DefaultIgnore, InGroup<CXXPre1zCompat>;
+def ext_decomp_decl : ExtWarn<
+  "decomposition declarations are a C++1z extension">, InGroup<CXX1z>;
+def err_decomp_decl_spec : Error<
+  "decomposition declaration cannot be declared "
+  "%plural{1:'%1'|:with '%1' specifiers}0">;
+def err_decomp_decl_type : Error<
+  "decomposition declaration cannot be declared with type %0; "
+  "declared type must be 'auto' or reference to 'auto'">;
+def err_decomp_decl_parens : Error<
+  "decomposition declaration cannot be declared with parentheses">;
+def err_decomp_decl_template : Error<
+  "decomposition declaration template not supported">;
+def err_decomp_decl_not_alone : Error<
+  "decomposition declaration must be the only declaration in its group">;
 
 // C++ using declarations
 def err_using_requires_qualname : Error<
@@ -1756,6 +1776,9 @@ def warn_cxx98_compat_auto_type_specifier : Warning<
 def err_auto_variable_cannot_appear_in_own_initializer : Error<
   "variable %0 declared with %select{'auto'|'decltype(auto)'|'__auto_type'}1 "
   "type cannot appear in its own initializer">;
+def err_binding_cannot_appear_in_own_initializer : Error<
+  "binding %0 cannot appear in the initializer of its own "
+  "decomposition declaration">;
 def err_illegal_decl_array_of_auto : Error<
   "'%0' declared as array of %1">;
 def err_new_array_of_auto : Error<
@@ -6351,6 +6374,24 @@ def ext_typecheck_convert_incompatible_pointer : ExtWarn<
   "; remove *|"
   "; remove &}3">,
   InGroup<IncompatiblePointerTypes>;
+def ext_typecheck_convert_incompatible_function_pointer : ExtWarn<
+  "incompatible function pointer types "
+  "%select{%diff{assigning to $ from $|assigning to different types}0,1"
+  "|%diff{passing $ to parameter of type $|"
+  "passing to parameter of different type}0,1"
+  "|%diff{returning $ from a function with result type $|"
+  "returning from function with different return type}0,1"
+  "|%diff{converting $ to type $|converting between types}0,1"
+  "|%diff{initializing $ with an expression of type $|"
+  "initializing with expression of different type}0,1"
+  "|%diff{sending $ to parameter of type $|"
+  "sending to parameter of different type}0,1"
+  "|%diff{casting $ to type $|casting between types}0,1}2"
+  "%select{|; dereference with *|"
+  "; take the address with &|"
+  "; remove *|"
+  "; remove &}3">,
+  InGroup<IncompatibleFunctionPointerTypes>;
 def ext_typecheck_convert_discards_qualifiers : ExtWarn<
   "%select{%diff{assigning to $ from $|assigning to different types}0,1"
   "|%diff{passing $ to parameter of type $|"
@@ -7962,6 +8003,11 @@ def err_opencl_enqueue_kernel_blocks_non_local_void_args : Error<
   "blocks used in device side enqueue are expected to have parameters of type 'local void*'">;
 def err_opencl_enqueue_kernel_blocks_no_args : Error<
   "blocks in this form of device side enqueue call are expected to have have no parameters">;
+
+// OpenCL v2.2 s2.1.2.3 - Vector Component Access
+def ext_opencl_ext_vector_type_rgba_selector: ExtWarn<
+  "vector component name '%0' is an OpenCL version 2.2 feature">,
+  InGroup<OpenCLUnsupportedRGBA>;
 } // end of sema category
 
 let CategoryName = "OpenMP Issue" in {
@@ -8242,8 +8288,10 @@ def warn_omp_section_is_char : Warning<"array section %select{lower bound|length
   InGroup<CharSubscript>, DefaultIgnore;
 def err_omp_section_incomplete_type : Error<
   "section of pointer to incomplete type %0">;
-def err_omp_section_negative : Error<
-  "section %select{lower bound|length}0 is evaluated to a negative value %1">;
+def err_omp_section_not_subset_of_array : Error<
+  "array section must be a subset of the original array">;
+def err_omp_section_length_negative : Error<
+  "section length is evaluated to a negative value %0">;
 def err_omp_section_length_undefined : Error<
   "section length is unspecified and cannot be inferred because subscripted value is %select{not an array|an array of unknown bound}0">;
 def err_omp_wrong_linear_modifier : Error<
