@@ -17,14 +17,21 @@ void *malloc(unsigned int);
 #define CORO_FINAL_SUSPEND() CORO_SUSPEND_IMPL(1)
 
 #define CORO_BEGIN(AllocFunc)                                                  \
-  void *coro_hdl =                                                             \
-      __builtin_coro_begin(AllocFunc(__builtin_coro_size()), 0, 0, 0);
+  void *coro_hdl = 0;                                                          \
+  do {                                                                         \
+    void *coro_mem = __builtin_coro_alloc();                                   \
+    coro_hdl = __builtin_coro_begin(                                           \
+        coro_mem ? coro_mem : AllocFunc(__builtin_coro_size()), 0, 0, 0);      \
+  } while (0)
 
 #define CORO_END(FreeFunc)                                                     \
-  coro_Cleanup:                                                                \
-  FreeFunc(__builtin_coro_free(coro_hdl));                                     \
+  coro_Cleanup : {                                                             \
+    void *coro_mem = __builtin_coro_free(coro_hdl);                            \
+    if (coro_mem)                                                              \
+      FreeFunc(coro_mem);                                                      \
+  }                                                                            \
   coro_Suspend:                                                                \
-  __builtin_coro_end(0,0);                                                       \
+  __builtin_coro_end(0, 0);                                                    \
   return coro_hdl;
 
 #define CORO_RESUME(hdl) __builtin_coro_resume(hdl)
