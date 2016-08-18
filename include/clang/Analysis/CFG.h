@@ -971,6 +971,7 @@ template <> struct simplify_type< ::clang::CFGTerminator> {
 
 template <> struct GraphTraits< ::clang::CFGBlock *> {
   typedef ::clang::CFGBlock *NodeRef;
+  typedef ::clang::CFGBlock *NodeRef;
   typedef ::clang::CFGBlock::succ_iterator ChildIteratorType;
 
   static NodeRef getEntryNode(::clang::CFGBlock *BB) { return BB; }
@@ -982,6 +983,7 @@ template <> struct GraphTraits< ::clang::CFGBlock *> {
 
 template <> struct GraphTraits< const ::clang::CFGBlock *> {
   typedef const ::clang::CFGBlock *NodeRef;
+  typedef const ::clang::CFGBlock *NodeRef;
   typedef ::clang::CFGBlock::const_succ_iterator ChildIteratorType;
 
   static NodeRef getEntryNode(const clang::CFGBlock *BB) { return BB; }
@@ -992,6 +994,7 @@ template <> struct GraphTraits< const ::clang::CFGBlock *> {
 };
 
 template <> struct GraphTraits<Inverse< ::clang::CFGBlock*> > {
+  typedef ::clang::CFGBlock *NodeRef;
   typedef ::clang::CFGBlock *NodeRef;
   typedef ::clang::CFGBlock::const_pred_iterator ChildIteratorType;
 
@@ -1005,6 +1008,7 @@ template <> struct GraphTraits<Inverse< ::clang::CFGBlock*> > {
 };
 
 template <> struct GraphTraits<Inverse<const ::clang::CFGBlock*> > {
+  typedef const ::clang::CFGBlock *NodeRef;
   typedef const ::clang::CFGBlock *NodeRef;
   typedef ::clang::CFGBlock::const_pred_iterator ChildIteratorType;
 
