@@ -5816,7 +5816,7 @@ Sema::AddOverloadCandidate(FunctionDecl *Function,
       // case we may not yet know what the member's target is; the target is
       // inferred for the member automatically, based on the bases and fields of
       // the class.
-      if (!Caller->isImplicit() && CheckCUDATarget(Caller, Function)) {
+      if (!Caller->isImplicit() && !IsAllowedCUDACall(Caller, Function)) {
         Candidate.Viable = false;
         Candidate.FailureKind = ovl_fail_bad_target;
         return;
@@ -5974,8 +5974,12 @@ EnableIfAttr *Sema::CheckEnableIf(FunctionDecl *Function, ArrayRef<Expr *> Args,
   SmallVector<Expr *, 16> ConvertedArgs;
   bool InitializationFailed = false;
 
+  // Ignore any variadic arguments. Converting them is pointless, since the
+  // user can't refer to them in the enable_if condition.
+  unsigned ArgSizeNoVarargs = std::min(Function->param_size(), Args.size());
+
   // Convert the arguments.
-  for (unsigned I = 0, E = Args.size(); I != E; ++I) {
+  for (unsigned I = 0; I != ArgSizeNoVarargs; ++I) {
     ExprResult R;
     if (I == 0 && !MissingImplicitThis && isa<CXXMethodDecl>(Function) &&
         !cast<CXXMethodDecl>(Function)->isStatic() &&
@@ -6193,7 +6197,7 @@ Sema::AddMethodCandidate(CXXMethodDecl *Method, DeclAccessPair FoundDecl,
   // (CUDA B.1): Check for invalid calls between targets.
   if (getLangOpts().CUDA)
     if (const FunctionDecl *Caller = dyn_cast<FunctionDecl>(CurContext))
-      if (CheckCUDATarget(Caller, Method)) {
+      if (!IsAllowedCUDACall(Caller, Method)) {
         Candidate.Viable = false;
         Candidate.FailureKind = ovl_fail_bad_target;
         return;
@@ -8769,8 +8773,8 @@ OverloadCandidateSet::BestViableFunction(Sema &S, SourceLocation Loc,
   std::transform(begin(), end(), std::back_inserter(Candidates),
                  [](OverloadCandidate &Cand) { return &Cand; });
 
-  // [CUDA] HD->H or HD->D calls are technically not allowed by CUDA
-  // but accepted by both clang and NVCC. However during a particular
+  // [CUDA] HD->H or HD->D calls are technically not allowed by CUDA but
+  // are accepted by both clang and NVCC. However, during a particular
   // compilation mode only one call variant is viable. We need to
   // exclude non-viable overload candidates from consideration based
   // only on their host/device attributes. Specifically, if one
@@ -10468,7 +10472,7 @@ private:
     if (FunctionDecl *FunDecl = dyn_cast<FunctionDecl>(Fn)) {
       if (S.getLangOpts().CUDA)
         if (FunctionDecl *Caller = dyn_cast<FunctionDecl>(S.CurContext))
-          if (!Caller->isImplicit() && S.CheckCUDATarget(Caller, FunDecl))
+          if (!Caller->isImplicit() && !S.IsAllowedCUDACall(Caller, FunDecl))
             return false;
 
       // If any candidate has a placeholder return type, trigger its deduction
@@ -12326,18 +12330,6 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
   CXXMemberCallExpr *TheCall =
     new (Context) CXXMemberCallExpr(Context, MemExprE, Args,
                                     ResultType, VK, RParenLoc);
-
-  // (CUDA B.1): Check for invalid calls between targets.
-  if (getLangOpts().CUDA) {
-    if (const FunctionDecl *Caller = dyn_cast<FunctionDecl>(CurContext)) {
-      if (CheckCUDATarget(Caller, Method)) {
-        Diag(MemExpr->getMemberLoc(), diag::err_ref_bad_target)
-            << IdentifyCUDATarget(Method) << Method->getIdentifier()
-            << IdentifyCUDATarget(Caller);
-        return ExprError();
-      }
-    }
-  }
 
   // Check for a valid return type.
   if (CheckCallReturnType(Method->getReturnType(), MemExpr->getMemberLoc(),

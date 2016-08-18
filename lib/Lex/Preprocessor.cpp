@@ -54,7 +54,7 @@
 #include <utility>
 using namespace clang;
 
-template class llvm::Registry<clang::PragmaHandler>;
+LLVM_INSTANTIATE_REGISTRY(PragmaHandlerRegistry)
 
 //===----------------------------------------------------------------------===//
 ExternalPreprocessorSource::~ExternalPreprocessorSource() { }
@@ -74,7 +74,7 @@ Preprocessor::Preprocessor(IntrusiveRefCntPtr<PreprocessorOptions> PPOpts,
       IncrementalProcessing(false), TUKind(TUKind), CodeComplete(nullptr),
       CodeCompletionFile(nullptr), CodeCompletionOffset(0),
       LastTokenWasAt(false), ModuleImportExpectsIdentifier(false),
-      CodeCompletionReached(0), MainFileDir(nullptr),
+      CodeCompletionReached(0), CodeCompletionII(0), MainFileDir(nullptr),
       SkipMainFilePreamble(0, true), CurPPLexer(nullptr), CurDirLookup(nullptr),
       CurLexerKind(CLK_Lexer), CurSubmodule(nullptr), Callbacks(nullptr),
       CurSubmoduleState(&NullSubmoduleState), MacroArgCache(nullptr),
@@ -618,6 +618,11 @@ static diag::kind getFutureCompatDiagKind(const IdentifierInfo &II,
       "Keyword not known to come from a newer Standard or proposed Standard");
 }
 
+void Preprocessor::updateOutOfDateIdentifier(IdentifierInfo &II) const {
+  assert(II.isOutOfDate() && "not out of date");
+  getExternalSource()->updateOutOfDateIdentifier(II);
+}
+
 /// HandleIdentifier - This callback is invoked when the lexer reads an
 /// identifier.  This callback looks up the identifier in the map and/or
 /// potentially macro expands it or turns it into a named token (like 'for').
@@ -642,7 +647,7 @@ bool Preprocessor::HandleIdentifier(Token &Identifier) {
     if (&II == Ident__VA_ARGS__)
       CurrentIsPoisoned = Ident__VA_ARGS__->isPoisoned();
 
-    ExternalSource->updateOutOfDateIdentifier(II);
+    updateOutOfDateIdentifier(II);
     Identifier.setKind(II.getTokenID());
 
     if (&II == Ident__VA_ARGS__)
@@ -743,6 +748,9 @@ void Preprocessor::Lex(Token &Result) {
       break;
     }
   } while (!ReturnedToken);
+
+  if (Result.is(tok::code_completion))
+    setCodeCompletionIdentifierInfo(Result.getIdentifierInfo());
 
   LastTokenWasAt = Result.is(tok::at);
 }

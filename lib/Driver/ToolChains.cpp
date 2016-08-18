@@ -176,13 +176,6 @@ Darwin::~Darwin() {}
 
 MachO::~MachO() {}
 
-std::string MachO::ComputeEffectiveClangTriple(const ArgList &Args,
-                                               types::ID InputType) const {
-  llvm::Triple Triple(ComputeLLVMTriple(Args, InputType));
-
-  return Triple.getTriple();
-}
-
 std::string Darwin::ComputeEffectiveClangTriple(const ArgList &Args,
                                                 types::ID InputType) const {
   llvm::Triple Triple(ComputeLLVMTriple(Args, InputType));
@@ -380,16 +373,13 @@ StringRef Darwin::getOSLibraryNameSuffix() const {
   llvm_unreachable("Unsupported platform");
 }
 
-void Darwin::addProfileRTLibs(const llvm::Triple &EffectiveTriple,
-                              const ArgList &Args,
+void Darwin::addProfileRTLibs(const ArgList &Args,
                               ArgStringList &CmdArgs) const {
-  if (!needsProfileRT(Args))
-    return;
+  if (!needsProfileRT(Args)) return;
 
-  AddLinkRuntimeLib(
-      Args, CmdArgs,
-      (Twine("libclang_rt.profile_") + getOSLibraryNameSuffix() + ".a").str(),
-      /*AlwaysLink*/ true);
+  AddLinkRuntimeLib(Args, CmdArgs, (Twine("libclang_rt.profile_") +
+       getOSLibraryNameSuffix() + ".a").str(),
+                    /*AlwaysLink*/ true);
 }
 
 void DarwinClang::AddLinkSanitizerLibArgs(const ArgList &Args,
@@ -415,8 +405,7 @@ ToolChain::RuntimeLibType DarwinClang::GetRuntimeLibType(
   return ToolChain::RLT_CompilerRT;
 }
 
-void DarwinClang::AddLinkRuntimeLibArgs(const llvm::Triple &EffectiveTriple,
-                                        const ArgList &Args,
+void DarwinClang::AddLinkRuntimeLibArgs(const ArgList &Args,
                                         ArgStringList &CmdArgs) const {
   // Call once to ensure diagnostic is printed if wrong value was specified
   GetRuntimeLibType(Args);
@@ -483,21 +472,26 @@ void DarwinClang::AddLinkRuntimeLibArgs(const llvm::Triple &EffectiveTriple,
     else if (isMacosxVersionLT(10, 6))
       CmdArgs.push_back("-lgcc_s.10.5");
 
-    // For OS X, we thought we would only need a static runtime library when
-    // targeting 10.4, to provide versions of the static functions which were
-    // omitted from 10.4.dylib.
+    // Originally for OS X, we thought we would only need a static runtime
+    // library when targeting 10.4, to provide versions of the static functions
+    // which were omitted from 10.4.dylib. This led to the creation of the 10.4
+    // builtins library.
     //
     // Unfortunately, that turned out to not be true, because Darwin system
     // headers can still use eprintf on i386, and it is not exported from
     // libSystem. Therefore, we still must provide a runtime library just for
     // the tiny tiny handful of projects that *might* use that symbol.
-    if (isMacosxVersionLT(10, 5)) {
+    //
+    // Then over time, we figured out it was useful to add more things to the
+    // runtime so we created libclang_rt.osx.a to provide new functions when
+    // deploying to old OS builds, and for a long time we had both eprintf and
+    // osx builtin libraries. Which just seems excessive. So with PR 28855, we
+    // are removing the eprintf library and expecting eprintf to be provided by
+    // the OS X builtins library.
+    if (isMacosxVersionLT(10, 5))
       AddLinkRuntimeLib(Args, CmdArgs, "libclang_rt.10.4.a");
-    } else {
-      if (getTriple().getArch() == llvm::Triple::x86)
-        AddLinkRuntimeLib(Args, CmdArgs, "libclang_rt.eprintf.a");
+    else
       AddLinkRuntimeLib(Args, CmdArgs, "libclang_rt.osx.a");
-    }
   }
 }
 
@@ -1021,17 +1015,16 @@ DerivedArgList *MachO::TranslateArgs(const DerivedArgList &Args,
   return DAL;
 }
 
-void MachO::AddLinkRuntimeLibArgs(const llvm::Triple &EffectiveTriple,
-                                  const ArgList &Args,
+void MachO::AddLinkRuntimeLibArgs(const ArgList &Args,
                                   ArgStringList &CmdArgs) const {
   // Embedded targets are simple at the moment, not supporting sanitizers and
   // with different libraries for each member of the product { static, PIC } x
   // { hard-float, soft-float }
   llvm::SmallString<32> CompilerRT = StringRef("libclang_rt.");
-  CompilerRT += (tools::arm::getARMFloatABI(*this, EffectiveTriple, Args) ==
-                 tools::arm::FloatABI::Hard)
-                    ? "hard"
-                    : "soft";
+  CompilerRT +=
+      (tools::arm::getARMFloatABI(*this, Args) == tools::arm::FloatABI::Hard)
+          ? "hard"
+          : "soft";
   CompilerRT += Args.hasArg(options::OPT_fPIC) ? "_pic.a" : "_static.a";
 
   AddLinkRuntimeLib(Args, CmdArgs, CompilerRT, false, true);
@@ -1742,8 +1735,8 @@ static CudaVersion ParseCudaVersionFile(llvm::StringRef V) {
   int Major = -1, Minor = -1;
   auto First = V.split('.');
   auto Second = First.second.split('.');
-  if (!First.first.getAsInteger(10, Major) ||
-      !Second.first.getAsInteger(10, Minor))
+  if (First.first.getAsInteger(10, Major) ||
+      Second.first.getAsInteger(10, Minor))
     return CudaVersion::UNKNOWN;
 
   if (Major == 7 && Minor == 0) {
@@ -1803,22 +1796,32 @@ void Generic_GCC::CudaInstallationDetector::init(
           LibDeviceName.size(), FileName.find('.', LibDeviceName.size()));
       LibDeviceMap[GpuArch] = FilePath.str();
       // Insert map entries for specifc devices with this compute capability.
+      // NVCC's choice of libdevice library version is rather peculiar:
+      // http://docs.nvidia.com/cuda/libdevice-users-guide/basic-usage.html#version-selection
+      // TODO: this will need to be updated once CUDA-8 is released.
       if (GpuArch == "compute_20") {
         LibDeviceMap["sm_20"] = FilePath;
         LibDeviceMap["sm_21"] = FilePath;
+        LibDeviceMap["sm_32"] = FilePath;
       } else if (GpuArch == "compute_30") {
         LibDeviceMap["sm_30"] = FilePath;
-        LibDeviceMap["sm_32"] = FilePath;
+        // compute_30 is the fallback libdevice variant for sm_30+,
+        // unless CUDA specifies different version for specific GPU
+        // arch.
+        LibDeviceMap["sm_50"] = FilePath;
+        LibDeviceMap["sm_52"] = FilePath;
+        LibDeviceMap["sm_53"] = FilePath;
+        // sm_6? are currently all aliases for sm_53 in LLVM and
+        // should use compute_30.
+        LibDeviceMap["sm_60"] = FilePath;
+        LibDeviceMap["sm_61"] = FilePath;
+        LibDeviceMap["sm_62"] = FilePath;
       } else if (GpuArch == "compute_35") {
         LibDeviceMap["sm_35"] = FilePath;
         LibDeviceMap["sm_37"] = FilePath;
       } else if (GpuArch == "compute_50") {
-        LibDeviceMap["sm_50"] = FilePath;
-        LibDeviceMap["sm_52"] = FilePath;
-        LibDeviceMap["sm_53"] = FilePath;
-        LibDeviceMap["sm_60"] = FilePath;
-        LibDeviceMap["sm_61"] = FilePath;
-        LibDeviceMap["sm_62"] = FilePath;
+        // NVCC does not use compute_50 libdevice at all at the moment.
+        // The version that's shipped with CUDA-7.5 is a copy of compute_30.
       }
     }
 
@@ -2923,10 +2926,9 @@ void MipsLLVMToolChain::AddCXXStdlibLibArgs(const ArgList &Args,
   CmdArgs.push_back("-lunwind");
 }
 
-std::string
-MipsLLVMToolChain::getCompilerRT(const llvm::Triple &EffectiveTriple,
-                                 const ArgList &Args, StringRef Component,
-                                 bool Shared) const {
+std::string MipsLLVMToolChain::getCompilerRT(const ArgList &Args,
+                                             StringRef Component,
+                                             bool Shared) const {
   SmallString<128> Path(getDriver().ResourceDir);
   llvm::sys::path::append(Path, SelectedMultilib.osSuffix(), "lib" + LibSuffix,
                           getOS());
@@ -3345,6 +3347,19 @@ void CloudABI::AddCXXStdlibLibArgs(const ArgList &Args,
 
 Tool *CloudABI::buildLinker() const {
   return new tools::cloudabi::Linker(*this);
+}
+
+bool CloudABI::isPIEDefault() const {
+  // Only enable PIE on architectures that support PC-relative
+  // addressing. PC-relative addressing is required, as the process
+  // startup code must be able to relocate itself.
+  switch (getTriple().getArch()) {
+  case llvm::Triple::aarch64:
+  case llvm::Triple::x86_64:
+    return true;
+  default:
+    return false;
+  }
 }
 
 SanitizerMask CloudABI::getSupportedSanitizers() const {
@@ -4277,19 +4292,28 @@ std::string Linux::getDynamicLinker(const ArgList &Args) const {
 
   if (Triple.isAndroid())
     return Triple.isArch64Bit() ? "/system/bin/linker64" : "/system/bin/linker";
-  else if (Triple.isMusl()) {
+
+  if (Triple.isMusl()) {
     std::string ArchName;
+    bool IsArm = false;
+
     switch (Arch) {
+    case llvm::Triple::arm:
     case llvm::Triple::thumb:
       ArchName = "arm";
+      IsArm = true;
       break;
+    case llvm::Triple::armeb:
     case llvm::Triple::thumbeb:
       ArchName = "armeb";
+      IsArm = true;
       break;
     default:
       ArchName = Triple.getArchName().str();
     }
-    if (Triple.getEnvironment() == llvm::Triple::MuslEABIHF)
+    if (IsArm &&
+        (Triple.getEnvironment() == llvm::Triple::MuslEABIHF ||
+         tools::arm::getARMFloatABI(*this, Args) == tools::arm::FloatABI::Hard))
       ArchName += "hf";
 
     return "/lib/ld-musl-" + ArchName + ".so.1";
@@ -4314,9 +4338,9 @@ std::string Linux::getDynamicLinker(const ArgList &Args) const {
   case llvm::Triple::thumb:
   case llvm::Triple::armeb:
   case llvm::Triple::thumbeb: {
-    const bool HF = Triple.getEnvironment() == llvm::Triple::GNUEABIHF ||
-                    tools::arm::getARMFloatABI(*this, Triple, Args) ==
-                        tools::arm::FloatABI::Hard;
+    const bool HF =
+        Triple.getEnvironment() == llvm::Triple::GNUEABIHF ||
+        tools::arm::getARMFloatABI(*this, Args) == tools::arm::FloatABI::Hard;
 
     LibDir = "lib";
     Loader = HF ? "ld-linux-armhf.so.3" : "ld-linux.so.3";
@@ -4708,18 +4732,16 @@ SanitizerMask Linux::getSupportedSanitizers() const {
   return Res;
 }
 
-void Linux::addProfileRTLibs(const llvm::Triple &EffectiveTriple,
-                             const llvm::opt::ArgList &Args,
+void Linux::addProfileRTLibs(const llvm::opt::ArgList &Args,
                              llvm::opt::ArgStringList &CmdArgs) const {
-  if (!needsProfileRT(Args))
-    return;
+  if (!needsProfileRT(Args)) return;
 
   // Add linker option -u__llvm_runtime_variable to cause runtime
   // initialization module to be linked in.
   if (!Args.hasArg(options::OPT_coverage))
     CmdArgs.push_back(Args.MakeArgString(
         Twine("-u", llvm::getInstrProfRuntimeHookVarName())));
-  ToolChain::addProfileRTLibs(EffectiveTriple, Args, CmdArgs);
+  ToolChain::addProfileRTLibs(Args, CmdArgs);
 }
 
 /// DragonFly - DragonFly tool chain which can call as(1) and ld(1) directly.
@@ -4774,18 +4796,23 @@ CudaToolChain::addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
   if (DriverArgs.hasArg(options::OPT_nocudalib))
     return;
 
-  std::string LibDeviceFile = CudaInstallation.getLibDeviceFile(
-      DriverArgs.getLastArgValue(options::OPT_march_EQ));
-  if (!LibDeviceFile.empty()) {
-    CC1Args.push_back("-mlink-cuda-bitcode");
-    CC1Args.push_back(DriverArgs.MakeArgString(LibDeviceFile));
+  StringRef GpuArch = DriverArgs.getLastArgValue(options::OPT_march_EQ);
+  assert(!GpuArch.empty() && "Must have an explicit GPU arch.");
+  std::string LibDeviceFile = CudaInstallation.getLibDeviceFile(GpuArch);
 
-    // Libdevice in CUDA-7.0 requires PTX version that's more recent
-    // than LLVM defaults to. Use PTX4.2 which is the PTX version that
-    // came with CUDA-7.0.
-    CC1Args.push_back("-target-feature");
-    CC1Args.push_back("+ptx42");
+  if (LibDeviceFile.empty()) {
+    getDriver().Diag(diag::err_drv_no_cuda_libdevice) << GpuArch;
+    return;
   }
+
+  CC1Args.push_back("-mlink-cuda-bitcode");
+  CC1Args.push_back(DriverArgs.MakeArgString(LibDeviceFile));
+
+  // Libdevice in CUDA-7.0 requires PTX version that's more recent
+  // than LLVM defaults to. Use PTX4.2 which is the PTX version that
+  // came with CUDA-7.0.
+  CC1Args.push_back("-target-feature");
+  CC1Args.push_back("+ptx42");
 }
 
 void CudaToolChain::AddCudaIncludeArgs(const ArgList &DriverArgs,

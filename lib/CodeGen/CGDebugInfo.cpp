@@ -518,9 +518,8 @@ llvm::DIType *CGDebugInfo::CreateType(const BuiltinType *BT) {
                                     SingletonId);
 #include "clang/Basic/OpenCLImageTypes.def"
   case BuiltinType::OCLSampler:
-    return DBuilder.createBasicType(
-        "opencl_sampler_t", CGM.getContext().getTypeSize(BT),
-        CGM.getContext().getTypeAlign(BT), llvm::dwarf::DW_ATE_unsigned);
+    return getOrCreateStructPtrType("opencl_sampler_t",
+                                    OCLSamplerDITy);
   case BuiltinType::OCLEvent:
     return getOrCreateStructPtrType("opencl_event_t", OCLEventDITy);
   case BuiltinType::OCLClkEvent:
@@ -1093,6 +1092,9 @@ void CGDebugInfo::CollectRecordNormalField(
 void CGDebugInfo::CollectRecordNestedRecord(
     const RecordDecl *RD, SmallVectorImpl<llvm::Metadata *> &elements) {
   QualType Ty = CGM.getContext().getTypeDeclType(RD);
+  // Injected class names are not considered nested records.
+  if (isa<InjectedClassNameType>(Ty))
+    return;
   SourceLocation Loc = RD->getLocation();
   llvm::DIType *nestedType = getOrCreateType(Ty, getOrCreateFile(Loc));
   elements.push_back(nestedType);
@@ -1654,12 +1656,15 @@ static bool isDefinedInClangModule(const RecordDecl *RD) {
     return false;
   if (auto *CXXDecl = dyn_cast<CXXRecordDecl>(RD)) {
     assert(CXXDecl->isCompleteDefinition() && "incomplete record definition");
-    if (CXXDecl->getTemplateSpecializationKind() != TSK_Undeclared)
-      // Make sure the instantiation is actually in a module.
-      if (CXXDecl->field_begin() != CXXDecl->field_end())
-        return CXXDecl->field_begin()->isFromASTFile();
+    auto TemplateKind = CXXDecl->getTemplateSpecializationKind();
+    if (TemplateKind != TSK_Undeclared) {
+      // This is a template, check the origin of the first member.
+      if (CXXDecl->field_begin() == CXXDecl->field_end())
+        return TemplateKind == TSK_ExplicitInstantiationDeclaration;
+      if (!CXXDecl->field_begin()->isFromASTFile())
+        return false;
+    }
   }
-
   return true;
 }
 
@@ -1683,7 +1688,12 @@ static bool shouldOmitDefinition(codegenoptions::DebugInfoKind DebugKind,
   if (!CXXDecl)
     return false;
 
-  if (CXXDecl->hasDefinition() && CXXDecl->isDynamicClass())
+  // Only emit complete debug info for a dynamic class when its vtable is
+  // emitted.  However, Microsoft debuggers don't resolve type information
+  // across DLL boundaries, so skip this optimization if the class is marked
+  // dllimport.
+  if (CXXDecl->hasDefinition() && CXXDecl->isDynamicClass() &&
+      !CXXDecl->hasAttr<DLLImportAttr>())
     return true;
 
   TemplateSpecializationKind Spec = TSK_Undeclared;
@@ -2639,6 +2649,9 @@ void CGDebugInfo::collectFunctionDeclProps(GlobalDecl GD, llvm::DIFile *Unit,
       llvm::DIScope *Mod = getParentModuleOrNull(RDecl);
       FDContext = getContextDescriptor(RDecl, Mod ? Mod : TheCU);
     }
+    // Check if it is a noreturn-marked function
+    if (FD->isNoReturn())
+      Flags |= llvm::DINode::FlagNoReturn;
     // Collect template parameters.
     TParamsArray = CollectFunctionTemplateParams(FD, Unit);
   }
@@ -3652,6 +3665,16 @@ void CGDebugInfo::EmitUsingDecl(const UsingDecl &UD) {
   // Emitting one decl is sufficient - debuggers can detect that this is an
   // overloaded name & provide lookup for all the overloads.
   const UsingShadowDecl &USD = **UD.shadow_begin();
+
+  // FIXME: Skip functions with undeduced auto return type for now since we
+  // don't currently have the plumbing for separate declarations & definitions
+  // of free functions and mismatched types (auto in the declaration, concrete
+  // return type in the definition)
+  if (const auto *FD = dyn_cast<FunctionDecl>(USD.getUnderlyingDecl()))
+    if (const auto *AT =
+            FD->getType()->getAs<FunctionProtoType>()->getContainedAutoType())
+      if (AT->getDeducedType().isNull())
+        return;
   if (llvm::DINode *Target =
           getDeclarationOrDefinition(USD.getUnderlyingDecl()))
     DBuilder.createImportedDeclaration(

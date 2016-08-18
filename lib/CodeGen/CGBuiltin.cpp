@@ -2252,8 +2252,9 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
       NewArg = Builder.CreateAddrSpaceCast(Arg0, NewArgT);
     else
       NewArg = Builder.CreateBitOrPointerCast(Arg0, NewArgT);
-    auto NewCall = Builder.CreateCall(CGM.CreateRuntimeFunction(FTy,
-      E->getDirectCallee()->getName()), {NewArg});
+    auto NewName = std::string("__") + E->getDirectCallee()->getName().str();
+    auto NewCall =
+        Builder.CreateCall(CGM.CreateRuntimeFunction(FTy, NewName), {NewArg});
     return RValue::get(Builder.CreateBitOrPointerCast(NewCall,
       ConvertType(E->getType())));
   }
@@ -7062,7 +7063,7 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
   case X86::BI__builtin_ia32_vbroadcastf128_pd256:
   case X86::BI__builtin_ia32_vbroadcastf128_ps256: {
     llvm::Type *DstTy = ConvertType(E->getType());
-    return EmitX86SubVectorBroadcast(*this, Ops, DstTy, 128, 16);
+    return EmitX86SubVectorBroadcast(*this, Ops, DstTy, 128, 1);
   }
 
   case X86::BI__builtin_ia32_storehps:
@@ -7731,6 +7732,14 @@ Value *CodeGenFunction::EmitAMDGPUBuiltinExpr(unsigned BuiltinID,
     return emitUnaryBuiltin(*this, E, Intrinsic::amdgcn_fract);
   case AMDGPU::BI__builtin_amdgcn_lerp:
     return emitTernaryBuiltin(*this, E, Intrinsic::amdgcn_lerp);
+  case AMDGPU::BI__builtin_amdgcn_uicmp:
+  case AMDGPU::BI__builtin_amdgcn_uicmpl:
+  case AMDGPU::BI__builtin_amdgcn_sicmp:
+  case AMDGPU::BI__builtin_amdgcn_sicmpl:
+    return emitTernaryBuiltin(*this, E, Intrinsic::amdgcn_icmp);
+  case AMDGPU::BI__builtin_amdgcn_fcmp:
+  case AMDGPU::BI__builtin_amdgcn_fcmpf:
+    return emitTernaryBuiltin(*this, E, Intrinsic::amdgcn_fcmp);
   case AMDGPU::BI__builtin_amdgcn_class:
   case AMDGPU::BI__builtin_amdgcn_classf:
     return emitFPIntBuiltin(*this, E, Intrinsic::amdgcn_class);

@@ -1579,7 +1579,10 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     return llvm::Constant::getNullValue(ConvertType(DestTy));
   }
 
-  }
+  case CK_IntToOCLSampler:
+    return CGF.CGM.createOpenCLIntToSamplerConversion(E, CGF);
+
+  } // end of switch
 
   llvm_unreachable("unknown scalar cast");
 }
@@ -2279,8 +2282,13 @@ Value *ScalarExprEmitter::EmitDiv(const BinOpInfo &Ops) {
 
   if (Ops.LHS->getType()->isFPOrFPVectorTy()) {
     llvm::Value *Val = Builder.CreateFDiv(Ops.LHS, Ops.RHS, "div");
-    if (CGF.getLangOpts().OpenCL) {
-      // OpenCL 1.1 7.4: minimum accuracy of single precision / is 2.5ulp
+    if (CGF.getLangOpts().OpenCL &&
+        !CGF.CGM.getCodeGenOpts().CorrectlyRoundedDivSqrt) {
+      // OpenCL v1.1 s7.4: minimum accuracy of single precision / is 2.5ulp
+      // OpenCL v1.2 s5.6.4.2: The -cl-fp32-correctly-rounded-divide-sqrt
+      // build option allows an application to specify that single precision
+      // floating-point divide (x/y and 1/x) and sqrt used in the program
+      // source are correctly rounded.
       llvm::Type *ValTy = Val->getType();
       if (ValTy->isFloatTy() ||
           (isa<llvm::VectorType>(ValTy) &&
@@ -2369,9 +2377,8 @@ Value *ScalarExprEmitter::EmitOverflowCheckedBinOp(const BinOpInfo &Ops) {
 
   // Branch in case of overflow.
   llvm::BasicBlock *initialBB = Builder.GetInsertBlock();
-  llvm::Function::iterator insertPt = initialBB->getIterator();
-  llvm::BasicBlock *continueBB = CGF.createBasicBlock("nooverflow", CGF.CurFn,
-                                                      &*std::next(insertPt));
+  llvm::BasicBlock *continueBB =
+      CGF.createBasicBlock("nooverflow", CGF.CurFn, initialBB->getNextNode());
   llvm::BasicBlock *overflowBB = CGF.createBasicBlock("overflow", CGF.CurFn);
 
   Builder.CreateCondBr(overflow, overflowBB, continueBB);
@@ -2712,7 +2719,8 @@ Value *ScalarExprEmitter::EmitShl(const BinOpInfo &Ops) {
     RHS = Builder.CreateIntCast(RHS, Ops.LHS->getType(), false, "sh_prom");
 
   bool SanitizeBase = CGF.SanOpts.has(SanitizerKind::ShiftBase) &&
-                      Ops.Ty->hasSignedIntegerRepresentation();
+                      Ops.Ty->hasSignedIntegerRepresentation() &&
+                      !CGF.getLangOpts().isSignedOverflowDefined();
   bool SanitizeExponent = CGF.SanOpts.has(SanitizerKind::ShiftExponent);
   // OpenCL 6.3j: shift values are effectively % word size of LHS.
   if (CGF.getLangOpts().OpenCL)

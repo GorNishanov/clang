@@ -88,31 +88,39 @@ Driver::~Driver() {
   llvm::DeleteContainerSeconds(ToolChains);
 }
 
-void Driver::ParseDriverMode(ArrayRef<const char *> Args) {
-  const std::string OptName =
-      getOpts().getOption(options::OPT_driver_mode).getPrefixedName();
+void Driver::ParseDriverMode(StringRef ProgramName,
+                             ArrayRef<const char *> Args) {
+  auto Default = ToolChain::getTargetAndModeFromProgramName(ProgramName);
+  StringRef DefaultMode(Default.second);
+  setDriverModeFromOption(DefaultMode);
 
   for (const char *ArgPtr : Args) {
     // Ingore nullptrs, they are response file's EOL markers
     if (ArgPtr == nullptr)
       continue;
     const StringRef Arg = ArgPtr;
-    if (!Arg.startswith(OptName))
-      continue;
-
-    const StringRef Value = Arg.drop_front(OptName.size());
-    const unsigned M = llvm::StringSwitch<unsigned>(Value)
-                           .Case("gcc", GCCMode)
-                           .Case("g++", GXXMode)
-                           .Case("cpp", CPPMode)
-                           .Case("cl", CLMode)
-                           .Default(~0U);
-
-    if (M != ~0U)
-      Mode = static_cast<DriverMode>(M);
-    else
-      Diag(diag::err_drv_unsupported_option_argument) << OptName << Value;
+    setDriverModeFromOption(Arg);
   }
+}
+
+void Driver::setDriverModeFromOption(StringRef Opt) {
+  const std::string OptName =
+      getOpts().getOption(options::OPT_driver_mode).getPrefixedName();
+  if (!Opt.startswith(OptName))
+    return;
+  StringRef Value = Opt.drop_front(OptName.size());
+
+  const unsigned M = llvm::StringSwitch<unsigned>(Value)
+                         .Case("gcc", GCCMode)
+                         .Case("g++", GXXMode)
+                         .Case("cpp", CPPMode)
+                         .Case("cl", CLMode)
+                         .Default(~0U);
+
+  if (M != ~0U)
+    Mode = static_cast<DriverMode>(M);
+  else
+    Diag(diag::err_drv_unsupported_option_argument) << OptName << Value;
 }
 
 InputArgList Driver::ParseArgStrings(ArrayRef<const char *> ArgStrings) {
@@ -468,7 +476,7 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
 
   // We look for the driver mode option early, because the mode can affect
   // how other options are parsed.
-  ParseDriverMode(ArgList.slice(1));
+  ParseDriverMode(ClangExecutable, ArgList.slice(1));
 
   // FIXME: What are we going to do with -V and -b?
 
@@ -1407,11 +1415,19 @@ static Action *buildCudaActions(Compilation &C, DerivedArgList &Args,
   bool CompileDeviceOnly =
       PartialCompilationArg &&
       PartialCompilationArg->getOption().matches(options::OPT_cuda_device_only);
+  const ToolChain *HostTC = C.getSingleOffloadToolChain<Action::OFK_Host>();
+  assert(HostTC && "No toolchain for host compilation.");
+  if (HostTC->getTriple().isNVPTX()) {
+    // We do not support targeting NVPTX for host compilation. Throw
+    // an error and abort pipeline construction early so we don't trip
+    // asserts that assume device-side compilation.
+    C.getDriver().Diag(diag::err_drv_cuda_nvptx_host);
+    return nullptr;
+  }
 
   if (CompileHostOnly) {
-    OffloadAction::HostDependence HDep(
-        *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
-        /*BoundArch=*/nullptr, Action::OFK_Cuda);
+    OffloadAction::HostDependence HDep(*HostAction, *HostTC,
+                                       /*BoundArch=*/nullptr, Action::OFK_Cuda);
     return C.MakeAction<OffloadAction>(HDep);
   }
 
@@ -1507,9 +1523,8 @@ static Action *buildCudaActions(Compilation &C, DerivedArgList &Args,
 
   // Return a new host action that incorporates original host action and all
   // device actions.
-  OffloadAction::HostDependence HDep(
-      *HostAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
-      /*BoundArch=*/nullptr, Action::OFK_Cuda);
+  OffloadAction::HostDependence HDep(*HostAction, *HostTC,
+                                     /*BoundArch=*/nullptr, Action::OFK_Cuda);
   OffloadAction::DeviceDependences DDep;
   DDep.add(*FatbinAction, *CudaTC, /*BoundArch=*/nullptr, Action::OFK_Cuda);
   return C.MakeAction<OffloadAction>(HDep, DDep);
@@ -2247,6 +2262,19 @@ InputInfo Driver::BuildJobsForActionNoCache(
     InputInfos.append(OffloadDependencesInputInfo.begin(),
                       OffloadDependencesInputInfo.end());
 
+  // Set the effective triple of the toolchain for the duration of this job.
+  llvm::Triple EffectiveTriple;
+  const ToolChain &ToolTC = T->getToolChain();
+  const ArgList &Args = C.getArgsForToolChain(TC, BoundArch);
+  if (InputInfos.size() != 1) {
+    EffectiveTriple = llvm::Triple(ToolTC.ComputeEffectiveClangTriple(Args));
+  } else {
+    // Pass along the input type if it can be unambiguously determined.
+    EffectiveTriple = llvm::Triple(
+        ToolTC.ComputeEffectiveClangTriple(Args, InputInfos[0].getType()));
+  }
+  RegisterEffectiveTriple TripleRAII(ToolTC, EffectiveTriple);
+
   // Determine the place to write output to, if any.
   InputInfo Result;
   if (JA->getType() == types::TY_Nothing)
@@ -2257,21 +2285,7 @@ InputInfo Driver::BuildJobsForActionNoCache(
                                              TC->getTriple().normalize()),
                        BaseInput);
 
-  llvm::Triple EffectiveTriple;
-  const ArgList &Args = C.getArgsForToolChain(TC, BoundArch);
-  if (InputInfos.size() != 1) {
-    EffectiveTriple = llvm::Triple(
-        T->getToolChain().ComputeEffectiveClangTriple(Args));
-  } else {
-    // Pass along the input type if it can be unambiguously determined.
-    EffectiveTriple =
-        llvm::Triple(T->getToolChain().ComputeEffectiveClangTriple(
-            Args, InputInfos[0].getType()));
-  }
-
   if (CCCPrintBindings && !CCGenDiagnostics) {
-    // FIXME: We should be able to use the effective triple here, but doing so
-    // breaks some multi-arch tests.
     llvm::errs() << "# \"" << T->getToolChain().getTripleString() << '"'
                  << " - \"" << T->getName() << "\", inputs: [";
     for (unsigned i = 0, e = InputInfos.size(); i != e; ++i) {
@@ -2281,7 +2295,7 @@ InputInfo Driver::BuildJobsForActionNoCache(
     }
     llvm::errs() << "], output: " << Result.getAsString() << "\n";
   } else {
-    T->ConstructJob(C, *JA, Result, InputInfos, EffectiveTriple,
+    T->ConstructJob(C, *JA, Result, InputInfos,
                     C.getArgsForToolChain(TC, BoundArch), LinkingOutput);
   }
   return Result;

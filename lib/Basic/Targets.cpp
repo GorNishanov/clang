@@ -21,6 +21,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
 #include "clang/Basic/Version.h"
+#include "clang/Frontend/CodeGenOptions.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -805,7 +806,7 @@ public:
     this->SizeType = TargetInfo::UnsignedInt;
     this->PtrDiffType = TargetInfo::SignedInt;
     this->IntPtrType = TargetInfo::SignedInt;
-    // RegParmMax is inherited from the underlying architecture
+    // RegParmMax is inherited from the underlying architecture.
     this->LongDoubleFormat = &llvm::APFloat::IEEEdouble;
     if (Triple.getArch() == llvm::Triple::arm) {
       // Handled in ARM's setABI().
@@ -1960,23 +1961,27 @@ class AMDGPUTargetInfo final : public TargetInfo {
   bool hasFP64:1;
   bool hasFMAF:1;
   bool hasLDEXPF:1;
+  bool hasDenormSupport:1;
 
   static bool isAMDGCN(const llvm::Triple &TT) {
     return TT.getArch() == llvm::Triple::amdgcn;
   }
 
 public:
-  AMDGPUTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
+  AMDGPUTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
     : TargetInfo(Triple) ,
       GPU(isAMDGCN(Triple) ? GK_SOUTHERN_ISLANDS : GK_R600),
       hasFP64(false),
       hasFMAF(false),
-      hasLDEXPF(false) {
+      hasLDEXPF(false),
+      hasDenormSupport(false){
     if (getTriple().getArch() == llvm::Triple::amdgcn) {
       hasFP64 = true;
       hasFMAF = true;
       hasLDEXPF = true;
     }
+    if (Opts.CPU == "fiji")
+      hasDenormSupport = true;
 
     resetDataLayout(getTriple().getArch() == llvm::Triple::amdgcn ?
                     DataLayoutStringSI : DataLayoutStringR600);
@@ -2024,6 +2029,26 @@ public:
   bool initFeatureMap(llvm::StringMap<bool> &Features,
                       DiagnosticsEngine &Diags, StringRef CPU,
                       const std::vector<std::string> &FeatureVec) const override;
+
+  void adjustTargetOptions(const CodeGenOptions &CGOpts,
+                           TargetOptions &TargetOpts) const override {
+    if (!hasDenormSupport)
+      return;
+    bool hasFP32Denormals = false;
+    bool hasFP64Denormals = false;
+    for (auto &I : TargetOpts.FeaturesAsWritten) {
+      if (I == "+fp32-denormals" || I == "-fp32-denormals")
+        hasFP32Denormals = true;
+      if (I == "+fp64-denormals" || I == "-fp64-denormals")
+        hasFP64Denormals = true;
+    }
+    if (!hasFP32Denormals)
+      TargetOpts.Features.push_back((Twine(CGOpts.FlushDenorm ? '-' : '+') +
+                                     Twine("fp32-denormals")).str());
+    if (!hasFP64Denormals && hasFP64)
+      TargetOpts.Features.push_back((Twine(CGOpts.FlushDenorm ? '-' : '+') +
+                                     Twine("fp64-denormals")).str());
+  }
 
   ArrayRef<Builtin::Info> getTargetBuiltins() const override {
     return llvm::makeArrayRef(BuiltinInfo,
@@ -2126,8 +2151,16 @@ public:
       Opts.cl_khr_fp16 = 1;
       Opts.cl_khr_int64_base_atomics = 1;
       Opts.cl_khr_int64_extended_atomics = 1;
+      Opts.cl_khr_mipmap_image = 1;
+      Opts.cl_khr_subgroups = 1;
       Opts.cl_khr_3d_image_writes = 1;
+      Opts.cl_amd_media_ops = 1;
+      Opts.cl_amd_media_ops2 = 1;
     }
+  }
+
+  LangAS::ID getOpenCLImageAddrSpace() const override {
+    return LangAS::opencl_constant;
   }
 
   CallingConvCheckResult checkCallingConvention(CallingConv CC) const override {
@@ -4869,7 +4902,7 @@ public:
       // the frontend matches that.
       if (Triple.getEnvironment() == llvm::Triple::EABI ||
           Triple.getOS() == llvm::Triple::UnknownOS ||
-          StringRef(CPU).startswith("cortex-m")) {
+          ArchProfile == llvm::ARM::PK_M) {
         setABI("aapcs");
       } else if (Triple.isWatchABI()) {
         setABI("aapcs16");
@@ -5198,7 +5231,7 @@ public:
     if (SoftFloat)
       Builder.defineMacro("__SOFTFP__");
 
-    if (CPU == "xscale")
+    if (ArchKind == llvm::ARM::AK_XSCALE)
       Builder.defineMacro("__XSCALE__");
 
     if (isThumb()) {
@@ -5726,16 +5759,9 @@ public:
   }
 
   bool setCPU(const std::string &Name) override {
-    bool CPUKnown = llvm::StringSwitch<bool>(Name)
-                        .Case("generic", true)
-                        .Cases("cortex-a53", "cortex-a57", "cortex-a72",
-                               "cortex-a35", "exynos-m1", true)
-                        .Case("cortex-a73", true)
-                        .Case("cyclone", true)
-                        .Case("kryo", true)
-                        .Case("vulcan", true)
-                        .Default(false);
-    return CPUKnown;
+    return Name == "generic" ||
+           llvm::AArch64::parseCPUArch(Name) !=
+           static_cast<unsigned>(llvm::AArch64::ArchKind::AK_INVALID);
   }
 
   void getTargetDefines(const LangOptions &Opts,
@@ -8113,6 +8139,7 @@ public:
                                      Triple.getOSName(),
                                      Triple.getEnvironmentName()),
                         Opts) {
+    IsRenderScriptTarget = true;
     LongWidth = LongAlign = 64;
   }
   void getTargetDefines(const LangOptions &Opts,
@@ -8130,7 +8157,9 @@ public:
       : AArch64leTargetInfo(llvm::Triple("aarch64", Triple.getVendorName(),
                                          Triple.getOSName(),
                                          Triple.getEnvironmentName()),
-                            Opts) {}
+                            Opts) {
+    IsRenderScriptTarget = true;
+  }
 
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {

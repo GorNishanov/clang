@@ -170,12 +170,12 @@ namespace clang {
       ASTReader &Reader;
       NamedDecl *New;
       NamedDecl *Existing;
-      mutable bool AddResult;
+      bool AddResult;
 
       unsigned AnonymousDeclNumber;
       IdentifierInfo *TypedefNameForLinkage;
 
-      void operator=(FindExistingResult&) = delete;
+      void operator=(FindExistingResult &&) = delete;
 
     public:
       FindExistingResult(ASTReader &Reader)
@@ -189,7 +189,7 @@ namespace clang {
             AnonymousDeclNumber(AnonymousDeclNumber),
             TypedefNameForLinkage(TypedefNameForLinkage) {}
 
-      FindExistingResult(const FindExistingResult &Other)
+      FindExistingResult(FindExistingResult &&Other)
           : Reader(Other.Reader), New(Other.New), Existing(Other.Existing),
             AddResult(Other.AddResult),
             AnonymousDeclNumber(Other.AnonymousDeclNumber),
@@ -312,6 +312,8 @@ namespace clang {
     void VisitVarDecl(VarDecl *VD) { VisitVarDeclImpl(VD); }
     void VisitImplicitParamDecl(ImplicitParamDecl *PD);
     void VisitParmVarDecl(ParmVarDecl *PD);
+    void VisitDecompositionDecl(DecompositionDecl *DD);
+    void VisitBindingDecl(BindingDecl *BD);
     void VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *D);
     DeclID VisitTemplateDecl(TemplateDecl *D);
     RedeclarableResult VisitRedeclarableTemplateDecl(RedeclarableTemplateDecl *D);
@@ -436,8 +438,9 @@ public:
 };
 } // end anonymous namespace
 
-template<typename DeclT>
-llvm::iterator_range<MergedRedeclIterator<DeclT>> merged_redecls(DeclT *D) {
+template <typename DeclT>
+static llvm::iterator_range<MergedRedeclIterator<DeclT>>
+merged_redecls(DeclT *D) {
   return llvm::make_range(MergedRedeclIterator<DeclT>(D),
                           MergedRedeclIterator<DeclT>());
 }
@@ -1292,6 +1295,18 @@ void ASTDeclReader::VisitParmVarDecl(ParmVarDecl *PD) {
 
   // FIXME: If this is a redeclaration of a function from another module, handle
   // inheritance of default arguments.
+}
+
+void ASTDeclReader::VisitDecompositionDecl(DecompositionDecl *DD) {
+  VisitVarDecl(DD);
+  BindingDecl **BDs = DD->getTrailingObjects<BindingDecl*>();
+  for (unsigned I = 0; I != DD->NumBindings; ++I)
+    BDs[I] = ReadDeclAs<BindingDecl>(Record, Idx);
+}
+
+void ASTDeclReader::VisitBindingDecl(BindingDecl *BD) {
+  VisitValueDecl(BD);
+  BD->Binding = Reader.ReadExpr(F);
 }
 
 void ASTDeclReader::VisitFileScopeAsmDecl(FileScopeAsmDecl *AD) {
@@ -3398,6 +3413,12 @@ Decl *ASTReader::ReadDeclRecord(DeclID ID) {
     break;
   case DECL_PARM_VAR:
     D = ParmVarDecl::CreateDeserialized(Context, ID);
+    break;
+  case DECL_DECOMPOSITION:
+    D = DecompositionDecl::CreateDeserialized(Context, ID, Record[Idx++]);
+    break;
+  case DECL_BINDING:
+    D = BindingDecl::CreateDeserialized(Context, ID);
     break;
   case DECL_FILE_SCOPE_ASM:
     D = FileScopeAsmDecl::CreateDeserialized(Context, ID);

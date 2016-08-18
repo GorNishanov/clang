@@ -2408,6 +2408,9 @@ public:
                                  OMPPrivateScope &PrivateScope);
   void EmitOMPPrivateClause(const OMPExecutableDirective &D,
                             OMPPrivateScope &PrivateScope);
+  void EmitOMPUseDevicePtrClause(
+      const OMPClause &C, OMPPrivateScope &PrivateScope,
+      const llvm::DenseMap<const ValueDecl *, Address> &CaptureDeviceAddrMap);
   /// \brief Emit code for copyin clause in \a D directive. The next code is
   /// generated at the start of outlined functions for directives:
   /// \code
@@ -2525,6 +2528,7 @@ public:
   void EmitOMPTargetParallelForSimdDirective(
       const OMPTargetParallelForSimdDirective &S);
   void EmitOMPTargetSimdDirective(const OMPTargetSimdDirective &S);
+  void EmitOMPTeamsDistributeDirective(const OMPTeamsDistributeDirective &S);
 
   /// Emit outlined function for the target directive.
   static std::pair<llvm::Function * /*OutlinedFn*/,
