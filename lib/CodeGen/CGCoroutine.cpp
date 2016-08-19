@@ -315,40 +315,39 @@ static void fixUpDelete(CodeGenFunction& CGF) {
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
-  auto NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
+  auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
-  auto CoroAlloc =
-      Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_alloc));
-  auto ICmp = Builder.CreateICmpNE(CoroAlloc, NullPtr);
+  // FIXME: Instead of 0, pass an equivalent of alignas(maxalign_t).
+  auto *CoroId =
+      Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_id),
+                         {Builder.getInt32(0), NullPtr, NullPtr, NullPtr});
+  auto *CoroAlloc = Builder.CreateCall(
+      CGM.getIntrinsic(llvm::Intrinsic::coro_alloc), {CoroId});
 
-  auto EntryBB = Builder.GetInsertBlock();
-  auto AllocBB = createBasicBlock("coro.alloc");
-  auto InitBB = createBasicBlock("coro.init");
-  auto RetBB = createBasicBlock("coro.ret");
+  auto *EntryBB = Builder.GetInsertBlock();
+  auto *AllocBB = createBasicBlock("coro.alloc");
+  auto *InitBB = createBasicBlock("coro.init");
+  auto *RetBB = createBasicBlock("coro.ret");
 
   CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
   CurCoro.Data->SuspendBB = RetBB;
   CurCoro.Data->DeleteLabel = SS.Deallocate->getDecl();
 
-  Builder.CreateCondBr(ICmp, InitBB, AllocBB);
+  Builder.CreateCondBr(CoroAlloc, AllocBB, InitBB);
 
   EmitBlock(AllocBB);
 
-  auto AllocateCall = EmitScalarExpr(SS.Allocate);
-  auto AllocOrInvokeContBB = Builder.GetInsertBlock();
+  auto *AllocateCall = EmitScalarExpr(SS.Allocate);
+  auto *AllocOrInvokeContBB = Builder.GetInsertBlock();
   Builder.CreateBr(InitBB);
 
   EmitBlock(InitBB);
-  auto Phi = Builder.CreatePHI(VoidPtrTy, 2);
-  Phi->addIncoming(CoroAlloc, EntryBB);
+  auto *Phi = Builder.CreatePHI(VoidPtrTy, 2);
+  Phi->addIncoming(NullPtr, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
-  // We would like to insert coro_begin at this point, but we don't have an
-  // alloca for the coroutine promise yet, which is one of the parameters for
-  // coro_begin. So will will mark the spot and come back to it later.
-  llvm::Value *Undef = llvm::UndefValue::get(Int32Ty);
-  auto *CoroBeginInsertPt =
-      new llvm::BitCastInst(Undef, Int32Ty, "CoroInitPt", InitBB);
+  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_begin),
+                     {CoroId, Phi});
 
   // Make sure that we free the memory on any exceptions that happens
   // prior to the first suspend.
@@ -363,24 +362,19 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
 
   EmitStmt(SS.Promise);
-  auto DS = cast<DeclStmt>(SS.Promise);
-  auto VD = cast<VarDecl>(DS->getSingleDecl());
+  auto *DS = cast<DeclStmt>(SS.Promise);
+  auto *VD = cast<VarDecl>(DS->getSingleDecl());
 
   DeclRefExpr PromiseRef(VD, false, VD->getType().getNonReferenceType(),
                          VK_LValue, SourceLocation());
-  llvm::Value *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
-  llvm::Value *PromiseAddrVoidPtr =
-      new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroBeginInsertPt);
-  // FIXME: Instead of 0, pass equivalent of alignas(maxalign_t).
+  auto *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
+  auto *PromiseAddrVoidPtr =
+      new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroId);
+  // Update CoroId to refer to the promise. We could not do it earlier because
+  // promise local variable was not emitted yet.
+  CoroId->setArgOperand(1, PromiseAddrVoidPtr);
 
-  SmallVector<llvm::Value *, 5> args{Phi, Builder.getInt32(0),
-                                     PromiseAddrVoidPtr, NullPtr};
-
-  llvm::CallInst::Create(CGM.getIntrinsic(llvm::Intrinsic::coro_begin), args,
-                         "", CoroBeginInsertPt);
-  CoroBeginInsertPt->eraseFromParent();
-
-  // If SS.ResultDecl is not null, an object returned by get_return_object 
+  // If SS.ResultDecl is not null, an object returned by get_return_object
   // requires a conversion to a return type. In this case, we declare at this
   // point and will emit a return statement at the end. Otherwise, emit return
   // statement here. Note, EmitReturnStmt omits branch to cleanup if current

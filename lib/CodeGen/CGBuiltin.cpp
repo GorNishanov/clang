@@ -466,6 +466,13 @@ CodeGenFunction::emitBuiltinObjectSize(const Expr *E, unsigned Type,
 static RValue emitSimpleIntrinsic(CodeGenFunction &CGF, const CallExpr *E,
                                   Intrinsic::ID ID) {
   SmallVector<Value*, 8> Args;
+  switch (ID) {
+  default:
+    break;
+  case Intrinsic::coro_free:
+    Args.push_back(llvm::ConstantTokenNone::get(CGF.getLLVMContext()));
+    break;
+  }
   for (auto &Arg : E->arguments())
     Args.push_back(CGF.EmitScalarExpr(Arg));
   Value *F = CGF.CGM.getIntrinsic(ID);
