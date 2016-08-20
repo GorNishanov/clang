@@ -1342,7 +1342,7 @@ BUILTIN(__builtin_coro_free, "v*v*", "n")
 
 BUILTIN(__builtin_coro_id, "v*Iiv*v*v*", "n")
 BUILTIN(__builtin_coro_alloc, "bv*", "n")
-BUILTIN(__builtin_coro_begin, "v*v*", "n")
+BUILTIN(__builtin_coro_begin, "v*v*v*", "n")
 BUILTIN(__builtin_coro_end, "vv*Ib", "n")
 BUILTIN(__builtin_coro_save, "v*v*", "n")
 BUILTIN(__builtin_coro_suspend, "cv*Ib", "n")

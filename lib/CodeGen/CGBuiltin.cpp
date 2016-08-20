@@ -2159,15 +2159,17 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return RValue::get(Builder.CreateCall(F));
   }
 
+  case Builtin::BI__builtin_coro_id:
+    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_id);
   case Builtin::BI__builtin_coro_promise:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_promise);
   case Builtin::BI__builtin_coro_resume:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_resume);
   case Builtin::BI__builtin_coro_frame:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_frame);
-  case Builtin::BI__builtin_coro_free: 
+  case Builtin::BI__builtin_coro_free:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_free);
-  case Builtin::BI__builtin_coro_destroy: 
+  case Builtin::BI__builtin_coro_destroy:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_destroy);
   case Builtin::BI__builtin_coro_done:
     return emitSimpleIntrinsic(*this, E, Intrinsic::coro_done);
