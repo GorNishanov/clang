@@ -56,7 +56,7 @@ extern "C" float fyield(int);
 void Do1(func<int> f) { yield(f()); }
 void Do2(func<double> f) { yield(f()); }
 
-// CHECK-LABEL: @main
+// CHECK-LABEL: @main(
 int main() {
 // CHECK: call i32 @yield(i32 43)
 // CHECK: call i32 @yield(i32 
