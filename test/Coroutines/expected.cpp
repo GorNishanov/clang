@@ -40,7 +40,7 @@ struct expected {
     DataPtr get_return_object() { return {&data}; }
     std::suspend_never initial_suspend() { return {}; }
     std::suspend_never final_suspend() { return {}; }
-    void return_value(T v) { data.val = std::move(v); }
+    void return_value(T v) { data.val = std::move(v); data.error = {};}
   };
 
   bool await_ready() { return !data.error; }
@@ -77,7 +77,7 @@ extern "C" expected<int> f2() {
   co_return 200;
 }
 
-// CHECK-LABEL: @main
+// CHECK-LABEL: @main(
 int main() {
 // CHECK: call void @yield(i32 11)
 // CHECK: call void @yield(i32 12)
@@ -89,7 +89,7 @@ int main() {
   yield(c1.error());
 
 // CHECK: call void @yield(i32 21)
-// CHECK: call void @yield(i32 0)
+// CHECK: call void @yield(i32
 // CHECK: call void @yield(i32 42)
   auto c2 = f2();
   yield(c2.value());
