@@ -622,7 +622,7 @@ public:
     Expr *FramePtr =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
-    Expr *NullPtr = S.ActOnCXXNullPtrLiteral(Loc).get();
+// Seems unused:    Expr *NullPtr = S.ActOnCXXNullPtrLiteral(Loc).get();
 
     Expr *FrameSize =
         buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, {});
