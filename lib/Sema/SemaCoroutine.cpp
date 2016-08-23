@@ -234,6 +234,7 @@ static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID id,
   return Call.get();
 }
 
+#if 0 // UNUSED at the moment.
 /// Build a call to 'operator co_await' if there is a suitable operator for
 /// the given expression.
 static ExprResult buildOperatorCoawaitCall(Sema &SemaRef, Scope *S,
@@ -243,6 +244,7 @@ static ExprResult buildOperatorCoawaitCall(Sema &SemaRef, Scope *S,
                                        Functions);
   return SemaRef.CreateOverloadedUnaryOp(Loc, UO_Coawait, Functions, E);
 }
+#endif
 
 struct ReadySuspendResumeResult {
   bool IsInvalid;
