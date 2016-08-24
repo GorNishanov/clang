@@ -433,7 +433,6 @@ namespace llvm {
   template<>
   struct GraphTraits<ModuleManager> {
     typedef ModuleFile *NodeRef;
-    typedef ModuleFile *NodeRef;
     typedef llvm::SetVector<ModuleFile *>::const_iterator ChildIteratorType;
     typedef ModuleManager::ModuleConstIterator nodes_iterator;
 
