@@ -64,11 +64,12 @@ CoroutineBodyStmt::CoroutineBodyStmt(SubStmt const &SubStmts,
     : Stmt(CoroutineBodyStmtClass), NumParams(ParamMoves.size()) {
 
   getSubStmts() = SubStmts;
-  std::copy(ParamMoves.begin(), ParamMoves.end(), 
+  std::copy(ParamMoves.begin(), ParamMoves.end(),
     const_cast<Stmt**>(getParamMoves().data()));
 }
 
-CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range, DeclStmt *BeginEndStmt,
+CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range,
+                                 DeclStmt *BeginStmt, DeclStmt *EndStmt,
                                  Expr *Cond, Expr *Inc, DeclStmt *LoopVar,
                                  Stmt *Body, SourceLocation FL,
                                  SourceLocation CAL, SourceLocation CL,
