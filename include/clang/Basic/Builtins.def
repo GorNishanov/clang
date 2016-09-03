@@ -1384,16 +1384,6 @@ LANGBUILTIN(to_global, "v*v*", "tn", OCLC20_LANG)
 LANGBUILTIN(to_local, "v*v*", "tn", OCLC20_LANG)
 LANGBUILTIN(to_private, "v*v*", "tn", OCLC20_LANG)
 
-// Coroutine intrinsics, only valid with -fcoroutines
-BUILTIN(__builtin_coro_resume, "vv*", "")
-BUILTIN(__builtin_coro_destroy, "vv*", "n")
-BUILTIN(__builtin_coro_done, "bv*", "n")
-BUILTIN(__builtin_coro_size, "zv*", "n")
-BUILTIN(__builtin_coro_frame, "v*", "n")
-BUILTIN(__builtin_coro_free, "v*v*", "n")
-BUILTIN(__builtin_coro_promise, "v*v*", "n")
-BUILTIN(__builtin_coro_from_promise, "v*v*", "n")
-
 #undef BUILTIN
 #undef LIBBUILTIN
 #undef LANGBUILTIN
