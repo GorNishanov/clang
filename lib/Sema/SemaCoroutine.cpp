@@ -234,7 +234,7 @@ static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID id,
   return Call.get();
 }
 
-#if 0 // UNUSED at the moment.
+#if 1 // UNUSED at the moment.
 /// Build a call to 'operator co_await' if there is a suitable operator for
 /// the given expression.
 static ExprResult buildOperatorCoawaitCall(Sema &SemaRef, Scope *S,
@@ -332,7 +332,7 @@ ExprResult Sema::ActOnCoawaitExpr(Scope *S, SourceLocation Loc, Expr *E) {
     E = R.get();
   }
 
-#if 0 // FIXME: debug why this does not work
+#if 1 // FIXME: debug why this does not work
   ExprResult Awaitable = buildOperatorCoawaitCall(*this, S, Loc, E);
   if (Awaitable.isInvalid())
     return ExprError();

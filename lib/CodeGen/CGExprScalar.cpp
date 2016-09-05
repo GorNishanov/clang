@@ -384,6 +384,9 @@ public:
   Value *VisitUnaryLNot     (const UnaryOperator *E);
   Value *VisitUnaryReal     (const UnaryOperator *E);
   Value *VisitUnaryImag     (const UnaryOperator *E);
+  Value *VisitUnaryCoawait  (const UnaryOperator *E) {
+    return Visit(E->getSubExpr());
+  }
   Value *VisitUnaryExtension(const UnaryOperator *E) {
     return Visit(E->getSubExpr());
   }

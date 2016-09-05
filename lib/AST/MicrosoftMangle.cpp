@@ -1099,10 +1099,13 @@ void MicrosoftCXXNameMangler::mangleOperatorName(OverloadedOperatorKind OO,
   }
 
   case OO_Coawait: {
+    #if 0
     DiagnosticsEngine &Diags = Context.getDiags();
     unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
       "cannot mangle this operator co_await yet");
     Diags.Report(Loc, DiagID);
+    #endif
+    Out << "?_@";
     break;
   }
 
