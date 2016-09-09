@@ -248,6 +248,7 @@ public:
 };
 }
 
+#if 0 // UNUSED for now (to squash the warning)
 static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
   assert(PM->isSingleDecl());
   VarDecl *VD = static_cast<VarDecl *>(PM->getSingleDecl());
@@ -272,6 +273,7 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
   //     if (coro.param(alloca.copy, alloca.original)) DTOR(...);
   //  declare i1 @llvm.coro.param(i8* copy, i8* original)
 }
+#endif
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &SS = S.getSubStmts();
