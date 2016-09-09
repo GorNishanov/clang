@@ -234,7 +234,6 @@ static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID id,
   return Call.get();
 }
 
-#if 1 // UNUSED at the moment.
 /// Build a call to 'operator co_await' if there is a suitable operator for
 /// the given expression.
 static ExprResult buildOperatorCoawaitCall(Sema &SemaRef, Scope *S,
@@ -244,7 +243,6 @@ static ExprResult buildOperatorCoawaitCall(Sema &SemaRef, Scope *S,
                                        Functions);
   return SemaRef.CreateOverloadedUnaryOp(Loc, UO_Coawait, Functions, E);
 }
-#endif
 
 struct ReadySuspendResumeResult {
   bool IsInvalid;
@@ -332,14 +330,10 @@ ExprResult Sema::ActOnCoawaitExpr(Scope *S, SourceLocation Loc, Expr *E) {
     E = R.get();
   }
 
-#if 1 // FIXME: debug why this does not work
   ExprResult Awaitable = buildOperatorCoawaitCall(*this, S, Loc, E);
   if (Awaitable.isInvalid())
     return ExprError();
   return BuildCoawaitExpr(Loc, Awaitable.get());
-#else
-  return BuildCoawaitExpr(Loc, E);
-#endif
 }
 ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
   auto *Coroutine = checkCoroutineContext(*this, Loc, "co_await");
@@ -405,6 +399,7 @@ ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
 #endif
   return BuildCoyieldExpr(Loc, E);
 }
+
 ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   auto *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
   if (!Coroutine)
