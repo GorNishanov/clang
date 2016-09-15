@@ -469,12 +469,15 @@ static RValue emitSimpleIntrinsic(CodeGenFunction &CGF, const CallExpr *E,
   switch (ID) {
   default:
     break;
+  case Intrinsic::coro_alloc:
   case Intrinsic::coro_free:
     Args.push_back(llvm::ConstantTokenNone::get(CGF.getLLVMContext()));
     break;
   }
   for (auto &Arg : E->arguments())
     Args.push_back(CGF.EmitScalarExpr(Arg));
+  if (ID == Intrinsic::coro_alloc)
+    Args.resize(1);
   Value *F = CGF.CGM.getIntrinsic(ID);
   return RValue::get(CGF.Builder.CreateCall(F, Args));
 }

@@ -32,5 +32,3 @@ void *malloc(unsigned int);
 
 #define CORO_RESUME(hdl) __builtin_coro_resume(hdl)
 #define CORO_DESTROY(hdl) __builtin_coro_destroy(hdl)
-
-
