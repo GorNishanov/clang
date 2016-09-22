@@ -57,41 +57,41 @@ struct expected {
 extern "C" expected<int> g() { return {0}; }
 extern "C" expected<int> h() { return {error{}, 42}; }
 
-extern "C" void yield(int);
+extern "C" void print(int);
 
 void WORKAROUND_FOR_SEMACOROUTINE_BUG() {
   std::coroutine_handle<expected<int>::promise_type>::from_address(0);
 }
 
 extern "C" expected<int> f1() {
-  yield(11);
+  print(11);
   co_await g();
-  yield(12);
+  print(12);
   co_return 100;
 }
 
 extern "C" expected<int> f2() {
-  yield(21);
+  print(21);
   co_await h();
-  yield(22);
+  print(22);
   co_return 200;
 }
 
 // CHECK-LABEL: @main(
 int main() {
-// CHECK: call void @yield(i32 11)
-// CHECK: call void @yield(i32 12)
-// CHECK: call void @yield(i32 100)
-// CHECK: call void @yield(i32 0)
+// CHECK: call void @print(i32 11)
+// CHECK: call void @print(i32 12)
+// CHECK: call void @print(i32 100)
+// CHECK: call void @print(i32 0)
  
   auto c1 = f1();
-  yield(c1.value());
-  yield(c1.error());
+  print(c1.value());
+  print(c1.error());
 
-// CHECK: call void @yield(i32 21)
-// CHECK: call void @yield(i32
-// CHECK: call void @yield(i32 42)
+// CHECK: call void @print(i32 21)
+// CHECK: call void @print(i32
+// CHECK: call void @print(i32 42)
   auto c2 = f2();
-  yield(c2.value());
-  yield(c2.error());
+  print(c2.value());
+  print(c2.error());
 }
