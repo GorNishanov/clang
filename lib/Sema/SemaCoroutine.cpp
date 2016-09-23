@@ -504,7 +504,20 @@ struct RewriteParams : TreeTransform<RewriteParams> {
   }
 };
 
-class SubStmtBuilder : CoroutineBodyStmt::SubStmt {
+namespace {
+struct SubStmtBuilder {
+  Stmt *Body = nullptr;
+  Stmt *Promise = nullptr;
+  Expr *InitialSuspend = nullptr;
+  Expr *FinalSuspend = nullptr;
+  Stmt *OnException = nullptr;
+  Stmt *OnFallthrough = nullptr;
+  Expr *Allocate = nullptr;
+  LabelStmt *Deallocate = nullptr;
+  Stmt *ResultDecl = nullptr;
+  Stmt *ReturnStmt = nullptr;
+
+private:
   Sema &S;
   FunctionDecl &FD;
   FunctionScopeInfo &Fn;
@@ -517,8 +530,7 @@ class SubStmtBuilder : CoroutineBodyStmt::SubStmt {
 
 public:
   SubStmtBuilder(Sema &S, FunctionDecl &FD, FunctionScopeInfo &Fn, Stmt *Body)
-      : CoroutineBodyStmt::SubStmt(), S(S), FD(FD), Fn(Fn),
-        Loc(FD.getLocation()) {
+      : S(S), FD(FD), Fn(Fn), Loc(FD.getLocation()) {
     LabelDecl *label =
         LabelDecl::Create(S.Context, S.CurContext, SourceLocation(),
                           S.PP.getIdentifierInfo("coro.destroy.label"));
@@ -546,8 +558,6 @@ public:
   }
 
   bool isInvalid() const { return !this->IsValid; }
-
-  CoroutineBodyStmt::SubStmt &getSubStmts() { return *this; }
 
   ArrayRef<Stmt *> getParamMoves() { return ParamMoves; }
   ArrayRef<ParmVarDecl *> getParams() { return Params; }
@@ -618,7 +628,7 @@ public:
     assert(OperatorDelete && "we need to find at least global operator new");
 
     Expr *FramePtr =
-      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
+        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
     Expr *FrameSize =
         buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, {});
@@ -647,9 +657,9 @@ public:
       return false;
 
     Expr *CoroFree =
-      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, { FramePtr });
+        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, {FramePtr});
 
-    SmallVector<Expr *, 2> DeleteArgs{ CoroFree };
+    SmallVector<Expr *, 2> DeleteArgs{CoroFree};
 
     // Check if we need to pass the size.
     const FunctionProtoType *opDeleteType =
@@ -658,8 +668,8 @@ public:
       DeleteArgs.push_back(FrameSize);
     }
 
-    ExprResult DeleteExpr = S.ActOnCallExpr(S.getCurScope(), DeleteRef.get(), Loc,
-                                      DeleteArgs, Loc, nullptr);
+    ExprResult DeleteExpr = S.ActOnCallExpr(S.getCurScope(), DeleteRef.get(),
+                                            Loc, DeleteArgs, Loc, nullptr);
     if (DeleteExpr.isInvalid())
       return false;
 
@@ -731,25 +741,23 @@ public:
       ExprResult declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
       if (declRef.isInvalid())
         return false;
-      ReturnStmt =
-        S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
-    }
-    else {
-      ExprResult ReturnObject = buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
+      ReturnStmt = S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
+    } else {
+      ExprResult ReturnObject =
+          buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
       if (ReturnObject.isInvalid())
         return false;
 
       RetType = FD.getReturnType();
       if (!RetType->isDependentType()) {
         InitializedEntity Entity =
-          InitializedEntity::InitializeResult(Loc, RetType, false);
-        ReturnObject = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
-          ReturnObject.get());
+            InitializedEntity::InitializeResult(Loc, RetType, false);
+        ReturnObject = S.PerformMoveOrCopyInitialization(
+            Entity, nullptr, RetType, ReturnObject.get());
         if (ReturnObject.isInvalid())
           return false;
       }
-      ReturnStmt =
-        S.ActOnReturnStmt(Loc, ReturnObject.get(), S.getCurScope());
+      ReturnStmt = S.ActOnReturnStmt(Loc, ReturnObject.get(), S.getCurScope());
     }
     this->ReturnStmt = ReturnStmt.get();
 
@@ -758,32 +766,33 @@ public:
 
   // Create a static_cast\<T&&>(expr).
   Expr *CastForMoving(Expr *E, QualType T = QualType()) {
-    if (T.isNull()) T = E->getType();
+    if (T.isNull())
+      T = E->getType();
     QualType TargetType = S.BuildReferenceType(
-      T, /*SpelledAsLValue*/false, SourceLocation(), DeclarationName());
+        T, /*SpelledAsLValue*/ false, SourceLocation(), DeclarationName());
     SourceLocation ExprLoc = E->getLocStart();
-    TypeSourceInfo *TargetLoc = S.Context.getTrivialTypeSourceInfo(
-      TargetType, ExprLoc);
+    TypeSourceInfo *TargetLoc =
+        S.Context.getTrivialTypeSourceInfo(TargetType, ExprLoc);
 
-    return S.BuildCXXNamedCast(ExprLoc, tok::kw_static_cast, TargetLoc, E,
-      SourceRange(ExprLoc, ExprLoc),
-      E->getSourceRange()).get();
+    return S
+        .BuildCXXNamedCast(ExprLoc, tok::kw_static_cast, TargetLoc, E,
+                           SourceRange(ExprLoc, ExprLoc), E->getSourceRange())
+        .get();
   }
 
   /// \brief Build a variable declaration for move parameter.
-  VarDecl *buildVarDecl(SourceLocation Loc, QualType Type,
-    StringRef Name) {
+  VarDecl *buildVarDecl(SourceLocation Loc, QualType Type, StringRef Name) {
     DeclContext *DC = S.CurContext;
     IdentifierInfo *II = &S.PP.getIdentifierTable().get(Name);
     TypeSourceInfo *TInfo = S.Context.getTrivialTypeSourceInfo(Type, Loc);
     VarDecl *Decl =
-      VarDecl::Create(S.Context, DC, Loc, Loc, II, Type, TInfo, SC_None);
+        VarDecl::Create(S.Context, DC, Loc, Loc, II, Type, TInfo, SC_None);
     Decl->setImplicit();
     return Decl;
   }
 
   bool makeParamMoves() {
-    for (auto* paramDecl : FD.parameters()) {
+    for (auto *paramDecl : FD.parameters()) {
       auto Ty = paramDecl->getType();
       if (Ty->isDependentType())
         continue;
@@ -802,16 +811,16 @@ public:
         Expr *RCast = CastForMoving(ParamRef.get());
 
         SmallString<16> str(paramDecl->getIdentifier()->getName());
-        str.append(".copy");
+        str.append("_copy");
         auto D = buildVarDecl(Loc, Ty, str);
 
-        S.AddInitializerToDecl(D,
-          RCast,
-          /*DirectInit=*/true, /*TypeMayContainAuto=*/false);
+        S.AddInitializerToDecl(D, RCast,
+                               /*DirectInit=*/true,
+                               /*TypeMayContainAuto=*/false);
 
         // Convert decl to a statement.
-        StmtResult Stmt = S.ActOnDeclStmt(
-          S.ConvertDeclToDeclGroup(D), Loc, Loc);
+        StmtResult Stmt =
+            S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(D), Loc, Loc);
         if (Stmt.isInvalid())
           return false;
 
@@ -822,6 +831,7 @@ public:
     return true;
   }
 };
+}
 }
 
 void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
@@ -842,6 +852,9 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
     return FD->setInvalidDecl();
 
   // Build body for the coroutine wrapper statement.
-  Body = CoroutineBodyStmt::Create(Context, Builder.getSubStmts(),
-                                   Builder.getParamMoves());
+  Body = CoroutineBodyStmt::Create(
+      Context, Builder.Body, Builder.Promise, Builder.InitialSuspend,
+      Builder.FinalSuspend, Builder.OnException, Builder.OnFallthrough,
+      Builder.Allocate, Builder.Deallocate, Builder.ResultDecl,
+      Builder.ReturnStmt, Builder.getParamMoves());
 }

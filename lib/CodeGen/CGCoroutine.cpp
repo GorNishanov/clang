@@ -275,7 +275,6 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
 #endif
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
-  auto &SS = S.getSubStmts();
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
   // FIXME: Instead of 0, pass an equivalent of alignas(maxalign_t).
@@ -292,13 +291,13 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
   CurCoro.Data->SuspendBB = RetBB;
-  CurCoro.Data->DeleteLabel = SS.Deallocate->getDecl();
+  CurCoro.Data->DeleteLabel = S.getDeallocate()->getDecl();
 
   Builder.CreateCondBr(CoroAlloc, AllocBB, InitBB);
 
   EmitBlock(AllocBB);
 
-  auto *AllocateCall = EmitScalarExpr(SS.Allocate);
+  auto *AllocateCall = EmitScalarExpr(S.getAllocate());
   auto *AllocOrInvokeContBB = Builder.GetInsertBlock();
   Builder.CreateBr(InitBB);
 
@@ -317,14 +316,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
     CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
   };
-  EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
+  EHStack.pushCleanup<CallCoroDelete>(EHCleanup, S.getDeallocate());
 
-  EmitStmt(SS.Promise);
+  EmitStmt(S.getPromiseDeclStmt());
 
-  auto *DS = cast<DeclStmt>(SS.Promise);
-  auto *VD = cast<VarDecl>(DS->getSingleDecl());
-
-  Address PromiseAddr = GetAddrOfLocalVar(VD);
+  Address PromiseAddr = GetAddrOfLocalVar(S.getPromiseDecl());
   auto *PromiseAddrVoidPtr =
       new llvm::BitCastInst(PromiseAddr.getPointer(), VoidPtrTy, "", CoroId);
   // Update CoroId to refer to the promise. We could not do it earlier because
@@ -336,10 +332,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   // point and will emit a return statement at the end. Otherwise, emit return
   // statement here. Note, EmitReturnStmt omits branch to cleanup if current
   // function is a coroutine.
-  if (SS.ResultDecl) {
-    EmitStmt(SS.ResultDecl);
+  if (S.getResultDecl()) {
+    EmitStmt(S.getResultDecl());
   } else {
-    EmitStmt(SS.ReturnStmt);
+    EmitStmt(S.getReturnStmt());
   }
 
   // We will insert coro.end to cut any of the destructors for objects that
@@ -367,17 +363,17 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     }
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
-    EmitStmt(SS.InitialSuspend);
+    EmitStmt(S.getInitSuspendExpr());
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
-    EmitStmt(SS.Body);
+    EmitStmt(S.getBody());
 
     if (Builder.GetInsertBlock()) {
       CurCoro.Data->CurrentAwaitKind = AwaitKind::Final;
-      EmitStmt(SS.FinalSuspend);
+      EmitStmt(S.getFinalSuspendExpr());
     }
   }
-  EmitStmt(SS.Deallocate);
+  EmitStmt(S.getDeallocate());
 
   EmitBlock(RetBB);
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
@@ -385,8 +381,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   // Emit return statement only if we are doing two stage return initialization.
   // I.e. when get_return_object requires a conversion to a return type.
-  if (SS.ResultDecl) {
-    EmitStmt(SS.ReturnStmt);
+  if (S.getResultDecl()) {
+    EmitStmt(S.getReturnStmt());
   }
 
   runHorribleHackToFixupCleanupBlocks(*CurFn);
