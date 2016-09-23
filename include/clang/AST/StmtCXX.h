@@ -316,8 +316,7 @@ class CoroutineBodyStmt : public Stmt {
 
   friend class ASTStmtReader;
 
-  Stmt **getStoredParams() { return SubStmts + SubStmt::FirstParamMove; }
-  Stmt const *const *getStoredStmts() const {
+  Stmt const *const *getStoredParams() const {
     return SubStmts + SubStmt::FirstParamMove;
   }
 
@@ -333,8 +332,8 @@ public:
          Expr *Allocate, LabelStmt *Deallocate, Stmt *ResultDecl,
          Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
 
-  ArrayRef<Stmt const*> getParamMoves() const {
-    return{ getStoredStmts(), NumParams };
+  ArrayRef<Stmt const *> getParamMoves() const {
+    return{ getStoredParams(), NumParams };
   }
 
   /// \brief Retrieve the body of the coroutine as written. This will be either
