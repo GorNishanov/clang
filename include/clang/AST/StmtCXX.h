@@ -345,8 +345,8 @@ public:
   VarDecl *getPromiseDecl() const {
     return cast<VarDecl>(getPromiseDeclStmt()->getSingleDecl());
   }
-  Stmt *getInitSuspendExpr() const { return SubStmts[SubStmt::InitSuspend]; }
-  Stmt *getFinalSuspendExpr() const { return SubStmts[SubStmt::FinalSuspend]; }
+  Stmt *getInitSuspendStmt() const { return SubStmts[SubStmt::InitSuspend]; }
+  Stmt *getFinalSuspendStmt() const { return SubStmts[SubStmt::FinalSuspend]; }
   Stmt *getExceptionHandler() const { return SubStmts[SubStmt::OnException]; }
   Stmt *getFallthroughHandler() const {
     return SubStmts[SubStmt::OnFallthrough];
