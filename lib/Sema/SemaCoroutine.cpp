@@ -135,7 +135,7 @@ static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S, SourceLocation Loc) 
   return Template;
 }
 
-static 
+static
 QualType buildStdCoroutineHandle(Sema &S, QualType Element, SourceLocation Loc) {
   // FIXME: Cache std::coroutine_handle once we've found it.
   /*
@@ -145,7 +145,7 @@ QualType buildStdCoroutineHandle(Sema &S, QualType Element, SourceLocation Loc) 
       return QualType();
   }
   */
-  auto StdCoroutineHandle = lookupStdCoroutineHandle(S, Loc);
+  ClassTemplateDecl *StdCoroutineHandle = lookupStdCoroutineHandle(S, Loc);
 
   TemplateArgumentListInfo Args(Loc, Loc);
   Args.addArgument(TemplateArgumentLoc(TemplateArgument(Element),
@@ -177,14 +177,14 @@ checkCoroutineContext(Sema &S, SourceLocation Loc, StringRef Keyword) {
     //
     // FIXME: We assume that this really means that a coroutine cannot
     //        be a constructor or destructor.
-    S.Diag(Loc, diag::err_coroutine_ctor_dtor) 
+    S.Diag(Loc, diag::err_coroutine_ctor_dtor)
       << isa<CXXDestructorDecl>(FD) << Keyword;
   } else if (FD->isConstexpr()) {
     S.Diag(Loc, diag::err_coroutine_constexpr) << Keyword;
   } else if (FD->isVariadic()) {
     S.Diag(Loc, diag::err_coroutine_varargs) << Keyword;
   } else {
-    auto *ScopeInfo = S.getCurFunction();
+    FunctionScopeInfo *ScopeInfo = S.getCurFunction();
     assert(ScopeInfo && "missing function scope for function");
 
     // If we don't have a promise variable, build one now.
@@ -200,7 +200,7 @@ checkCoroutineContext(Sema &S, SourceLocation Loc, StringRef Keyword) {
       // Create and default-initialize the promise.
       ScopeInfo->CoroutinePromise =
           VarDecl::Create(S.Context, FD, FD->getLocation(), FD->getLocation(),
-                          &S.PP.getIdentifierTable().get("coro.promise"), T,
+                          &S.PP.getIdentifierTable().get("__promise"), T,
                           S.Context.getTrivialTypeSourceInfo(T, Loc), SC_None);
       S.CheckVariableDeclarationType(ScopeInfo->CoroutinePromise);
       if (!ScopeInfo->CoroutinePromise->isInvalidDecl())
@@ -257,7 +257,7 @@ static ExprResult buildMemberCall(Sema &S, Expr *Base, SourceLocation Loc,
   // FIXME: Fix BuildMemberReferenceExpr to take a const CXXScopeSpec&.
   CXXScopeSpec SS;
   ExprResult Result = S.BuildMemberReferenceExpr(
-      Base, Base->getType(), Loc, /*IsPtr=*/false, SS, 
+      Base, Base->getType(), Loc, /*IsPtr=*/false, SS,
       SourceLocation(), nullptr, NameInfo, /*TemplateArgs=*/nullptr,
       /*Scope=*/nullptr);
   if (Result.isInvalid())
@@ -285,22 +285,22 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
       QualType PromiseType = CoroutinePromise->getType();
 
       CXXScopeSpec SS;
-      auto CoroHandle = buildStdCoroutineHandle(S, PromiseType, Loc);
-      auto LookupCtx = S.computeDeclContext(CoroHandle);
+      QualType CoroHandle = buildStdCoroutineHandle(S, PromiseType, Loc);
+      DeclContext *LookupCtx = S.computeDeclContext(CoroHandle);
       LookupResult Found(S, &S.PP.getIdentifierTable().get("from_address"), Loc,
                          Sema::LookupOrdinaryName);
       if (S.LookupQualifiedName(Found, LookupCtx)) {
-        
-        auto Fn = Found.getAsSingle<CXXMethodDecl>();
+
+        auto *Fn = Found.getAsSingle<CXXMethodDecl>();
         DeclRefExpr *DRE = DeclRefExpr::Create(
             S.Context, Fn->getQualifierLoc(), Loc, Fn,
             /*enclosing*/ false, Loc, Fn->getType(), VK_LValue);
         S.MarkDeclRefReferenced(DRE);
 
-        auto *FramePtr =
+        Expr *FramePtr =
           buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
-        auto CoroHandle =
+        ExprResult CoroHandle =
           S.ActOnCallExpr(/*Scope=*/nullptr, DRE, Loc, { FramePtr }, Loc);
 
         SmallVector<Expr*, 1> Args;
@@ -310,7 +310,7 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
         if (Result.isInvalid())
           return Calls;
       }
-      // FIXME: Handle errors
+      // FIXME: Handle errors.
     } else {
       Result = buildMemberCall(S, Operand, Loc, Funcs[I], {});
     }
@@ -336,7 +336,7 @@ ExprResult Sema::ActOnCoawaitExpr(Scope *S, SourceLocation Loc, Expr *E) {
   return BuildCoawaitExpr(Loc, Awaitable.get());
 }
 ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
-  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_await");
+  FunctionScopeInfo *Coroutine = checkCoroutineContext(*this, Loc, "co_await");
   if (!Coroutine)
     return ExprError();
 
@@ -375,7 +375,7 @@ static ExprResult buildPromiseCall(Sema &S, FunctionScopeInfo *Coroutine,
   assert(Coroutine->CoroutinePromise && "no promise for coroutine");
 
   // Form a reference to the promise.
-  auto *Promise = Coroutine->CoroutinePromise;
+  VarDecl *Promise = Coroutine->CoroutinePromise;
   ExprResult PromiseRef = S.BuildDeclRefExpr(
       Promise, Promise->getType().getNonReferenceType(), VK_LValue, Loc);
   if (PromiseRef.isInvalid())
@@ -386,7 +386,7 @@ static ExprResult buildPromiseCall(Sema &S, FunctionScopeInfo *Coroutine,
 }
 
 ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
-  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
+  FunctionScopeInfo *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
   if (!Coroutine)
     return ExprError();
 
@@ -401,7 +401,7 @@ ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
 }
 
 ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
-  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
+  FunctionScopeInfo *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
   if (!Coroutine)
     return ExprError();
 
@@ -445,8 +445,9 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
 StmtResult Sema::ActOnCoreturnStmt(SourceLocation Loc, Expr *E) {
   return BuildCoreturnStmt(Loc, E);
 }
+
 StmtResult Sema::BuildCoreturnStmt(SourceLocation Loc, Expr *E) {
-  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_return");
+  FunctionScopeInfo *Coroutine = checkCoroutineContext(*this, Loc, "co_return");
   if (!Coroutine)
     return StmtError();
 
@@ -488,13 +489,13 @@ struct RewriteParams : TreeTransform<RewriteParams> {
       : BaseTransform(SemaRef), Params(P), ParamsMove(PM) {}
 
   ExprResult TransformDeclRefExpr(DeclRefExpr *E) {
-    auto D = E->getDecl();
-    if (auto PD = dyn_cast<ParmVarDecl>(D)) {
+    ValueDecl *D = E->getDecl();
+    if (auto *PD = dyn_cast<ParmVarDecl>(D)) {
       auto it = std::find(Params.begin(), Params.end(), PD);
       if (it != Params.end()) {
-        auto N = it - Params.begin();
-        auto Copy = cast<DeclStmt>(ParamsMove[N]);
-        auto VD = cast<VarDecl>(Copy->getSingleDecl());
+        size_t N = it - Params.begin();
+        auto *Copy = cast<DeclStmt>(ParamsMove[N]);
+        auto *VD = cast<VarDecl>(Copy->getSingleDecl());
         return SemaRef.BuildDeclRefExpr(
             VD, VD->getType(), ExprValueKind::VK_LValue, SourceLocation{});
       }
@@ -619,8 +620,6 @@ public:
     Expr *FramePtr =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
-// Seems unused:    Expr *NullPtr = S.ActOnCXXNullPtrLiteral(Loc).get();
-
     Expr *FrameSize =
         buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, {});
 
@@ -642,7 +641,7 @@ public:
 
     QualType opDeleteQualType = OperatorDelete->getType();
 
-    auto DeleteRef =
+    ExprResult DeleteRef =
         S.BuildDeclRefExpr(OperatorDelete, opDeleteQualType, VK_LValue, Loc);
     if (DeleteRef.isInvalid())
       return false;
@@ -659,7 +658,7 @@ public:
       DeleteArgs.push_back(FrameSize);
     }
 
-    auto DeleteExpr = S.ActOnCallExpr(S.getCurScope(), DeleteRef.get(), Loc,
+    ExprResult DeleteExpr = S.ActOnCallExpr(S.getCurScope(), DeleteRef.get(), Loc,
                                       DeleteArgs, Loc, nullptr);
     if (DeleteExpr.isInvalid())
       return false;
@@ -729,7 +728,7 @@ public:
   bool makeReturnStmt() {
     StmtResult ReturnStmt;
     if (RetDecl) {
-      auto declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
+      ExprResult declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
       if (declRef.isInvalid())
         return false;
       ReturnStmt =
@@ -789,18 +788,18 @@ public:
       if (Ty->isDependentType())
         continue;
 
-      if (auto RD = Ty->getAsCXXRecordDecl()) {
+      if (auto *RD = Ty->getAsCXXRecordDecl()) {
         if (RD->isUnion())
           continue;
         if (!paramDecl->getIdentifier())
           continue;
-        auto ParamRef =
+        ExprResult ParamRef =
             S.BuildDeclRefExpr(paramDecl, paramDecl->getType(),
                                ExprValueKind::VK_LValue, Loc); // FIXME: scope?
         if (ParamRef.isInvalid())
           return false;
 
-        auto RCast = CastForMoving(ParamRef.get());
+        Expr *RCast = CastForMoving(ParamRef.get());
 
         SmallString<16> str(paramDecl->getIdentifier()->getName());
         str.append(".copy");
@@ -810,7 +809,7 @@ public:
           RCast,
           /*DirectInit=*/true, /*TypeMayContainAuto=*/false);
 
-        // convert decl to a statement
+        // Convert decl to a statement.
         StmtResult Stmt = S.ActOnDeclStmt(
           S.ConvertDeclToDeclGroup(D), Loc, Loc);
         if (Stmt.isInvalid())
@@ -833,7 +832,7 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
   //   A return statement shall not appear in a coroutine.
   if (Fn->FirstReturnLoc.isValid()) {
     Diag(Fn->FirstReturnLoc, diag::err_return_in_coroutine);
-    auto *First = Fn->CoroutineStmts[0];
+    Stmt *First = Fn->CoroutineStmts[0];
     Diag(First->getLocStart(), diag::note_declared_coroutine_here)
         << (isa<CoawaitExpr>(First) ? 0 : isa<CoyieldExpr>(First) ? 1 : 2);
   }
