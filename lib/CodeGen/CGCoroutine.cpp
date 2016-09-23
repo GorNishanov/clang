@@ -357,13 +357,13 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   // Body of the coroutine.
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
-    // TODO: make sure that promise dtor is called
+    // TODO: Make sure that promise dtor is called.
 
     for (auto PM : S.getParamMoves()) {
       EmitStmt(PM);
       // TODO: if(CoroParam(...)) need to surround ctor and dtor
       // for the copy, so that llvm can elide it if the copy is
-      // not needed
+      // not needed.
     }
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;

@@ -531,7 +531,7 @@ public:
     if (IsValid) {
 #if 0
       // FIXME: parameter handling needs more work.
-      //   Disabled the following code since 
+      //   Disabled the following code since
       //   buildCoyield/rebuildCoyield/actOnCoyield are not exactly right and
       //   cause multishot_func.cpp test to fail.
       RewriteParams RP(S, getParams(), getParamMoves());
@@ -637,7 +637,7 @@ public:
 
     this->Allocate = NewExpr.get();
 
-    ///////////////////// Make Delete Call ///////////////////////
+    ///////////////////// Make delete Call ///////////////////////
 
     QualType opDeleteQualType = OperatorDelete->getType();
 
@@ -702,7 +702,7 @@ public:
 
     RetDecl = VarDecl::Create(
         S.Context, &FD, FD.getLocation(), FD.getLocation(),
-        &S.PP.getIdentifierTable().get("coro.gro"), RetType,
+        &S.PP.getIdentifierTable().get("__coro_gro"), RetType,
         S.Context.getTrivialTypeSourceInfo(RetType, Loc), SC_None);
 
     S.CheckVariableDeclarationType(RetDecl);
