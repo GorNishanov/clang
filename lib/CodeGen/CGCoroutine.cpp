@@ -363,14 +363,14 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     }
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
-    EmitStmt(S.getInitSuspendExpr());
+    EmitStmt(S.getInitSuspendStmt());
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
     EmitStmt(S.getBody());
 
     if (Builder.GetInsertBlock()) {
       CurCoro.Data->CurrentAwaitKind = AwaitKind::Final;
-      EmitStmt(S.getFinalSuspendExpr());
+      EmitStmt(S.getFinalSuspendStmt());
     }
   }
   EmitStmt(S.getDeallocate());
