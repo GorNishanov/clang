@@ -320,14 +320,13 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
 
   EmitStmt(SS.Promise);
+
   auto *DS = cast<DeclStmt>(SS.Promise);
   auto *VD = cast<VarDecl>(DS->getSingleDecl());
 
-  DeclRefExpr PromiseRef(VD, false, VD->getType().getNonReferenceType(),
-                         VK_LValue, SourceLocation());
-  auto *PromiseAddr = EmitLValue(&PromiseRef).getPointer();
+  Address PromiseAddr = GetAddrOfLocalVar(VD);
   auto *PromiseAddrVoidPtr =
-      new llvm::BitCastInst(PromiseAddr, VoidPtrTy, "", CoroId);
+      new llvm::BitCastInst(PromiseAddr.getPointer(), VoidPtrTy, "", CoroId);
   // Update CoroId to refer to the promise. We could not do it earlier because
   // promise local variable was not emitted yet.
   CoroId->setArgOperand(1, PromiseAddrVoidPtr);
