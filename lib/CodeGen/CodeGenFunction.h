@@ -156,6 +156,9 @@ public:
   QualType FnRetTy;
   llvm::Function *CurFn;
 
+  // Holds coroutine data if the current function is a coroutine. We use a
+  // wrapper to manage its lifetime, so that we don't have to define CGCoroData
+  // in this header.
   struct CGCoroInfo {
     std::unique_ptr<CGCoroData> Data;
     CGCoroInfo();
@@ -402,7 +405,7 @@ public:
   /// Returns true inside SEH __try blocks.
   bool isSEHTryScope() const { return !SEHTryEpilogueStack.empty(); }
 
-  /// Returns true if the current function is a coroutine
+  /// Returns true if the current function is a coroutine.
   bool isCoroutine() const;
 
   /// Returns true while emitting a cleanuppad.

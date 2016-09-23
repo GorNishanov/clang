@@ -1,4 +1,4 @@
-//===----- CGCoroData.cpp - Emit LLVM Code for C++ coroutines ------------===//
+//===----- CGCoroutine.cpp - Emit LLVM Code for C++ coroutines ------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -14,10 +14,10 @@
 #include "CodeGenFunction.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/InstIterator.h"
-#include "llvm/IR/Dominators.h"
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
@@ -55,7 +55,6 @@ struct CGCoroData {
   unsigned AwaitNum = 0;
   unsigned YieldNum = 0;
 };
-
 }
 }
 
@@ -123,17 +122,17 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
   CGF.EmitBlock(SuspendBlock);
 
-  llvm::Function *coroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
+  llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
   auto NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
-  auto SaveCall = Builder.CreateCall(coroSave, {NullPtr});
+  auto SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
 
   // FIXME: Handle bool returning suspendExpr.
   CGF.EmitScalarExpr(S.getSuspendExpr());
 
-  llvm::Function *coroSuspend =
+  llvm::Function *CoroSuspend =
       CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   SmallVector<Value *, 1> args2{SaveCall, Builder.getInt1(IsFinalSuspend)};
-  auto SuspendResult = Builder.CreateCall(coroSuspend, args2);
+  auto SuspendResult = Builder.CreateCall(CoroSuspend, args2);
   auto Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
   Switch->addCase(Builder.getInt8(0), ReadyBlock);
   Switch->addCase(Builder.getInt8(1), CleanupBlock);
@@ -141,7 +140,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   CGF.EmitBlock(CleanupBlock);
 
   // FIXME: This does not work if co_await exp result is used
-  //   see clang/test/Coroutines/brokenIR.cpp
+  //   see clang/test/Coroutines/brokenIR.cpp.
   auto jumpDest = CGF.getJumpDestForLabel(Coro.DeleteLabel);
   CGF.EmitBranchThroughCleanup(jumpDest);
 
@@ -151,7 +150,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
 
 // If await expression result is used we end up with broken IR with
 // definition of result of the await expression not dominating its uses.
-// It results from the way how cleanup blocks are threaded. Here is an 
+// It results from the way how cleanup blocks are threaded. Here is an
 // example of the broken IR we are fixing up.
 //
 //    %23 = call i8 @llvm.coro.suspend(token % 21, i1 false)
@@ -175,42 +174,42 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
 // We are fixing this by inserting a PHINode in the cleanup block with
 // all values undefined but the one coming out of await.ready edge.
 
-static void fixBrokenUse(Use& U) {
+static void fixBrokenUse(Use &U) {
   // Verify that we have the pattern above.
-  Instruction& I = *cast<Instruction>(U.getUser());
-  Instruction& D = *cast<Instruction>(U.get());
+  Instruction &I = *cast<Instruction>(U.getUser());
+  Instruction &D = *cast<Instruction>(U.get());
 
-  BasicBlock* DefBlock = D.getParent();
-  BasicBlock* PostDefBlock = DefBlock->getSingleSuccessor();
+  BasicBlock *DefBlock = D.getParent();
+  BasicBlock *PostDefBlock = DefBlock->getSingleSuccessor();
   if (!PostDefBlock)
     return;
   if (PostDefBlock->getSinglePredecessor() != nullptr)
     return;
 
   // Do a few more sanity checks.
-  BasicBlock* FallthruBB = I.getParent();
-  BasicBlock* CommonCleanupBB = FallthruBB->getSinglePredecessor();
+  BasicBlock *FallthruBB = I.getParent();
+  BasicBlock *CommonCleanupBB = FallthruBB->getSinglePredecessor();
   if (!CommonCleanupBB)
     return;
-  SwitchInst* SI = dyn_cast<SwitchInst>(CommonCleanupBB->getTerminator());
+  SwitchInst *SI = dyn_cast<SwitchInst>(CommonCleanupBB->getTerminator());
   if (!SI)
     return;
 
   // Okay, looks like it is cleanup related break that we can fix.
   auto Phi = PHINode::Create(D.getType(), 2, "", &PostDefBlock->front());
   auto Undef = llvm::UndefValue::get(D.getType());
-  for (BasicBlock* Pred : predecessors(PostDefBlock))
-    Phi->addIncoming(Pred == DefBlock ? (Value*)&D : Undef, Pred);
+  for (BasicBlock *Pred : predecessors(PostDefBlock))
+    Phi->addIncoming(Pred == DefBlock ? (Value *)&D : Undef, Pred);
 
   D.replaceUsesOutsideBlock(Phi, PostDefBlock);
 }
 
-static void runHorribleHackToFixupCleanupBlocks(Function& F) {
+static void runHorribleHackToFixupCleanupBlocks(Function &F) {
   DominatorTree DT(F);
-  SmallVector<Use*, 8> BrokenUses;
+  SmallVector<Use *, 8> BrokenUses;
 
-  for (Instruction& I : instructions(F)) {
-    for (Use& U: I.uses()) {
+  for (Instruction &I : instructions(F)) {
+    for (Use &U : I.uses()) {
       if (isa<llvm::PHINode>(U.getUser()))
         break;
       if (!DT.dominates(&I, U)) {
@@ -220,7 +219,7 @@ static void runHorribleHackToFixupCleanupBlocks(Function& F) {
     }
   }
 
-  for (Use* U: BrokenUses)
+  for (Use *U : BrokenUses)
     fixBrokenUse(*U);
 }
 
@@ -315,10 +314,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   // prior to the first suspend.
   struct CallCoroDelete final : public EHScopeStack::Cleanup {
     Stmt *S;
-    void Emit(CodeGenFunction &CGF, Flags flags) override {
-      CGF.EmitStmt(S);
-      //fixUpDelete(CGF);
-    }
+    void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
     CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
   };
   EHStack.pushCleanup<CallCoroDelete>(EHCleanup, SS.Deallocate);
@@ -366,7 +362,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     for (auto PM : S.getParamMoves()) {
       EmitStmt(PM);
-      // TODO: if(CoroParam(...)) need to suround ctor and dtor
+      // TODO: if(CoroParam(...)) need to surround ctor and dtor
       // for the copy, so that llvm can elide it if the copy is
       // not needed
     }
@@ -388,7 +384,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
   Builder.CreateCall(CoroEnd, {NullPtr, Builder.getInt1(0)});
 
-  // Emit return statement only if we are doing two stage return intialization.
+  // Emit return statement only if we are doing two stage return initialization.
   // I.e. when get_return_object requires a conversion to a return type.
   if (SS.ResultDecl) {
     EmitStmt(SS.ReturnStmt);
