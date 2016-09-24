@@ -12,6 +12,13 @@ struct coro {
   };
 };
 
+struct B {
+  ~B();
+  bool await_ready() { return true; }
+  B await_resume() { return {}; }
+  template <typename F> void await_suspend(F) {}
+};
+
 struct A {
   ~A(){}
   bool await_ready() { return true; }
@@ -21,6 +28,7 @@ struct A {
 };
 
 extern "C" coro f() { int val = co_await A{}; }
+// Does not work yet: extern "C" coro g() { B val = co_await B{}; }
 
 // CHECK-LABEL: @main
 int main() {

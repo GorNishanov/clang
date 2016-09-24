@@ -6,15 +6,15 @@ generator<int> fib(int n) {
     co_yield i;
 }
 
-extern "C" void yield(int);
+extern "C" void print(int);
 
 // CHECK-LABEL: @main
 int main() {
   for (auto v : fib(5))
-    yield(v);
-// CHECK: call void @yield(i32 0)
-// CHECK: call void @yield(i32 1)
-// CHECK: call void @yield(i32 2)
-// CHECK: call void @yield(i32 3)
-// CHECK: call void @yield(i32 4)
+    print(v);
+// CHECK: call void @print(i32 0)
+// CHECK: call void @print(i32 1)
+// CHECK: call void @print(i32 2)
+// CHECK: call void @print(i32 3)
+// CHECK: call void @print(i32 4)
 }
