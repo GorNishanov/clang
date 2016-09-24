@@ -123,24 +123,28 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   CGF.EmitBlock(SuspendBlock);
 
   llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
-  auto NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
-  auto SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
+  auto *NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
+  auto *SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
 
-  // FIXME: Handle bool returning suspendExpr.
-  CGF.EmitScalarExpr(S.getSuspendExpr());
+  auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
+  if (SuspendRet != nullptr) {
+    // FIXME: Handle bool returning suspendExpr.
+    CGF.ErrorUnsupported(S.getSuspendExpr(), "non void await_suspend");
+    return nullptr;
+  }
 
   llvm::Function *CoroSuspend =
       CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
-  auto SuspendResult = Builder.CreateCall(
+  auto *SuspendResult = Builder.CreateCall(
       CoroSuspend, {SaveCall, Builder.getInt1(IsFinalSuspend)});
-  auto Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
+  auto *Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
   Switch->addCase(Builder.getInt8(0), ReadyBlock);
   Switch->addCase(Builder.getInt8(1), CleanupBlock);
 
   CGF.EmitBlock(CleanupBlock);
 
-  auto jumpDest = CGF.getJumpDestForLabel(Coro.DeleteLabel);
-  CGF.EmitBranchThroughCleanup(jumpDest);
+  auto JumpDest = CGF.getJumpDestForLabel(Coro.DeleteLabel);
+  CGF.EmitBranchThroughCleanup(JumpDest);
 
   CGF.EmitBlock(ReadyBlock);
 
@@ -158,6 +162,8 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
 
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   EmitStmt(S.getPromiseCall());
+  auto JumpDest = getJumpDestForLabel(CurCoro.Data->DeleteLabel);
+  EmitBranchThroughCleanup(JumpDest);
 }
 
 Value *CodeGenFunction::EmitCoawaitExpr(CoawaitExpr const &S) {
