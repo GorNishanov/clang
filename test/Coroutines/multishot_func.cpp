@@ -60,9 +60,6 @@ private:
   std::coroutine_handle<promise_type> h;
 };
 
-extern "C" int yield(int);
-extern "C" float fyield(int);
-
 int Do(int acc, int n, func<int> f) { 
   for (int i = 0; i < n; ++i) 
     acc = f({acc, i});
