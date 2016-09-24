@@ -279,9 +279,9 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
 
   const StringRef Funcs[] = {"await_ready", "await_suspend", "await_resume"};
   for (size_t I = 0, N = llvm::array_lengthof(Funcs); I != N; ++I) {
-    Expr *Operand = new (S.Context)
-        OpaqueValueExpr(Loc, E->getType(), VK_LValue, E->getObjectKind(), E);
-
+    Expr *Operand = new (S.Context) OpaqueValueExpr(Loc, E->getType(),
+                                                    VK_LValue,
+                                                    E->getObjectKind(), E);
     ExprResult Result;
     if (I == AwaitSuspendIndex) {
       QualType PromiseType = CoroutinePromise->getType();
@@ -318,7 +318,6 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
         if (Result.isInvalid())
           return Calls;
       }
-      // FIXME: Handle errors.
     } else {
       Result = buildMemberCall(S, Operand, Loc, Funcs[I], {});
     }
