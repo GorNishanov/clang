@@ -34,8 +34,7 @@ extern "C" coro f(int n) {
     print(0);
     co_return;
   }
-  //int val = 
-  co_await A{};
+  int val = co_await A{};
   print(42);
 }
 // Does not work yet: extern "C" coro g() { B val = co_await B{}; }

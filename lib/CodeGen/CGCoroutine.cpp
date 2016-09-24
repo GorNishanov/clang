@@ -143,21 +143,90 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
 
   CGF.EmitBlock(CleanupBlock);
 
-  auto JumpDest = CGF.getJumpDestForLabel(Coro.DeleteLabel);
-  CGF.EmitBranchThroughCleanup(JumpDest);
+  // FIXME: This does not work if co_await exp result is used
+  //   see clang/test/Coroutines/brokenIR.cpp.
+  // Current we patch SSA with runHorribleHackToFixupCleanupBlocks(*CurFn)
+  // at the end of EmitCoroutineBody.
+  auto jumpDest = CGF.getJumpDestForLabel(Coro.DeleteLabel);
+  CGF.EmitBranchThroughCleanup(jumpDest);
 
   CGF.EmitBlock(ReadyBlock);
+  return CGF.EmitScalarExpr(S.getResumeExpr());
+}
 
-  llvm::Value *AwaitResumeResult = CGF.EmitScalarExpr(S.getResumeExpr());
-  if (AwaitResumeResult == nullptr)
-    return nullptr;
+// If await expression result is used we end up with broken IR with
+// definition of result of the await expression not dominating its uses.
+// It results from the way how cleanup blocks are threaded. Here is an
+// example of the broken IR we are fixing up.
+//
+//    %23 = call i8 @llvm.coro.suspend(token % 21, i1 false)
+//    switch i8 %23, label %coro.ret [ i8 0, label %await.ready
+//                                     i8 1, label %await.cleanup]
+// await.cleanup:
+//    store i32 2, i32* %cleanup.dest.slot
+//    br label %cleanup10
+// await.ready:
+//    %await.resume = call await_resume(%struct.A* %ref.tmp6)
+//    store i32 0, i32* %cleanup.dest.slot
+//    br label %common.cleanup
+// common.cleanup:
+//    ...
+//    %cleanup.dest = load i32, i32* %cleanup.dest.slot
+//    switch i32 %cleanup.dest, label %unreach[i32 0, label %fallthru
+//                                             i32 2, label %more.cleanup]
+// fallthru:
+//    use of %await.resume
+//
+// We are fixing this by inserting a PHINode in the cleanup block with
+// all values undefined but the one coming out of await.ready edge.
 
-  // Otherwise, spill the result of await_resume into an alloca.
-  // EmitBranchThroughCleanup we did earlier will break SSA, if we don't spill
-  // the value and reload it.
-  Address Ptr = CGF.CreateDefaultAlignTempAlloca(AwaitResumeResult->getType());
-  Builder.CreateStore(AwaitResumeResult, Ptr);
-  return Builder.CreateLoad(Ptr);
+static void fixBrokenUse(Use &U) {
+  // Verify that we have the pattern above.
+  Instruction &I = *cast<Instruction>(U.getUser());
+  Instruction &D = *cast<Instruction>(U.get());
+
+  BasicBlock *DefBlock = D.getParent();
+  BasicBlock *PostDefBlock = DefBlock->getSingleSuccessor();
+  if (!PostDefBlock)
+    return;
+  if (PostDefBlock->getSinglePredecessor() != nullptr)
+    return;
+
+  // Do a few more sanity checks.
+  BasicBlock *FallthruBB = I.getParent();
+  BasicBlock *CommonCleanupBB = FallthruBB->getSinglePredecessor();
+  if (!CommonCleanupBB)
+    return;
+  SwitchInst *SI = dyn_cast<SwitchInst>(CommonCleanupBB->getTerminator());
+  if (!SI)
+    return;
+
+  // Okay, looks like it is cleanup related break that we can fix.
+  auto Phi = PHINode::Create(D.getType(), 2, "", &PostDefBlock->front());
+  auto Undef = llvm::UndefValue::get(D.getType());
+  for (BasicBlock *Pred : predecessors(PostDefBlock))
+    Phi->addIncoming(Pred == DefBlock ? (Value *)&D : Undef, Pred);
+
+  D.replaceUsesOutsideBlock(Phi, PostDefBlock);
+}
+
+static void runHorribleHackToFixupCleanupBlocks(Function &F) {
+  DominatorTree DT(F);
+  SmallVector<Use *, 8> BrokenUses;
+
+  for (Instruction &I : instructions(F)) {
+    for (Use &U : I.uses()) {
+      if (isa<llvm::PHINode>(U.getUser()))
+        break;
+      if (!DT.dominates(&I, U)) {
+        BrokenUses.push_back(&U);
+        break; // Go to the next instruction.
+      }
+    }
+  }
+
+  for (Use *U : BrokenUses)
+    fixBrokenUse(*U);
 }
 
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
@@ -323,4 +392,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   if (S.getResultDecl()) {
     EmitStmt(S.getReturnStmt());
   }
+
+  runHorribleHackToFixupCleanupBlocks(*CurFn);
 }
