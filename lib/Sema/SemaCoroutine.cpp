@@ -104,17 +104,14 @@ static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S, SourceLocation Loc) 
   // FIXME: Cache std::coroutine_handle once we've found it.
   NamespaceDecl *Std = S.getStdNamespace();
   if (!Std) {
-    S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
+    S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
     return nullptr;
   }
 
   LookupResult Result(S, &S.PP.getIdentifierTable().get("coroutine_handle"),
     Loc, Sema::LookupOrdinaryName);
   if (!S.LookupQualifiedName(Result, Std)) {
-    // FIXME: Currently this error maps to:
-    //   "you need to include <coroutine> before defining a coroutine".
-    // It should probably have its own error message.
-    S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
+    S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
     return nullptr;
   }
   ClassTemplateDecl *Template = Result.getAsSingle<ClassTemplateDecl>();

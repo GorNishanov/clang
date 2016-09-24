@@ -59,10 +59,6 @@ extern "C" expected<int> h() { return {error{}, 42}; }
 
 extern "C" void print(int);
 
-void WORKAROUND_FOR_SEMACOROUTINE_BUG() {
-  std::coroutine_handle<expected<int>::promise_type>::from_address(0);
-}
-
 extern "C" expected<int> f1() {
   print(11);
   co_await g();
