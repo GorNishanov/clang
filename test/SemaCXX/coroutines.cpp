@@ -195,6 +195,16 @@ template<> struct std::coroutine_traits<void, yield_fn_tag> {
   };
 };
 
+namespace std {
+  template <typename Promise = void> struct coroutine_handle;
+}
+
+template <> struct std::coroutine_handle<void> {
+  static coroutine_handle from_address(void *addr) noexcept;
+};
+template <typename Promise>
+struct std::coroutine_handle : std::coroutine_handle<> {};
+
 namespace placeholder {
   awaitable f(), f(int); // expected-note 4{{possible target}}
   int g(), g(int); // expected-note 2{{candidate}}

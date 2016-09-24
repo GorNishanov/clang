@@ -111,7 +111,10 @@ static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S, SourceLocation Loc) 
   LookupResult Result(S, &S.PP.getIdentifierTable().get("coroutine_handle"),
     Loc, Sema::LookupOrdinaryName);
   if (!S.LookupQualifiedName(Result, Std)) {
-    S.Diag(Loc, diag::err_implied_std_initializer_list_not_found);
+    // FIXME: Currently this error maps to:
+    //   "you need to include <coroutine> before defining a coroutine".
+    // It should probably have its own error message.
+    S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
     return nullptr;
   }
   ClassTemplateDecl *Template = Result.getAsSingle<ClassTemplateDecl>();
@@ -146,6 +149,8 @@ QualType buildStdCoroutineHandle(Sema &S, QualType Element, SourceLocation Loc) 
   }
   */
   ClassTemplateDecl *StdCoroutineHandle = lookupStdCoroutineHandle(S, Loc);
+  if (!StdCoroutineHandle)
+    return QualType();
 
   TemplateArgumentListInfo Args(Loc, Loc);
   Args.addArgument(TemplateArgumentLoc(TemplateArgument(Element),
@@ -184,7 +189,7 @@ checkCoroutineContext(Sema &S, SourceLocation Loc, StringRef Keyword) {
   } else if (FD->isVariadic()) {
     S.Diag(Loc, diag::err_coroutine_varargs) << Keyword;
   } else {
-    FunctionScopeInfo *ScopeInfo = S.getCurFunction();
+    auto *ScopeInfo = S.getCurFunction();
     assert(ScopeInfo && "missing function scope for function");
 
     // If we don't have a promise variable, build one now.
@@ -286,6 +291,12 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
 
       CXXScopeSpec SS;
       QualType CoroHandle = buildStdCoroutineHandle(S, PromiseType, Loc);
+      if (CoroHandle.isNull())
+        return Calls;
+
+      if (S.RequireCompleteType(Loc, CoroHandle, diag::err_incomplete_type))
+        return Calls;
+
       DeclContext *LookupCtx = S.computeDeclContext(CoroHandle);
       LookupResult Found(S, &S.PP.getIdentifierTable().get("from_address"), Loc,
                          Sema::LookupOrdinaryName);
@@ -336,7 +347,7 @@ ExprResult Sema::ActOnCoawaitExpr(Scope *S, SourceLocation Loc, Expr *E) {
   return BuildCoawaitExpr(Loc, Awaitable.get());
 }
 ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
-  FunctionScopeInfo *Coroutine = checkCoroutineContext(*this, Loc, "co_await");
+  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_await");
   if (!Coroutine)
     return ExprError();
 
@@ -363,8 +374,8 @@ ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
   if (RSS.IsInvalid)
     return ExprError();
 
-  Expr *Res = new (Context)
-      CoawaitExpr(Loc, E, RSS.Results[0], RSS.Results[1], RSS.Results[2]);
+  Expr *Res = new (Context) CoawaitExpr(Loc, E, RSS.Results[0], RSS.Results[1],
+                                        RSS.Results[2]);
   Coroutine->CoroutineStmts.push_back(Res);
   return Res;
 }
@@ -375,7 +386,7 @@ static ExprResult buildPromiseCall(Sema &S, FunctionScopeInfo *Coroutine,
   assert(Coroutine->CoroutinePromise && "no promise for coroutine");
 
   // Form a reference to the promise.
-  VarDecl *Promise = Coroutine->CoroutinePromise;
+  auto *Promise = Coroutine->CoroutinePromise;
   ExprResult PromiseRef = S.BuildDeclRefExpr(
       Promise, Promise->getType().getNonReferenceType(), VK_LValue, Loc);
   if (PromiseRef.isInvalid())
@@ -386,7 +397,7 @@ static ExprResult buildPromiseCall(Sema &S, FunctionScopeInfo *Coroutine,
 }
 
 ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
-  FunctionScopeInfo *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
+  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
   if (!Coroutine)
     return ExprError();
 
@@ -401,7 +412,7 @@ ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
 }
 
 ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
-  FunctionScopeInfo *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
+  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
   if (!Coroutine)
     return ExprError();
 
@@ -436,8 +447,8 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   if (RSS.IsInvalid)
     return ExprError();
 
-  Expr *Res = new (Context)
-      CoyieldExpr(Loc, E, RSS.Results[0], RSS.Results[1], RSS.Results[2]);
+  Expr *Res = new (Context) CoyieldExpr(Loc, E, RSS.Results[0], RSS.Results[1],
+                                        RSS.Results[2]);
   Coroutine->CoroutineStmts.push_back(Res);
   return Res;
 }
@@ -445,9 +456,8 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
 StmtResult Sema::ActOnCoreturnStmt(SourceLocation Loc, Expr *E) {
   return BuildCoreturnStmt(Loc, E);
 }
-
 StmtResult Sema::BuildCoreturnStmt(SourceLocation Loc, Expr *E) {
-  FunctionScopeInfo *Coroutine = checkCoroutineContext(*this, Loc, "co_return");
+  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_return");
   if (!Coroutine)
     return StmtError();
 
@@ -503,6 +513,7 @@ struct RewriteParams : TreeTransform<RewriteParams> {
     return BaseTransform::TransformDeclRefExpr(E);
   }
 };
+}
 
 namespace {
 struct SubStmtBuilder {
@@ -831,7 +842,6 @@ public:
     return true;
   }
 };
-}
 }
 
 void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
