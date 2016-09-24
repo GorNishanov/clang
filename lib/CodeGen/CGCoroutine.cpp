@@ -76,9 +76,20 @@ struct OpaqueValueMappings {
         cast<CXXMemberCallExpr>(E)->getImplicitObjectArgument());
   }
 
+  static LValue getCommonExpr(CodeGenFunction &CGF,
+                              CoroutineSuspendExpr const &S) {
+    auto *E = S.getCommonExpr();
+    if (auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E))
+      return CGF.EmitMaterializeTemporaryExpr(MTE);
+    if (auto *UO = dyn_cast<UnaryOperator>(E))
+      if (UO->getOpcode() == UO_Coawait)
+        E = UO->getSubExpr();
+
+    return CGF.EmitLValue(E);
+  }
+
   OpaqueValueMappings(CodeGenFunction &CGF, CoroutineSuspendExpr const &S)
-      : common(CGF.EmitMaterializeTemporaryExpr(
-            cast<MaterializeTemporaryExpr>(S.getCommonExpr()))),
+      : common(getCommonExpr(CGF, S)),
         o1(CGF, opaque(S.getReadyExpr()), common),
         o2(CGF, opaque(S.getSuspendExpr()), common),
         o3(CGF, opaque(S.getResumeExpr()), common) {}
