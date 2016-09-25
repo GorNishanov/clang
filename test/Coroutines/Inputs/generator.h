@@ -3,21 +3,21 @@
 template <typename _Ty> struct generator {
   struct promise_type {
     _Ty current_value;
-    std::suspend_always yield_value(_Ty value) {
+    coro::suspend_always yield_value(_Ty value) {
       this->current_value = value;
       return {};
     }
-    std::suspend_always initial_suspend() { return {}; }
-    std::suspend_always final_suspend() { return {}; }
+    coro::suspend_always initial_suspend() { return {}; }
+    coro::suspend_always final_suspend() { return {}; }
     generator get_return_object() { return generator{this}; };
     void return_void() {}
   };
 
   struct iterator {
-    std::coroutine_handle<promise_type> _Coro;
+    coro::coroutine_handle<promise_type> _Coro;
     bool _Done;
 
-    iterator(std::coroutine_handle<promise_type> Coro, bool Done)
+    iterator(coro::coroutine_handle<promise_type> Coro, bool Done)
         : _Coro(Coro), _Done(Done) {}
 
     iterator &operator++() {
@@ -53,7 +53,7 @@ template <typename _Ty> struct generator {
 
 private:
   explicit generator(promise_type *p)
-      : p(std::coroutine_handle<promise_type>::from_promise(*p)) {}
+      : p(coro::coroutine_handle<promise_type>::from_promise(*p)) {}
 
-  std::coroutine_handle<promise_type> p;
+  coro::coroutine_handle<promise_type> p;
 };

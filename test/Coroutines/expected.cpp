@@ -38,14 +38,14 @@ struct expected {
   struct promise_type {
     Data data;
     DataPtr get_return_object() { return {&data}; }
-    std::suspend_never initial_suspend() { return {}; }
-    std::suspend_never final_suspend() { return {}; }
+    coro::suspend_never initial_suspend() { return {}; }
+    coro::suspend_never final_suspend() { return {}; }
     void return_value(T v) { data.val = std::move(v); data.error = {};}
   };
 
   bool await_ready() { return !data.error; }
   T await_resume() { return std::move(data.val); }
-  void await_suspend(std::coroutine_handle<promise_type> h) {
+  void await_suspend(coro::coroutine_handle<promise_type> h) {
     h.promise().data.error =std::move(data.error);
     h.destroy();
   }

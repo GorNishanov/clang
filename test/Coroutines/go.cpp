@@ -2,9 +2,8 @@
 #define assert(...)
 #define printf(...)
 #include "Inputs/coroutine.h"
-//#include "experimental/coroutine.h"
 
-using namespace std;
+using namespace std::experimental;
 
 bool cancel = false;
 

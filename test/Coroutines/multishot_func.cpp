@@ -11,10 +11,10 @@ template <typename R> struct func {
     Input* I;
     R result;
     func get_return_object() { return {this}; }
-    std::suspend_always initial_suspend() { return {}; }
-    std::suspend_never final_suspend() { return {}; }
+    coro::suspend_always initial_suspend() { return {}; }
+    coro::suspend_never final_suspend() { return {}; }
     template <typename F>
-    std::suspend_always yield_value(F&& f) { 
+    coro::suspend_always yield_value(F&& f) {
       result = f(I->a, I->b); 
       return {};
     }
@@ -56,8 +56,8 @@ template <typename R> struct func {
 
 private:
   func(promise_type *promise)
-      : h(std::coroutine_handle<promise_type>::from_promise(*promise)) {}
-  std::coroutine_handle<promise_type> h;
+      : h(coro::coroutine_handle<promise_type>::from_promise(*promise)) {}
+  coro::coroutine_handle<promise_type> h;
 };
 
 int Do(int acc, int n, func<int> f) { 

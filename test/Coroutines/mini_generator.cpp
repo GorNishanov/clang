@@ -4,12 +4,12 @@
 struct minig {
   struct promise_type {
     int current_value;
-    std::suspend_always yield_value(int value) {
+    coro::suspend_always yield_value(int value) {
       this->current_value = value;
       return {};
     }
-    std::suspend_always initial_suspend() { return {}; }
-    std::suspend_always final_suspend() { return {}; }
+    coro::suspend_always initial_suspend() { return {}; }
+    coro::suspend_always final_suspend() { return {}; }
     minig get_return_object() { return minig{this}; };
   };
 
@@ -28,9 +28,9 @@ struct minig {
 
 private:
   explicit minig(promise_type *p)
-      : p(std::coroutine_handle<promise_type>::from_promise(*p)) {}
+      : p(coro::coroutine_handle<promise_type>::from_promise(*p)) {}
 
-  std::coroutine_handle<promise_type> p;
+  coro::coroutine_handle<promise_type> p;
 };
 
 minig fib(int n) { 

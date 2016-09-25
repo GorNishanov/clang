@@ -1,14 +1,14 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fcoroutines -emit-llvm %s -o - -std=c++14 -O2 | FileCheck %s
 #include "Inputs/coroutine.h"
 
-struct coro {
+struct coro_t {
   struct promise_type {
-    coro get_return_object() {
-      std::coroutine_handle<promise_type>{};
+    coro_t get_return_object() {
+      coro::coroutine_handle<promise_type>{};
       return {};
     }
-    std::suspend_never initial_suspend() { return {}; }
-    std::suspend_never final_suspend() { return {}; }
+    coro::suspend_never initial_suspend() { return {}; }
+    coro::suspend_never final_suspend() { return {}; }
     void return_void(){}
   };
 };
@@ -29,7 +29,7 @@ struct A {
   template <typename F> void await_suspend(F) {}
 };
 
-extern "C" coro f(int n) {
+extern "C" coro_t f(int n) {
   if (n == 0) {
     print(0);
     co_return;

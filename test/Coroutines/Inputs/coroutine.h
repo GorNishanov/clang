@@ -1,6 +1,7 @@
 #pragma once
 
-namespace std {
+namespace std { namespace experimental { inline namespace coroutines_v1 {
+
 template <typename R, typename...> struct coroutine_traits {
   using promise_type = typename R::promise_type;
 };
@@ -75,4 +76,8 @@ struct suspend_never {
   void await_suspend(coroutine_handle<>) {}
   void await_resume() {}
 };
-}
+
+}}}
+
+namespace coro = std::experimental::coroutines_v1;
+

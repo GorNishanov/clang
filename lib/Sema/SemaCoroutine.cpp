@@ -27,7 +27,7 @@ using namespace sema;
 static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
                                   SourceLocation Loc) {
   // FIXME: Cache std::coroutine_traits once we've found it.
-  NamespaceDecl *Std = S.getStdNamespace();
+  NamespaceDecl *Std = S.getStdExperimentalNamespace();
   if (!Std) {
     S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
     return QualType();
@@ -102,7 +102,7 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
 
 static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S, SourceLocation Loc) {
   // FIXME: Cache std::coroutine_handle once we've found it.
-  NamespaceDecl *Std = S.getStdNamespace();
+  NamespaceDecl *Std = S.getStdExperimentalNamespace();
   if (!Std) {
     S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
     return nullptr;

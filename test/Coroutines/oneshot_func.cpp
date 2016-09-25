@@ -8,8 +8,8 @@ template <typename R> struct func {
   struct promise_type {
     R result;
     func get_return_object() { return {this}; }
-    std::suspend_always initial_suspend() { return {}; }
-    std::suspend_always final_suspend() { return {}; }
+    coro::suspend_always initial_suspend() { return {}; }
+    coro::suspend_always final_suspend() { return {}; }
     void return_value(R v) { result = v; }
   };
 
@@ -46,8 +46,8 @@ template <typename R> struct func {
 
 private:
   func(promise_type *promise)
-      : h(std::coroutine_handle<promise_type>::from_promise(*promise)) {}
-  std::coroutine_handle<promise_type> h;
+      : h(coro::coroutine_handle<promise_type>::from_promise(*promise)) {}
+  coro::coroutine_handle<promise_type> h;
 };
 
 extern "C" int yield(int);
