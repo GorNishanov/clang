@@ -5423,6 +5423,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-fblocks-runtime-optional");
   }
 
+  if (Args.hasFlag(options::OPT_fcoroutines, options::OPT_fno_coroutines, false)
+      && types::isCXX(InputType)) {
+    CmdArgs.push_back("-fcoroutines");
+  }
+
   // -fmodules enables the use of precompiled modules (off by default).
   // Users can pass -fno-cxx-modules to turn off modules support for
   // C++/Objective-C++ programs.
