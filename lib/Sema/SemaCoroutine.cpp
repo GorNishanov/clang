@@ -397,16 +397,8 @@ ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
   if (!Coroutine)
     return ExprError();
 
-#if 0
-  // FIXME: debug why this does not work
-  // Build 'operator co_await' call.
-   Awaitable = buildOperatorCoawaitCall(*this, S, Loc, Awaitable.get());
-   if (Awaitable.isInvalid())
-    return ExprError();
-#endif
   return BuildCoyieldExpr(Loc, E);
 }
-
 ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   auto *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
   if (!Coroutine)
@@ -424,13 +416,22 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
     return Res;
   }
 
+  // FIXME: Moved it from ActOnCoyieldExpr to BuildCoyieldExpr, otherwise,
+  //   mutlishot_func.cpp breaks. There must be a better fix.
+
   // Build yield_value call.
   ExprResult Awaitable =
     buildPromiseCall(*this, Coroutine, Loc, "yield_value", E);
   if (Awaitable.isInvalid())
     return ExprError();
-
   E = Awaitable.get();
+
+#if 0 // FIXME: Make it work
+  // Build 'operator co_await' call.
+  Awaitable = buildOperatorCoawaitCall(*this, S, Loc, Awaitable.get());
+  if (Awaitable.isInvalid())
+    return ExprError();
+#endif
 
   // If the expression is a temporary, materialize it as an lvalue so that we
   // can use it multiple times.
