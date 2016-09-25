@@ -8113,7 +8113,6 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
   bool IsStd = false;
   bool IsStdExperimental = false;
   bool AddToKnown = false;
-  DeclContext *ScopeContext = NamespcScope->getEntity();
   Scope *DeclRegionScope = NamespcScope->getParent();
 
   NamespaceDecl *PrevNS = nullptr;
