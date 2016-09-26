@@ -225,7 +225,6 @@ static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID id,
   assert(BuiltInDecl && "failed to find builtin declaration");
 
   ExprResult DeclRef = S.BuildDeclRefExpr(BuiltInDecl, BuiltInDecl->getType(),
-                                          // S.Context.BuiltinFnTy,
                                           VK_RValue, Loc, nullptr);
   assert(DeclRef.isUsable() && "Builtin reference cannot fail");
 
