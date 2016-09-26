@@ -517,7 +517,7 @@ struct SubStmtBuilder {
   Stmt *Body = nullptr;
   Stmt *Promise = nullptr;
   Expr *InitialSuspend = nullptr;
-  Expr *FinalSuspend = nullptr;
+  LabelStmt *FinalSuspend = nullptr;
   Stmt *OnException = nullptr;
   Stmt *OnFallthrough = nullptr;
   Expr *Allocate = nullptr;
@@ -539,14 +539,17 @@ private:
 public:
   SubStmtBuilder(Sema &S, FunctionDecl &FD, FunctionScopeInfo &Fn, Stmt *Body)
       : S(S), FD(FD), Fn(Fn), Loc(FD.getLocation()) {
-    LabelDecl *label =
+    LabelDecl *DestroyLabel =
         LabelDecl::Create(S.Context, S.CurContext, SourceLocation(),
                           S.PP.getIdentifierInfo("coro.destroy.label"));
+    LabelDecl *FinalLabel =
+      LabelDecl::Create(S.Context, S.CurContext, SourceLocation(),
+        S.PP.getIdentifierInfo("coro.final.label"));
 
     this->Body = Body;
     this->IsValid = makePromiseStmt() && makeInitialSuspend() &&
-                    makeFinalSuspend() && makeOnException() &&
-                    makeOnFallthrough() && makeNewAndDeleteExpr(label) &&
+                    makeFinalSuspend(FinalLabel) && makeOnException() &&
+                    makeOnFallthrough() && makeNewAndDeleteExpr(DestroyLabel) &&
                     makeResultDecl() && makeReturnStmt() && makeParamMoves();
     if (IsValid) {
 #if 0
@@ -597,7 +600,7 @@ public:
     return true;
   }
 
-  bool makeFinalSuspend() {
+  bool makeFinalSuspend(LabelDecl *FinalLabel) {
     // Form and check implicit 'co_await p.final_suspend();' statement.
     ExprResult FinalSuspend =
         buildPromiseCall(S, &Fn, Loc, "final_suspend", None);
@@ -608,7 +611,14 @@ public:
     if (FinalSuspend.isInvalid())
       return false;
 
-    this->FinalSuspend = FinalSuspend.get();
+    // Make it a labeled statement.
+    StmtResult Stmt =
+        S.ActOnLabelStmt(Loc, FinalLabel, Loc, FinalSuspend.get());
+
+    if (Stmt.isInvalid())
+      return false;
+
+    this->FinalSuspend = cast<LabelStmt>(Stmt.get());
     return true;
   }
 

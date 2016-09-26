@@ -50,10 +50,12 @@ namespace CodeGen {
 struct CGCoroData {
   AwaitKind CurrentAwaitKind = AwaitKind::Init;
   LabelDecl *DeleteLabel = nullptr;
+  LabelDecl *FinalLabel = nullptr;
   llvm::BasicBlock *SuspendBB = nullptr;
 
   unsigned AwaitNum = 0;
   unsigned YieldNum = 0;
+  unsigned CoreturnCount = 0;
 };
 }
 }
@@ -241,8 +243,9 @@ static void runHorribleHackToFixupCleanupBlocks(Function &F) {
 }
 
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
+  ++CurCoro.Data->CoreturnCount;
   EmitStmt(S.getPromiseCall());
-  auto JumpDest = getJumpDestForLabel(CurCoro.Data->DeleteLabel);
+  auto JumpDest = getJumpDestForLabel(CurCoro.Data->FinalLabel);
   EmitBranchThroughCleanup(JumpDest);
 }
 
@@ -311,6 +314,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
   CurCoro.Data->SuspendBB = RetBB;
   CurCoro.Data->DeleteLabel = S.getDeallocate()->getDecl();
+  CurCoro.Data->FinalLabel = S.getFinalSuspendStmt()->getDecl();
 
   Builder.CreateCondBr(CoroAlloc, AllocBB, InitBB);
 
@@ -387,7 +391,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
     EmitStmt(S.getBody());
 
-    if (Builder.GetInsertBlock()) {
+    // See if we need to generate final suspend.
+    const bool CanFallthrough = Builder.GetInsertBlock();
+    const bool HasCoreturns = CurCoro.Data->CoreturnCount > 0;
+    if (CanFallthrough || HasCoreturns) {
       CurCoro.Data->CurrentAwaitKind = AwaitKind::Final;
       EmitStmt(S.getFinalSuspendStmt());
     }

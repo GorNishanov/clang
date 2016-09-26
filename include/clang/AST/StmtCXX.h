@@ -321,14 +321,15 @@ class CoroutineBodyStmt : public Stmt {
   }
 
   CoroutineBodyStmt(Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-                    Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
-                    Expr *Allocate, LabelStmt *Deallocate, Stmt *ResultDecl,
-                    Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
+                    LabelStmt *FinalSuspend, Stmt *OnException,
+                    Stmt *OnFallthrough, Expr *Allocate, LabelStmt *Deallocate,
+                    Stmt *ResultDecl, Stmt *ReturnStmt,
+                    ArrayRef<Stmt *> ParamMoves);
 
 public:
   static CoroutineBodyStmt *
   Create(const ASTContext &C, Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-         Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
+         LabelStmt *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
          Expr *Allocate, LabelStmt *Deallocate, Stmt *ResultDecl,
          Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
 
@@ -346,7 +347,9 @@ public:
     return cast<VarDecl>(getPromiseDeclStmt()->getSingleDecl());
   }
   Stmt *getInitSuspendStmt() const { return SubStmts[SubStmt::InitSuspend]; }
-  Stmt *getFinalSuspendStmt() const { return SubStmts[SubStmt::FinalSuspend]; }
+  LabelStmt *getFinalSuspendStmt() const {
+    return cast<LabelStmt>(SubStmts[SubStmt::FinalSuspend]);
+  }
   Stmt *getExceptionHandler() const { return SubStmts[SubStmt::OnException]; }
   Stmt *getFallthroughHandler() const {
     return SubStmts[SubStmt::OnFallthrough];
