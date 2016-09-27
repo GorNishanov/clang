@@ -14,6 +14,7 @@
 #include "CodeGenFunction.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -61,11 +62,17 @@ struct CGCoroData {
 };
 }
 }
-
 clang::CodeGen::CodeGenFunction::CGCoroInfo::CGCoroInfo() {}
 CodeGenFunction::CGCoroInfo::~CGCoroInfo() {}
 
 bool CodeGenFunction::isCoroutine() const { return CurCoro.Data != nullptr; }
+
+static void createCoroDataIfNeeded(CodeGenFunction::CGCoroInfo& CurCoro) {
+  if (CurCoro.Data)
+    return;
+
+  CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
+}
 
 namespace {
 struct OpaqueValueMappings {
@@ -298,13 +305,6 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
 }
 #endif
 
-static void createCoroDataIfNeeded(CodeGenFunction::CGCoroInfo& CurCoro) {
-  if (CurCoro.Data)
-    return;
-
-  CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
-}
-
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
@@ -436,10 +436,13 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   case llvm::Intrinsic::coro_alloc:
   case llvm::Intrinsic::coro_begin:
   case llvm::Intrinsic::coro_free: {
-    // FIXME: Better diagnostic
-    assert(CurCoro.Data && CurCoro.Data->CoroId && "No @llvm.coro.id");
-    Args.push_back(CurCoro.Data->CoroId);
-    break;
+    if (CurCoro.Data && CurCoro.Data->CoroId) {
+      Args.push_back(CurCoro.Data->CoroId);
+      break;
+    }
+    CGM.Error(E->getLocStart(), "this builtin expect that __builtin_coro_id has"
+      "been used earlier in this function");
+    // Fallthrough to the next case to add TokenNone as the first argument.
   }
   // @llvm.coro.suspend takes a token parameter. Add token 'none' as the first
   // argument.
@@ -457,9 +460,14 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   // and coro.free intrinsics to refer to it.
   if (IID == llvm::Intrinsic::coro_id) {
     createCoroDataIfNeeded(CurCoro);
-    // FIXME: Better diagnostic
-    assert(!CurCoro.Data->CoroId && "more than one @llvm.coro.id");
-    CurCoro.Data->CoroId = Call;
+
+    if (CurCoro.Data->CoroId) {
+      CGM.Error(E->getLocStart(),
+                "only one __builtin_coro_id can be used in a function");
+    }
+    else {
+      CurCoro.Data->CoroId = Call;
+    }
   }
 
   return RValue::get(Call);
