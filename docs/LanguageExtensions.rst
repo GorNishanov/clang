@@ -1919,7 +1919,7 @@ during development of the coroutine feature. See `Coroutines in LLVM
 more information on their semantics. Note that builtins matching the intrinsics
 that take token as the first parameter (llvm.coro.begin, llvm.coro.alloc, 
 llvm.coro.free and llvm.coro.suspend) omit the token parameter and fill it to
-an approriate value during the emission.
+an appropriate value during the emission.
 
 **Syntax**:
 
@@ -1936,6 +1936,10 @@ an approriate value during the emission.
   char __builtin_coro_suspend(bool final)
   bool __builtin_coro_param(void* original, void* copy)
 
+Note that there is no builtin matching the `llvm.coro.save` intrinsic. LLVM
+automatically will insert one if the first argument to `llvm.coro.suspend` is
+token `none`. If a user calls `__builin_suspend`, clang will insert `token none`
+as the first argument to the intrinsic.
 
 Non-standard C++11 Attributes
 =============================
