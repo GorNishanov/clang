@@ -56,6 +56,8 @@ struct CGCoroData {
   unsigned AwaitNum = 0;
   unsigned YieldNum = 0;
   unsigned CoreturnCount = 0;
+
+  llvm::CallInst *CoroId = nullptr;
 };
 }
 }
@@ -296,6 +298,13 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
 }
 #endif
 
+static void createCoroDataIfNeeded(CodeGenFunction::CGCoroInfo& CurCoro) {
+  if (CurCoro.Data)
+    return;
+
+  CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
@@ -311,10 +320,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *InitBB = createBasicBlock("coro.init");
   auto *RetBB = createBasicBlock("coro.ret");
 
-  CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
+  createCoroDataIfNeeded(CurCoro);
   CurCoro.Data->SuspendBB = RetBB;
   CurCoro.Data->DeleteLabel = S.getDeallocate()->getDecl();
   CurCoro.Data->FinalLabel = S.getFinalSuspendStmt()->getDecl();
+  CurCoro.Data->CoroId = CoroId;
 
   Builder.CreateCondBr(CoroAlloc, AllocBB, InitBB);
 
@@ -412,4 +422,45 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   }
 
   runHorribleHackToFixupCleanupBlocks(*CurFn);
+}
+
+RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
+                                               unsigned int IID) {
+  SmallVector<Value*, 8> Args;
+  switch (IID) {
+  default:
+    break;
+  // The following three intrinsics take a token parameter referring to a token
+  // returned by earlier call to @llvm.coro.id. Since we cannot represent it in
+  // builtins, we patch it up here.
+  case llvm::Intrinsic::coro_alloc:
+  case llvm::Intrinsic::coro_begin:
+  case llvm::Intrinsic::coro_free: {
+    // FIXME: Better diagnostic
+    assert(CurCoro.Data && CurCoro.Data->CoroId && "No @llvm.coro.id");
+    Args.push_back(CurCoro.Data->CoroId);
+    break;
+  }
+  // @llvm.coro.suspend takes a token parameter. Add token 'none' as the first
+  // argument.
+  case llvm::Intrinsic::coro_suspend:
+    Args.push_back(llvm::ConstantTokenNone::get(getLLVMContext()));
+    break;
+  }
+  for (auto &Arg : E->arguments())
+    Args.push_back(EmitScalarExpr(Arg));
+
+  Value *F = CGM.getIntrinsic(IID);
+  llvm::CallInst *Call = Builder.CreateCall(F, Args);
+
+  // If we see @llvm.coro.id remember it. We will update coro.alloc, coro.begin
+  // and coro.free intrinsics to refer to it.
+  if (IID == llvm::Intrinsic::coro_id) {
+    createCoroDataIfNeeded(CurCoro);
+    // FIXME: Better diagnostic
+    assert(!CurCoro.Data->CoroId && "more than one @llvm.coro.id");
+    CurCoro.Data->CoroId = Call;
+  }
+
+  return RValue::get(Call);
 }

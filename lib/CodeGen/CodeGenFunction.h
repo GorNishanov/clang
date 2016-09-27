@@ -2303,7 +2303,8 @@ public:
   void EmitObjCAtThrowStmt(const ObjCAtThrowStmt &S);
   void EmitObjCAtSynchronizedStmt(const ObjCAtSynchronizedStmt &S);
   void EmitObjCAutoreleasePoolStmt(const ObjCAutoreleasePoolStmt &S);
-  
+
+  RValue EmitCoroutineIntrinsic(const CallExpr *E, unsigned int IID);
   void EmitCoroutineBody(const CoroutineBodyStmt &S);
   void EmitCoreturnStmt(const CoreturnStmt &S);
   llvm::Value *EmitCoawaitExpr(const CoawaitExpr &E);

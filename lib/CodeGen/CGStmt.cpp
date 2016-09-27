@@ -1054,12 +1054,14 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
   if (!RV || RV->isEvaluatable(getContext()))
     ++NumSimpleReturnExprs;
 
-  cleanupScope.ForceCleanup();
   // CGCoroutine.cpp uses EmitReturn statement to build return value
   // for the coroutine which will be followed by the coroutine body. We don't
-  // need to branch to ReturnBlock in this case.
-  if (!isCoroutine())
-    EmitBranchThroughCleanup(ReturnBlock);
+  // need to branch to ReturnBlock or run cleanups in this case.
+  if (isCoroutine())
+    return;
+
+  cleanupScope.ForceCleanup();
+  EmitBranchThroughCleanup(ReturnBlock);
 }
 
 void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {

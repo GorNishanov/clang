@@ -2,7 +2,7 @@ void free(void *ptr);
 void *malloc(unsigned int);
 
 #define CORO_SUSPEND_IMPL(IsFinal)                                             \
-  switch (__builtin_coro_suspend(__builtin_coro_save(0), IsFinal)) {           \
+  switch (__builtin_coro_suspend(IsFinal)) {           \
   case 0:                                                                      \
     if (IsFinal)                                                               \
       __builtin_trap();                                                        \
@@ -17,8 +17,11 @@ void *malloc(unsigned int);
 #define CORO_FINAL_SUSPEND() CORO_SUSPEND_IMPL(1)
 
 #define CORO_BEGIN(AllocFunc)                                                  \
-  void *coro_hdl = __builtin_coro_begin(__builtin_coro_id(0, 0, 0, 0),         \
-                                        AllocFunc(__builtin_coro_size()));
+  void *coro_hdl =                                                             \
+      (__builtin_coro_id(0, 0, 0, 0),                                          \
+       __builtin_coro_begin((__builtin_coro_alloc()                            \
+                                 ? AllocFunc(__builtin_coro_size())            \
+                                 : (void *)0)));
 
 #define CORO_END(FreeFunc)                                                     \
   coro_Cleanup : {                                                             \
