@@ -22,50 +22,51 @@ void no_coroutine_traits() {
   co_await a; // expected-error {{need to include <coroutine>}}
 }
 
-namespace std {
+namespace std { namespace experimental {
   template<typename ...T> struct coroutine_traits; // expected-note {{declared here}}
-};
+}}
 
 template<typename Promise> struct coro {};
 template<typename Promise, typename... Ps>
-struct std::coroutine_traits<coro<Promise>, Ps...> {
+struct std::experimental::coroutine_traits<coro<Promise>, Ps...> {
   using promise_type = Promise;
 };
 
 void no_specialization() {
-  co_await a; // expected-error {{implicit instantiation of undefined template 'std::coroutine_traits<void>'}}
+  co_await a; // expected-error {{implicit instantiation of undefined template 'std::experimental::coroutine_traits<void>'}}
 }
 
-template<typename ...T> struct std::coroutine_traits<int, T...> {};
+template<typename ...T> struct std::experimental::coroutine_traits<int, T...> {};
 
 int no_promise_type() {
-  co_await a; // expected-error {{this function cannot be a coroutine: 'std::coroutine_traits<int>' has no member named 'promise_type'}}
+  co_await a; // expected-error {{this function cannot be a coroutine: 'std::experimental::coroutine_traits<int>' has no member named 'promise_type'}}
 }
 
-template<> struct std::coroutine_traits<double, double> { typedef int promise_type; };
+template<> struct std::experimental::coroutine_traits<double, double> { typedef int promise_type; };
 double bad_promise_type(double) {
-  co_await a; // expected-error {{this function cannot be a coroutine: 'std::coroutine_traits<double, double>::promise_type' (aka 'int') is not a class}}
+  co_await a; // expected-error {{this function cannot be a coroutine: 'std::experimental::coroutine_traits<double, double>::promise_type' (aka 'int') is not a class}}
 }
 
-template<> struct std::coroutine_traits<double, int> {
+template<> struct std::experimental::coroutine_traits<double, int> {
   struct promise_type {};
 };
 double bad_promise_type_2(int) {
-  co_yield 0; // expected-error {{no member named 'yield_value' in 'std::coroutine_traits<double, int>::promise_type'}}
+  co_yield 0; // expected-error {{no member named 'yield_value' in 'std::experimental::coroutine_traits<double, int>::promise_type'}}
 }
 
 struct promise; // expected-note 2{{forward declaration}}
-template<typename ...T> struct std::coroutine_traits<void, T...> { using promise_type = promise; };
+template<typename ...T> struct std::experimental::coroutine_traits<void, T...> { using promise_type = promise; };
 
-namespace std {
+
+namespace std { namespace experimental {
   template <typename Promise = void> struct coroutine_handle;
-}
+}}
 
-template <> struct std::coroutine_handle<void> {
+template <> struct std::experimental::coroutine_handle<void> {
   static coroutine_handle from_address(void *addr) noexcept;
 };
 template <typename Promise>
-struct std::coroutine_handle : std::coroutine_handle<> {};
+struct std::experimental::coroutine_handle : std::experimental::coroutine_handle<> {};
 
   // FIXME: This diagnostic is terrible.
 void undefined_promise() { // expected-error {{variable has incomplete type 'promise_type'}}
@@ -192,7 +193,7 @@ namespace dependent_operator_co_await_lookup {
 }
 
 struct yield_fn_tag {};
-template<> struct std::coroutine_traits<void, yield_fn_tag> {
+template<> struct std::experimental::coroutine_traits<void, yield_fn_tag> {
   struct promise_type {
     // FIXME: add an await_transform overload for functions
     awaitable yield_value(int());
