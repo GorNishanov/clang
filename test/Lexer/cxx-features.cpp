@@ -5,7 +5,7 @@
 // RUN: %clang_cc1 -std=c++1z -fcxx-exceptions -fsized-deallocation -verify %s
 // RUN: %clang_cc1 -std=c++1z -fcxx-exceptions -fsized-deallocation -fconcepts-ts -DCONCEPTS_TS=1 -verify %s
 // RUN: %clang_cc1 -fno-rtti -verify %s -DNO_EXCEPTIONS -DNO_RTTI
-// RUN: %clang_cc1 -fcoroutines -DNO_EXCEPTIONS -DCOROUTINES -verify %s
+// RUN: %clang_cc1 -fcoroutines-ts -DNO_EXCEPTIONS -DCOROUTINES -verify %s
 
 // expected-no-diagnostics
 
@@ -222,6 +222,6 @@
 #error "wrong value for __cpp_experimental_concepts"
 #endif
 
-#if (COROUTINES && !__cpp_coroutines) || (!COROUTINES && __cpp_coroutines)
-#error "wrong value for __cpp_coroutines"
+#if (COROUTINES && !__cpp_experimental_coroutines) || (!COROUTINES && __cpp_experimental_coroutines)
+#error "wrong value for __cpp_experimental_coroutines"
 #endif

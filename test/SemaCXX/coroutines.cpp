@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++14 -fcoroutines -verify %s
+// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -verify %s
 
 struct awaitable {
   bool await_ready();
