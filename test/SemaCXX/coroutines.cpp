@@ -83,9 +83,9 @@ struct promise {
   void get_return_object();
   suspend_always initial_suspend();
   suspend_always final_suspend();
-  awaitable yield_value(int); // expected-note 1{{candidate}}
-  awaitable yield_value(yielded_thing); // expected-note 1{{candidate}}
-  not_awaitable yield_value(void()); // expected-note 1{{candidate}}
+  awaitable yield_value(int); // expected-note 2{{candidate}}
+  awaitable yield_value(yielded_thing); // expected-note 2{{candidate}}
+  not_awaitable yield_value(void()); // expected-note 2{{candidate}}
   void return_void();
   void return_value(int); // expected-note 2{{here}}
 };
@@ -212,7 +212,7 @@ namespace placeholder {
     co_await f; // expected-error {{reference to overloaded function}}
   }
   void y() {
-    // co_yield g; FIXME: expected-err0r {{no matching member function for call to 'yield_value'}}
+    co_yield g; // expected-error {{no matching member function for call to 'yield_value'}}
   }
   void z() {
     co_await a;
@@ -223,7 +223,7 @@ namespace placeholder {
     co_await f; // expected-error {{reference to overloaded function}}
   }
   void y(yield_fn_tag) {
-// FIXME:    co_yield g;
+    co_yield g;
   }
   void z(yield_fn_tag) {
     co_await a;
