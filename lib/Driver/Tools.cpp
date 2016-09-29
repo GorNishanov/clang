@@ -5425,7 +5425,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (Args.hasFlag(options::OPT_fcoroutines, options::OPT_fno_coroutines, false)
       && types::isCXX(InputType)) {
-    CmdArgs.push_back("-fcoroutines");
+    CmdArgs.push_back("-fcoroutines-ts");
   }
 
   // -fmodules enables the use of precompiled modules (off by default).
