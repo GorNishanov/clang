@@ -62,6 +62,10 @@ struct CGCoroData {
   // Note: llvm.coro.id returns a token that cannot be directly expressed in a
   // builtin.
   llvm::CallInst *CoroId = nullptr;
+  // If coro.id came from the builtin, remember the expression to give better
+  // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
+  // EmitCoroutineBody.
+  CallExpr const *CoroIdExpr = nullptr;
 };
 }
 }
@@ -69,11 +73,26 @@ struct CGCoroData {
 clang::CodeGen::CodeGenFunction::CGCoroInfo::CGCoroInfo() {}
 CodeGenFunction::CGCoroInfo::~CGCoroInfo() {}
 
-static void createCoroDataIfNeeded(CodeGenFunction::CGCoroInfo &CurCoro) {
-  if (CurCoro.Data)
-    return;
+static bool createCoroData(CodeGenFunction &CGF,
+                           CodeGenFunction::CGCoroInfo &CurCoro,
+                           llvm::CallInst *CoroId, CallExpr const *CoroIdExpr) {
+  if (CurCoro.Data) {
+    if (CurCoro.Data->CoroIdExpr)
+      CGF.CGM.Error(CoroIdExpr->getLocStart(),
+                    "only one __builtin_coro_id can be used in a function");
+    else if (CoroIdExpr)
+      CGF.CGM.Error(CoroIdExpr->getLocStart(),
+                    "__builtin_coro_id shall not be used in a C++ coroutine");
+    else
+      llvm_unreachable("EmitCoroutineBodyStatement called twice?");
+
+    return false;
+  }
 
   CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
+  CurCoro.Data->CoroId = CoroId;
+  CurCoro.Data->CoroIdExpr = CoroIdExpr;
+  return true;
 }
 
 bool CodeGenFunction::isCoroutine() const { return CurCoro.Data != nullptr; }
@@ -324,7 +343,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *InitBB = createBasicBlock("coro.init");
   auto *RetBB = createBasicBlock("coro.ret");
 
-  createCoroDataIfNeeded(CurCoro);
+  if (!createCoroData(*this, CurCoro, CoroId, nullptr)) {
+    // User inserted __builtin_coro_id by hand. Should not try to emit anything.
+    return;
+  }
   CurCoro.Data->SuspendBB = RetBB;
   CurCoro.Data->DeleteLabel = S.getDeallocate()->getDecl();
   CurCoro.Data->FinalLabel = S.getFinalSuspendStmt()->getDecl();
@@ -445,7 +467,7 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
       break;
     }
     CGM.Error(E->getLocStart(), "this builtin expect that __builtin_coro_id has"
-                                "been used earlier in this function");
+                                " been used earlier in this function");
     // Fallthrough to the next case to add TokenNone as the first argument.
   }
   // @llvm.coro.suspend takes a token parameter. Add token 'none' as the first
@@ -460,17 +482,10 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   llvm::Value *F = CGM.getIntrinsic(IID);
   llvm::CallInst *Call = Builder.CreateCall(F, Args);
 
-  // If we see @llvm.coro.id remember it. We will update coro.alloc, coro.begin
-  // and coro.free intrinsics to refer to it.
+  // If we see @llvm.coro.id remember it in the CoroData. We will update
+  // coro.alloc, coro.begin and coro.free intrinsics to refer to it.
   if (IID == llvm::Intrinsic::coro_id) {
-    createCoroDataIfNeeded(CurCoro);
-
-    if (CurCoro.Data->CoroId) {
-      CGM.Error(E->getLocStart(),
-                "only one __builtin_coro_id can be used in a function");
-    } else {
-      CurCoro.Data->CoroId = Call;
-    }
+    createCoroData(*this, CurCoro, Call, E);
   }
   return RValue::get(Call);
 }
