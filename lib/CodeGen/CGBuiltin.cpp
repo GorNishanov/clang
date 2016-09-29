@@ -463,25 +463,6 @@ CodeGenFunction::emitBuiltinObjectSize(const Expr *E, unsigned Type,
   return Builder.CreateCall(F, {EmitScalarExpr(E), CI});
 }
 
-static RValue emitSimpleIntrinsic(CodeGenFunction &CGF, const CallExpr *E,
-                                  Intrinsic::ID ID) {
-  SmallVector<Value*, 8> Args;
-  switch (ID) {
-  default:
-    break;
-  case Intrinsic::coro_alloc:
-  case Intrinsic::coro_free:
-    Args.push_back(llvm::ConstantTokenNone::get(CGF.getLLVMContext()));
-    break;
-  }
-  for (auto &Arg : E->arguments())
-    Args.push_back(CGF.EmitScalarExpr(Arg));
-  if (ID == Intrinsic::coro_alloc)
-    Args.resize(1);
-  Value *F = CGF.CGM.getIntrinsic(ID);
-  return RValue::get(CGF.Builder.CreateCall(F, Args));
-}
-
 RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
                                         unsigned BuiltinID, const CallExpr *E,
                                         ReturnValueSlot ReturnValue) {
@@ -2163,31 +2144,29 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   }
 
   case Builtin::BI__builtin_coro_id:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_id);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_id);
   case Builtin::BI__builtin_coro_promise:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_promise);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_promise);
   case Builtin::BI__builtin_coro_resume:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_resume);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_resume);
   case Builtin::BI__builtin_coro_frame:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_frame);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_frame);
   case Builtin::BI__builtin_coro_free:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_free);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_free);
   case Builtin::BI__builtin_coro_destroy:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_destroy);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_destroy);
   case Builtin::BI__builtin_coro_done:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_done);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_done);
   case Builtin::BI__builtin_coro_alloc:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_alloc);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_alloc);
   case Builtin::BI__builtin_coro_begin:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_begin);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_begin);
   case Builtin::BI__builtin_coro_end:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_end);
-  case Builtin::BI__builtin_coro_save:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_save);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_end);
   case Builtin::BI__builtin_coro_suspend:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_suspend);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_suspend);
   case Builtin::BI__builtin_coro_param:
-    return emitSimpleIntrinsic(*this, E, Intrinsic::coro_param);
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_param);
 
   // OpenCL v2.0 s6.13.16.2, Built-in pipe read and write functions
   case Builtin::BIread_pipe:

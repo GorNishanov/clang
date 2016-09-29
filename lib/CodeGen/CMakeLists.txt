@@ -38,12 +38,12 @@ add_clang_library(clangCodeGen
   CGCUDABuiltin.cpp
   CGCUDANV.cpp
   CGCUDARuntime.cpp
-  CGCoroutine.cpp
   CGCXX.cpp
   CGCXXABI.cpp
   CGCall.cpp
   CGClass.cpp
   CGCleanup.cpp
+  CGCoroutine.cpp
   CGDebugInfo.cpp
   CGDecl.cpp
   CGDeclCXX.cpp
