@@ -725,6 +725,10 @@ public:
   /// standard library.
   LazyDeclPtr StdBadAlloc;
 
+  /// \brief The C++ "std::align_val_t" enum class, which is defined by the C++
+  /// standard library.
+  LazyDeclPtr StdAlignValT;
+
   /// \brief The C++ "std::initializer_list" template, which is defined in
   /// \<initializer_list>.
   ClassTemplateDecl *StdInitializerList;
@@ -4243,6 +4247,7 @@ public:
   NamespaceDecl *getStdExperimentalNamespace() const;
 
   CXXRecordDecl *getStdBadAlloc() const;
+  EnumDecl *getStdAlignValT() const;
 
   /// \brief Tests whether Ty is an instance of std::initializer_list and, if
   /// it is and Element is not NULL, assigns the element type to Element.
@@ -4844,8 +4849,7 @@ public:
                               bool Diagnose = true);
   void DeclareGlobalNewDelete();
   void DeclareGlobalAllocationFunction(DeclarationName Name, QualType Return,
-                                       QualType Param1,
-                                       QualType Param2 = QualType());
+                                       ArrayRef<QualType> Params);
 
   bool FindDeallocationFunction(SourceLocation StartLoc, CXXRecordDecl *RD,
                                 DeclarationName Name, FunctionDecl* &Operator,
@@ -9250,6 +9254,29 @@ public:
   ///
   /// Otherwise, returns true without emitting any diagnostics.
   bool CheckCUDACall(SourceLocation Loc, FunctionDecl *Callee);
+
+  /// Check whether a 'try' or 'throw' expression is allowed within the current
+  /// context, and raise an error or create a deferred error, as appropriate.
+  ///
+  /// 'try' and 'throw' are never allowed in CUDA __device__ functions, and are
+  /// allowed in __host__ __device__ functions only if those functions are never
+  /// codegen'ed for the device.
+  ///
+  /// ExprTy should be the string "try" or "throw", as appropriate.
+  bool CheckCUDAExceptionExpr(SourceLocation Loc, StringRef ExprTy);
+
+  /// Check whether it's legal for us to create a variable-length array in the
+  /// current context.  Returns true if the VLA is OK; returns false and emits
+  /// an error otherwise.
+  bool CheckCUDAVLA(SourceLocation Loc);
+
+  /// Set __device__ or __host__ __device__ attributes on the given lambda
+  /// operator() method.
+  ///
+  /// CUDA lambdas declared inside __device__ or __global__ functions inherit
+  /// the __device__ attribute.  Similarly, lambdas inside __host__ __device__
+  /// functions become __host__ __device__ themselves.
+  void CUDASetLambdaAttrs(CXXMethodDecl *Method);
 
   /// Finds a function in \p Matches with highest calling priority
   /// from \p Caller context and erases all functions with lower

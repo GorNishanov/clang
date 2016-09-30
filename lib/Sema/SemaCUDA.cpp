@@ -515,3 +515,66 @@ bool Sema::CheckCUDACall(SourceLocation Loc, FunctionDecl *Callee) {
   }
   return true;
 }
+
+bool Sema::CheckCUDAExceptionExpr(SourceLocation Loc, StringRef ExprTy) {
+  assert(getLangOpts().CUDA && "Should only be called during CUDA compilation");
+  FunctionDecl *CurFn = dyn_cast<FunctionDecl>(CurContext);
+  if (!CurFn)
+    return true;
+  CUDAFunctionTarget Target = IdentifyCUDATarget(CurFn);
+
+  // Raise an error immediately if this is a __global__ or __device__ function.
+  // If it's a __host__ __device__ function, enqueue a deferred error which will
+  // be emitted if the function is codegen'ed for device.
+  if (Target == CFT_Global || Target == CFT_Device) {
+    Diag(Loc, diag::err_cuda_device_exceptions) << ExprTy << Target << CurFn;
+    return false;
+  }
+  if (Target == CFT_HostDevice && getLangOpts().CUDAIsDevice) {
+    PartialDiagnostic ErrPD{PartialDiagnostic::NullDiagnostic()};
+    ErrPD.Reset(diag::err_cuda_device_exceptions);
+    ErrPD << ExprTy << Target << CurFn;
+    CurFn->addDeferredDiag({Loc, std::move(ErrPD)});
+    return false;
+  }
+  return true;
+}
+
+bool Sema::CheckCUDAVLA(SourceLocation Loc) {
+  assert(getLangOpts().CUDA && "Should only be called during CUDA compilation");
+  FunctionDecl *CurFn = dyn_cast<FunctionDecl>(CurContext);
+  if (!CurFn)
+    return true;
+  CUDAFunctionTarget Target = IdentifyCUDATarget(CurFn);
+  if (Target == CFT_Global || Target == CFT_Device) {
+    Diag(Loc, diag::err_cuda_vla) << Target;
+    return false;
+  }
+  if (Target == CFT_HostDevice && getLangOpts().CUDAIsDevice) {
+    PartialDiagnostic ErrPD{PartialDiagnostic::NullDiagnostic()};
+    ErrPD.Reset(diag::err_cuda_vla);
+    ErrPD << Target;
+    CurFn->addDeferredDiag({Loc, std::move(ErrPD)});
+    return false;
+  }
+  return true;
+}
+
+void Sema::CUDASetLambdaAttrs(CXXMethodDecl *Method) {
+  if (Method->hasAttr<CUDAHostAttr>() || Method->hasAttr<CUDADeviceAttr>())
+    return;
+  FunctionDecl *CurFn = dyn_cast<FunctionDecl>(CurContext);
+  if (!CurFn)
+    return;
+  CUDAFunctionTarget Target = IdentifyCUDATarget(CurFn);
+  if (Target == CFT_Global || Target == CFT_Device) {
+    Method->addAttr(CUDADeviceAttr::CreateImplicit(Context));
+  } else if (Target == CFT_HostDevice) {
+    Method->addAttr(CUDADeviceAttr::CreateImplicit(Context));
+    Method->addAttr(CUDAHostAttr::CreateImplicit(Context));
+  }
+
+  // TODO: nvcc doesn't allow you to specify __host__ or __device__ attributes
+  // on lambdas in all contexts -- we should emit a compatibility warning where
+  // we're more permissive.
+}
