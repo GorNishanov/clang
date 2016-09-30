@@ -717,6 +717,10 @@ public:
   /// \brief The C++ "std" namespace, where the standard library resides.
   LazyDeclPtr StdNamespace;
 
+  /// \brief The C++ "std::experimental" namespace, where the experimental parts
+  /// of the standard library resides.
+  LazyDeclPtr StdExperimentalNamespace;
+
   /// \brief The C++ "std::bad_alloc" class, which is defined by the C++
   /// standard library.
   LazyDeclPtr StdBadAlloc;
@@ -4239,6 +4243,8 @@ public:
 
   NamespaceDecl *getStdNamespace() const;
   NamespaceDecl *getOrCreateStdNamespace();
+
+  NamespaceDecl *getStdExperimentalNamespace() const;
 
   CXXRecordDecl *getStdBadAlloc() const;
   EnumDecl *getStdAlignValT() const;
