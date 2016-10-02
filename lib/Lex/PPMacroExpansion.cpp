@@ -1213,7 +1213,6 @@ static bool HasFeature(const Preprocessor &PP, StringRef Feature) {
       // Type traits
       // N.B. Additional type traits should not be added to the following list.
       // Instead, they should be detected by has_extension.
-      .Case("coroutines", LangOpts.Coroutines)
       .Case("has_nothrow_assign", LangOpts.CPlusPlus)
       .Case("has_nothrow_copy", LangOpts.CPlusPlus)
       .Case("has_nothrow_constructor", LangOpts.CPlusPlus)
