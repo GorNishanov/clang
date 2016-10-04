@@ -27,7 +27,7 @@ using namespace sema;
 static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
                                   SourceLocation Loc) {
   // FIXME: Cache std::coroutine_traits once we've found it.
-  NamespaceDecl *StdExp = S.getStdExperimentalNamespace();
+  NamespaceDecl *StdExp = S.lookupStdExperimentalNamespace();
   if (!StdExp) {
     S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
     return QualType();
@@ -87,8 +87,7 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
   QualType PromiseType = S.Context.getTypeDeclType(Promise);
   if (!PromiseType->getAsCXXRecordDecl()) {
     // Use the fully-qualified name of the type.
-    auto *NNS = NestedNameSpecifier::Create(S.Context, nullptr, S.getStdNamespace());
-    NNS = NestedNameSpecifier::Create(S.Context, NNS, StdExp);
+    auto *NNS = NestedNameSpecifier::Create(S.Context, nullptr, StdExp);
     NNS = NestedNameSpecifier::Create(S.Context, NNS, false,
                                       CoroTrait.getTypePtr());
     PromiseType = S.Context.getElaboratedType(ETK_None, NNS, PromiseType);

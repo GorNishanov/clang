@@ -8289,6 +8289,20 @@ NamespaceDecl *Sema::getStdExperimentalNamespace() const {
                                  StdExperimentalNamespace.get(Context.getExternalSource()));
 }
 
+NamespaceDecl *Sema::lookupStdExperimentalNamespace() {
+  if (!StdExperimentalNamespaceCache) {
+    if (auto Std = getStdNamespace()) {
+      LookupResult Result(*this, &PP.getIdentifierTable().get("experimental"),
+                          SourceLocation(), LookupNamespaceName);
+      if (!LookupQualifiedName(Result, Std) ||
+          !(StdExperimentalNamespaceCache =
+                Result.getAsSingle<NamespaceDecl>()))
+        Result.suppressDiagnostics();
+    }
+  }
+  return StdExperimentalNamespaceCache;
+}
+
 /// \brief Retrieve the special "std" namespace, which may require us to 
 /// implicitly define the namespace.
 NamespaceDecl *Sema::getOrCreateStdNamespace() {

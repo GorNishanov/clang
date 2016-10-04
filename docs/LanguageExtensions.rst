@@ -1880,10 +1880,10 @@ standard library to implement `std::experimental::coroutine_handle` type.
 
 .. code-block:: c
 
-  void __builtin_coro_resume(void *addr);
-  void __builtin_coro_destroy(void *addr);
-  bool __builtin_coro_done(void *addr);
-  void __builtin_coro_promise(void *addr, int alignment, bool from_promise)
+  void  __builtin_coro_resume(void *addr);
+  void  __builtin_coro_destroy(void *addr);
+  bool  __builtin_coro_done(void *addr);
+  void *__builtin_coro_promise(void *addr, int alignment, bool from_promise)
 
 **Example of use**:
 
@@ -1913,8 +1913,8 @@ standard library to implement `std::experimental::coroutine_handle` type.
   };
 
 
-Other coroutine builtins are either for the internal clang use or for the use
-during development of the coroutine feature. See `Coroutines in LLVM
+Other coroutine builtins are either for internal clang use or for use during
+development of the coroutine feature. See `Coroutines in LLVM
 <http://llvm.org/docs/Coroutines.html#intrinsics>`_ for
 more information on their semantics. Note that builtins matching the intrinsics
 that take token as the first parameter (llvm.coro.begin, llvm.coro.alloc, 
@@ -1926,15 +1926,15 @@ an appropriate value during the emission.
 .. code-block:: c
 
   size_t __builtin_coro_size()
-  void *__builtin_coro_frame()
-  void *__builtin_coro_free(void* coro_frame)
+  void  *__builtin_coro_frame()
+  void  *__builtin_coro_free(void *coro_frame)
 
-  void *__builtin_coro_id(int align, void* promise, void *fnaddr, void *parts)
-  bool __builtin_coro_alloc()
-  void* __builtin_coro_begin(void* memory)
-  void __builtin_coro_end(void* coro_frame, bool unwind)
-  char __builtin_coro_suspend(bool final)
-  bool __builtin_coro_param(void* original, void* copy)
+  void  *__builtin_coro_id(int align, void *promise, void *fnaddr, void *parts)
+  bool   __builtin_coro_alloc()
+  void  *__builtin_coro_begin(void *memory)
+  void   __builtin_coro_end(void *coro_frame, bool unwind)
+  char   __builtin_coro_suspend(bool final)
+  bool   __builtin_coro_param(void *original, void *copy)
 
 Note that there is no builtin matching the `llvm.coro.save` intrinsic. LLVM
 automatically will insert one if the first argument to `llvm.coro.suspend` is

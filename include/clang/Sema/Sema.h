@@ -729,6 +729,10 @@ public:
   /// standard library.
   LazyDeclPtr StdAlignValT;
 
+  /// \brief The C++ "std::experimental" namespace, where the experimental parts
+  /// of the standard library resides.
+  NamespaceDecl *StdExperimentalNamespaceCache;
+
   /// \brief The C++ "std::initializer_list" template, which is defined in
   /// \<initializer_list>.
   ClassTemplateDecl *StdInitializerList;
@@ -4259,7 +4263,7 @@ public:
   NamespaceDecl *getStdNamespace() const;
   NamespaceDecl *getOrCreateStdNamespace();
 
-  NamespaceDecl *getStdExperimentalNamespace() const;
+  NamespaceDecl *lookupStdExperimentalNamespace();
 
   CXXRecordDecl *getStdBadAlloc() const;
   EnumDecl *getStdAlignValT() const;
