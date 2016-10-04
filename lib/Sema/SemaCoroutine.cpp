@@ -647,20 +647,70 @@ public:
 
   bool makeOnFallthrough() { return true; }
 
+  FunctionDecl *FindDelete(QualType PromiseType) {
+    FunctionDecl *OperatorDelete = nullptr;
+
+    DeclarationName DeleteName =
+        S.Context.DeclarationNames.getCXXOperatorName(OO_Delete);
+
+    CXXRecordDecl *PointeeRD = PromiseType->getAsCXXRecordDecl();
+    assert(PointeeRD && "PromiseType must be a CxxRecordDecl type");
+
+    if (S.FindDeallocationFunction(Loc, PointeeRD, DeleteName, OperatorDelete))
+      return nullptr;
+
+    if (!PointeeRD->hasIrrelevantDestructor())
+      if (CXXDestructorDecl *Dtor = S.LookupDestructor(PointeeRD)) {
+        S.MarkFunctionReferenced(Loc, const_cast<CXXDestructorDecl *>(Dtor));
+        if (S.DiagnoseUseOfDecl(Dtor, Loc))
+          return nullptr;
+      }
+
+    S.CheckVirtualDtorCall(PointeeRD->getDestructor(), Loc,
+                           /*IsDelete=*/true, /*CallCanBeVirtual=*/true,
+                           /*WarnOnNonAbstractTypes=*/true, SourceLocation());
+
+    if (!OperatorDelete)
+      // Look for a global declaration.
+      OperatorDelete = S.FindUsualDeallocationFunction(
+          Loc, S.isCompleteType(Loc, PromiseType), DeleteName);
+
+      S.MarkFunctionReferenced(Loc, OperatorDelete);
+
+    // Check access and ambiguity of operator delete and destructor.
+    if (PointeeRD) {
+      if (CXXDestructorDecl *Dtor = S.LookupDestructor(PointeeRD)) {
+        S.CheckDestructorAccess(Loc, Dtor, S.PDiag(diag::err_access_dtor)
+                                               << PromiseType);
+      }
+    }
+    return OperatorDelete;
+  }
+
   bool makeNewAndDeleteExpr(LabelDecl *label) {
     TypeSourceInfo *TInfo = Fn.CoroutinePromise->getTypeSourceInfo();
     QualType PromiseType = TInfo->getType();
+    if (PromiseType->isDependentType())
+      return true;
+
+    if (S.RequireCompleteType(Loc, PromiseType, diag::err_incomplete_type))
+      return nullptr;
 
     FunctionDecl *OperatorNew = nullptr;
     FunctionDecl *OperatorDelete = nullptr;
+    FunctionDecl *UnusedResult = nullptr;
 
     S.FindAllocationFunctions(Loc, SourceRange(),
                               /*UseGlobal*/ false, PromiseType,
                               /*isArray*/ false, /*PlacementArgs*/ None,
-                              OperatorNew, OperatorDelete);
+                              OperatorNew, UnusedResult);
 
-    assert(OperatorNew && "we need to find at least global operator new");
-    assert(OperatorDelete && "we need to find at least global operator new");
+    // We ignore OperatorDelete returned from FindAllocationFunctions as it
+    // returns the delete placement delete.
+    OperatorDelete = FindDelete(PromiseType);
+
+    if (!OperatorDelete || !OperatorNew)
+      return false;
 
     Expr *FramePtr =
         buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
