@@ -2310,8 +2310,6 @@ public:
   llvm::Value *EmitCoyieldExpr(const CoyieldExpr &E);
   RValue EmitCoroutineIntrinsic(const CallExpr *E, unsigned int IID);
 
-  RValue EmitCoroutineIntrinsic(const CallExpr *E, unsigned int IID);
-
   void EnterCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);
   void ExitCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);
 

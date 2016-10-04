@@ -53,7 +53,7 @@ struct std::experimental::coroutine_traits<coro<Promise>, Ps...> {
 };
 
 void no_specialization() {
-  co_await a; // expected-error {{implicit instantiation of undefined template 'std::experimental::coroutine_traits<void>'}}
+  co_await a; // expected-error {{need to include <experimental/coroutine>}}
 }
 
 template <typename... T>

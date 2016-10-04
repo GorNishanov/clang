@@ -8111,7 +8111,6 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
   bool IsInline = InlineLoc.isValid();
   bool IsInvalid = false;
   bool IsStd = false;
-  bool IsStdExperimental = false;
   bool AddToKnown = false;
   Scope *DeclRegionScope = NamespcScope->getParent();
 
@@ -8153,11 +8152,6 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
       PrevNS = getStdNamespace();
       IsStd = true;
       AddToKnown = !IsInline;
-    } else if (II->isStr("experimental") &&
-              CurContext->getRedeclContext()->isStdNamespace()) {
-      PrevNS = getStdExperimentalNamespace();
-      IsStdExperimental = true;
-      AddToKnown = !IsInline;
     } else {
       // We've seen this namespace for the first time.
       AddToKnown = !IsInline;
@@ -8192,8 +8186,6 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
 
   if (IsStd)
     StdNamespace = Namespc;
-  if (IsStdExperimental)
-    StdExperimentalNamespace = Namespc;
   if (AddToKnown)
     KnownNamespaces[Namespc] = false;
   
@@ -8281,12 +8273,6 @@ EnumDecl *Sema::getStdAlignValT() const {
 NamespaceDecl *Sema::getStdNamespace() const {
   return cast_or_null<NamespaceDecl>(
                                  StdNamespace.get(Context.getExternalSource()));
-}
-
-
-NamespaceDecl *Sema::getStdExperimentalNamespace() const {
-  return cast_or_null<NamespaceDecl>(
-                                 StdExperimentalNamespace.get(Context.getExternalSource()));
 }
 
 NamespaceDecl *Sema::lookupStdExperimentalNamespace() {
