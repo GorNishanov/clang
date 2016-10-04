@@ -39,7 +39,7 @@ void no_coroutine_traits() {
   co_await a; // expected-error {{need to include <experimental/coroutine>}}
 }
 
-namespace std { namespace experimental {
+namespace std {
 namespace experimental {
 template <typename... T>
 struct coroutine_traits; // expected-note {{declared here}}
@@ -87,7 +87,12 @@ template <typename Promise = void>
 struct coroutine_handle;
 }
 }
+
+template <>
+struct std::experimental::coroutine_handle<void> {
+  static coroutine_handle from_address(void *addr) noexcept;
 };
+
 template <typename Promise>
 struct std::experimental::coroutine_handle : std::experimental::coroutine_handle<> {};
 

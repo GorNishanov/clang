@@ -102,7 +102,7 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
 
 static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S, SourceLocation Loc) {
   // FIXME: Cache std::coroutine_handle once we've found it.
-  NamespaceDecl *Std = S.getStdExperimentalNamespace();
+  NamespaceDecl *Std = S.lookupStdExperimentalNamespace();
   if (!Std) {
     S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
     return nullptr;
