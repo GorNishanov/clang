@@ -304,6 +304,8 @@ class CoroutineBodyStmt : public Stmt {
     FinalSuspend,  ///< The final suspend statement, run after the body.
     OnException,   ///< Handler for exceptions thrown in the body.
     OnFallthrough, ///< Handler for control flow falling off the body.
+    Allocate,      ///< Coroutine frame memory allocation.
+    Deallocate,    ///< Coroutine frame memory deallocation.
     ReturnValue,   ///< Return value for thunk function.
     FirstParamMove ///< First offset for move construction of parameter copies.
   };
@@ -312,7 +314,8 @@ class CoroutineBodyStmt : public Stmt {
   friend class ASTStmtReader;
 public:
   CoroutineBodyStmt(Stmt *Body, Stmt *Promise, Stmt *InitSuspend,
-                    Stmt *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
+                    LabelStmt *FinalSuspend, Stmt *OnException,
+                    Stmt *OnFallthrough, Expr *Allocate, LabelStmt *Deallocate,
                     Expr *ReturnValue, ArrayRef<Expr *> ParamMoves)
       : Stmt(CoroutineBodyStmtClass) {
     SubStmts[CoroutineBodyStmt::Body] = Body;
@@ -321,6 +324,8 @@ public:
     SubStmts[CoroutineBodyStmt::FinalSuspend] = FinalSuspend;
     SubStmts[CoroutineBodyStmt::OnException] = OnException;
     SubStmts[CoroutineBodyStmt::OnFallthrough] = OnFallthrough;
+    SubStmts[CoroutineBodyStmt::Allocate] = Allocate;
+    SubStmts[CoroutineBodyStmt::Deallocate] = Deallocate;
     SubStmts[CoroutineBodyStmt::ReturnValue] = ReturnValue;
     // FIXME: Tail-allocate space for parameter move expressions and store them.
     assert(ParamMoves.empty() && "not implemented yet");
@@ -338,11 +343,18 @@ public:
   }
 
   Stmt *getInitSuspendStmt() const { return SubStmts[SubStmt::InitSuspend]; }
-  Stmt *getFinalSuspendStmt() const { return SubStmts[SubStmt::FinalSuspend]; }
+  LabelStmt *getFinalSuspendStmt() const {
+    return cast<LabelStmt>(SubStmts[SubStmt::FinalSuspend]);
+  }
 
   Stmt *getExceptionHandler() const { return SubStmts[SubStmt::OnException]; }
   Stmt *getFallthroughHandler() const {
     return SubStmts[SubStmt::OnFallthrough];
+  }
+
+  Expr *getAllocate() const { return cast<Expr>(SubStmts[SubStmt::Allocate]); }
+  LabelStmt *getDeallocate() const {
+    return cast<LabelStmt>(SubStmts[SubStmt::Deallocate]);
   }
 
   Expr *getReturnValueInit() const {

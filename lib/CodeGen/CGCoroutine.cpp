@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CodeGenFunction.h"
+#include "clang/AST/StmtCXX.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -56,6 +57,27 @@ static bool createCoroData(CodeGenFunction &CGF,
   CurCoro.Data->CoroId = CoroId;
   CurCoro.Data->CoroIdExpr = CoroIdExpr;
   return true;
+}
+
+void CodeGenFunction::EmitCoreturnStmt(const CoreturnStmt &S) {
+  EmitStmt(S.getPromiseCall());
+  // FIXME: Jump to final suspend label.
+}
+
+void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
+  auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
+  // FIXME: Instead of 0, pass an equivalent of alignas(maxalign_t).
+  auto *CoroId =
+      Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_id),
+                         {Builder.getInt32(0), NullPtr, NullPtr, NullPtr});
+  if (!createCoroData(*this, CurCoro, CoroId, nullptr)) {
+    // User inserted __builtin_coro_id by hand. Should not try to emit anything.
+    return;
+  }
+
+  EmitScalarExpr(S.getAllocate());
+  // FIXME: Emit the rest of the coroutine.
+  EmitStmt(S.getDeallocate());
 }
 
 // Emit coroutine intrinsic and patch up arguments of the token type.

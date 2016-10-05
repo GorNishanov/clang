@@ -8567,10 +8567,6 @@ def err_coroutine_main : Error<
   "'main' cannot be a coroutine">;
 def err_coroutine_varargs : Error<
   "'%0' cannot be used in a varargs function">;
-def ext_coroutine_without_co_await_co_yield : ExtWarn<
-  "'co_return' used in a function "
-  "that uses neither 'co_await' nor 'co_yield'">,
-  InGroup<DiagGroup<"coreturn-without-coawait">>;
 def err_implied_std_coroutine_traits_not_found : Error<
   "you need to include <experimental/coroutine> before defining a coroutine">;
 def err_malformed_std_coroutine_traits : Error<

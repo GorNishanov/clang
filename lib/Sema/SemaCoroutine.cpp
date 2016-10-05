@@ -378,6 +378,143 @@ StmtResult Sema::BuildCoreturnStmt(SourceLocation Loc, Expr *E) {
   return Res;
 }
 
+static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID id,
+                              MutableArrayRef<Expr *> CallArgs) {
+  StringRef Name = S.Context.BuiltinInfo.getName(id);
+  LookupResult R(S, &S.Context.Idents.get(Name), Loc, Sema::LookupOrdinaryName);
+  S.LookupName(R, S.TUScope, true);
+
+  FunctionDecl *BuiltInDecl = R.getAsSingle<FunctionDecl>();
+  assert(BuiltInDecl && "failed to find builtin declaration");
+
+  ExprResult DeclRef = S.BuildDeclRefExpr(BuiltInDecl, BuiltInDecl->getType(),
+                                          VK_RValue, Loc, nullptr);
+  assert(DeclRef.isUsable() && "Builtin reference cannot fail");
+
+  ExprResult Call =
+      S.ActOnCallExpr(/*Scope=*/nullptr, DeclRef.get(), Loc, CallArgs, Loc);
+
+  assert(!Call.isInvalid() && "Call to builtin cannot fail!");
+  return Call.get();
+}
+
+// Find an appropriate delete for the promise.
+static FunctionDecl *findDeleteForPromise(Sema &S, SourceLocation Loc,
+                                          QualType PromiseType) {
+  FunctionDecl *OperatorDelete = nullptr;
+
+  DeclarationName DeleteName =
+      S.Context.DeclarationNames.getCXXOperatorName(OO_Delete);
+
+  CXXRecordDecl *PointeeRD = PromiseType->getAsCXXRecordDecl();
+  assert(PointeeRD && "PromiseType must be a CxxRecordDecl type");
+
+  if (S.FindDeallocationFunction(Loc, PointeeRD, DeleteName, OperatorDelete))
+    return nullptr;
+
+  if (!OperatorDelete) {
+    // Look for a global declaration.
+    OperatorDelete = S.FindUsualDeallocationFunction(
+        Loc, S.isCompleteType(Loc, PromiseType), DeleteName);
+
+    S.MarkFunctionReferenced(Loc, OperatorDelete);
+  }
+  return OperatorDelete;
+}
+
+// Builds allocation and deallocation for the coroutine. Returns false on
+// failure.
+static bool buildAllocationAndDeallocation(Sema &S, SourceLocation Loc,
+                                           FunctionScopeInfo *Fn,
+                                           Expr *&Allocation,
+                                           LabelStmt *&Deallocation) {
+  TypeSourceInfo *TInfo = Fn->CoroutinePromise->getTypeSourceInfo();
+  QualType PromiseType = TInfo->getType();
+  if (PromiseType->isDependentType())
+    return true;
+
+  if (S.RequireCompleteType(Loc, PromiseType, diag::err_incomplete_type))
+    return false;
+
+  // FIXME: Add support for get_return_object_on_allocation failure.
+  // FIXME: Add support for stateful allocators.
+
+  FunctionDecl *OperatorNew = nullptr;
+  FunctionDecl *OperatorDelete = nullptr;
+  FunctionDecl *UnusedResult = nullptr;
+
+  S.FindAllocationFunctions(Loc, SourceRange(),
+                            /*UseGlobal*/ false, PromiseType,
+                            /*isArray*/ false, /*PlacementArgs*/ None,
+                            OperatorNew, UnusedResult);
+
+  OperatorDelete = findDeleteForPromise(S, Loc, PromiseType);
+
+  if (!OperatorDelete || !OperatorNew)
+    return false;
+
+  Expr *FramePtr =
+      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
+
+  Expr *FrameSize =
+      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, {});
+
+  // Make new call.
+
+  ExprResult NewRef =
+      S.BuildDeclRefExpr(OperatorNew, OperatorNew->getType(), VK_LValue, Loc);
+  if (NewRef.isInvalid())
+    return false;
+
+  ExprResult NewExpr = S.ActOnCallExpr(S.getCurScope(), NewRef.get(), Loc,
+                                       FrameSize, Loc, nullptr);
+  if (NewExpr.isInvalid())
+    return false;
+
+  Allocation = NewExpr.get();
+
+  // Make delete call.
+
+  QualType opDeleteQualType = OperatorDelete->getType();
+
+  ExprResult DeleteRef =
+      S.BuildDeclRefExpr(OperatorDelete, opDeleteQualType, VK_LValue, Loc);
+  if (DeleteRef.isInvalid())
+    return false;
+
+  Expr *CoroFree =
+      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, {FramePtr});
+
+  SmallVector<Expr *, 2> DeleteArgs{CoroFree};
+
+  // Check if we need to pass the size.
+  const FunctionProtoType *opDeleteType =
+      opDeleteQualType.getTypePtr()->getAs<FunctionProtoType>();
+  if (opDeleteType->getNumParams() > 1) {
+    DeleteArgs.push_back(FrameSize);
+  }
+
+  ExprResult DeleteExpr = S.ActOnCallExpr(S.getCurScope(), DeleteRef.get(), Loc,
+                                          DeleteArgs, Loc, nullptr);
+  if (DeleteExpr.isInvalid())
+    return false;
+
+  // Make it a labeled statement. Suspend point emission uses this label as a
+  // jump target for the cleanup branch.
+  LabelDecl *DestroyLabel =
+      LabelDecl::Create(S.Context, S.CurContext, SourceLocation(),
+                        S.PP.getIdentifierInfo("coro.destroy.label"));
+
+  StmtResult Stmt = S.ActOnLabelStmt(Loc, DestroyLabel, Loc, DeleteExpr.get());
+
+  if (Stmt.isInvalid())
+    return false;
+
+  Deallocation = cast<LabelStmt>(Stmt.get());
+
+  return true;
+}
+
 void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
   FunctionScopeInfo *Fn = getCurFunction();
   assert(Fn && !Fn->CoroutineStmts.empty() && "not a coroutine");
@@ -388,20 +525,8 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
     Diag(Fn->FirstReturnLoc, diag::err_return_in_coroutine);
     auto *First = Fn->CoroutineStmts[0];
     Diag(First->getLocStart(), diag::note_declared_coroutine_here)
-      << (isa<CoawaitExpr>(First) ? 0 :
-          isa<CoyieldExpr>(First) ? 1 : 2);
+        << (isa<CoawaitExpr>(First) ? 0 : isa<CoyieldExpr>(First) ? 1 : 2);
   }
-
-  bool AnyCoawaits = false;
-  bool AnyCoyields = false;
-  for (auto *CoroutineStmt : Fn->CoroutineStmts) {
-    AnyCoawaits |= isa<CoawaitExpr>(CoroutineStmt);
-    AnyCoyields |= isa<CoyieldExpr>(CoroutineStmt);
-  }
-
-  if (!AnyCoawaits && !AnyCoyields)
-    Diag(Fn->CoroutineStmts.front()->getLocStart(),
-         diag::ext_coroutine_without_co_await_co_yield);
 
   SourceLocation Loc = FD->getLocation();
 
@@ -432,6 +557,22 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
   if (FinalSuspend.isInvalid())
     return FD->setInvalidDecl();
 
+  // Add a label to a final suspend. It will be the jump target for co_return
+  // statements.
+  LabelDecl *FinalLabel =
+      LabelDecl::Create(Context, CurContext, SourceLocation(),
+                        PP.getIdentifierInfo("coro.final.label"));
+  StmtResult FinalSuspendWithLabel =
+      ActOnLabelStmt(Loc, FinalLabel, Loc, FinalSuspend.get());
+  if (FinalSuspendWithLabel.isInvalid())
+    return FD->setInvalidDecl();
+
+  // Build allocation function and deallocation expressions.
+  Expr *Allocation = nullptr;
+  LabelStmt *Deallocation = nullptr;
+  if (!buildAllocationAndDeallocation(*this, Loc, Fn, Allocation, Deallocation))
+    return FD->setInvalidDecl();
+
   // FIXME: Perform analysis of set_exception call.
 
   // FIXME: Try to form 'p.return_void();' expression statement to handle
@@ -440,7 +581,7 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
   // Build implicit 'p.get_return_object()' expression and form initialization
   // of return type from it.
   ExprResult ReturnObject =
-    buildPromiseCall(*this, Fn, Loc, "get_return_object", None);
+      buildPromiseCall(*this, Fn, Loc, "get_return_object", None);
   if (ReturnObject.isInvalid())
     return FD->setInvalidDecl();
   QualType RetType = FD->getReturnType();
@@ -457,11 +598,12 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
     return FD->setInvalidDecl();
 
   // FIXME: Perform move-initialization of parameters into frame-local copies.
-  SmallVector<Expr*, 16> ParamMoves;
+  SmallVector<Expr *, 16> ParamMoves;
 
   // Build body for the coroutine wrapper statement.
   Body = new (Context) CoroutineBodyStmt(
-      Body, PromiseStmt.get(), InitialSuspend.get(), FinalSuspend.get(),
-      /*SetException*/nullptr, /*Fallthrough*/nullptr,
-      ReturnObject.get(), ParamMoves);
+      Body, PromiseStmt.get(), InitialSuspend.get(),
+      cast_or_null<LabelStmt>(FinalSuspendWithLabel.get()),
+      /*SetException*/ nullptr, /*Fallthrough*/ nullptr, Allocation,
+      Deallocation, ReturnObject.get(), ParamMoves);
 }
