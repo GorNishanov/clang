@@ -106,6 +106,10 @@ struct OpaqueValueMappings {
   CodeGenFunction::OpaqueValueMapping o3;
 
   static OpaqueValueExpr *opaque(Expr *E) {
+    // FIXME: There must be a better way of getting to OpaqueValue.
+    if (auto *BTE = dyn_cast<CXXBindTemporaryExpr>(E)) {
+      E = BTE->getSubExpr();
+    }
     return cast<OpaqueValueExpr>(
         cast<CXXMemberCallExpr>(E)->getImplicitObjectArgument());
   }
@@ -151,7 +155,8 @@ static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
 
 static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     CoroutineSuspendExpr const &S,
-                                    AwaitKind Kind) {
+                                    AwaitKind Kind,
+                                    ReturnValueSlot ReturnValue) {
   auto &Builder = CGF.Builder;
   const bool IsFinalSuspend = Kind == AwaitKind::Final;
   auto Suffix = buildSuspendSuffixStr(Coro, Kind);
@@ -161,8 +166,6 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   BasicBlock *ReadyBlock = CGF.createBasicBlock(Suffix + Twine(".ready"));
   BasicBlock *SuspendBlock = CGF.createBasicBlock(Suffix + Twine(".suspend"));
   BasicBlock *CleanupBlock = CGF.createBasicBlock(Suffix + Twine(".cleanup"));
-
-  CodeGenFunction::RunCleanupsScope AwaitExprScope(CGF);
 
   CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
   CGF.EmitBlock(SuspendBlock);
@@ -195,8 +198,24 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   auto jumpDest = CGF.getJumpDestForLabel(Coro.DeleteLabel);
   CGF.EmitBranchThroughCleanup(jumpDest);
 
+  // Emit await_resume expression.
   CGF.EmitBlock(ReadyBlock);
-  return CGF.EmitScalarExpr(S.getResumeExpr());
+  QualType Type = S.getResumeExpr()->getType();
+  switch (CGF.getEvaluationKind(Type)) {
+  case TEK_Scalar:
+    return CGF.EmitScalarExpr(S.getResumeExpr());
+  case TEK_Aggregate:
+    CGF.EmitAggExpr(S.getResumeExpr(),
+                    AggValueSlot::forAddr(ReturnValue.getValue(), Qualifiers(),
+                                          AggValueSlot::IsDestructed,
+                                          AggValueSlot::DoesNotNeedGCBarriers,
+                                          AggValueSlot::IsNotAliased));
+    break;
+  case TEK_Complex:
+    CGF.CGM.ErrorUnsupported(S.getResumeExpr(), "_Complex await expression");
+    break;
+  }
+  return nullptr;
 }
 
 // If await expression result is used we end up with broken IR with
@@ -281,12 +300,15 @@ void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   EmitBranchThroughCleanup(JumpDest);
 }
 
-Value *CodeGenFunction::EmitCoawaitExpr(CoawaitExpr const &S) {
-  return emitSuspendExpression(*this, *CurCoro.Data, S,
-                               CurCoro.Data->CurrentAwaitKind);
+llvm::Value *CodeGenFunction::EmitCoawaitExpr(const CoawaitExpr &E,
+                                        ReturnValueSlot ReturnValue) {
+  return emitSuspendExpression(*this, *CurCoro.Data, E,
+                               CurCoro.Data->CurrentAwaitKind, ReturnValue);
 }
-Value *CodeGenFunction::EmitCoyieldExpr(CoyieldExpr const &S) {
-  return emitSuspendExpression(*this, *CurCoro.Data, S, AwaitKind::Yield);
+llvm::Value *CodeGenFunction::EmitCoyieldExpr(const CoyieldExpr &E,
+                                        ReturnValueSlot ReturnValue) {
+  return emitSuspendExpression(*this, *CurCoro.Data, E, AwaitKind::Yield,
+                               ReturnValue);
 }
 
 namespace {

@@ -2306,8 +2306,10 @@ public:
   
   void EmitCoroutineBody(const CoroutineBodyStmt &S);
   void EmitCoreturnStmt(const CoreturnStmt &S);
-  llvm::Value *EmitCoawaitExpr(const CoawaitExpr &E);
-  llvm::Value *EmitCoyieldExpr(const CoyieldExpr &E);
+  llvm::Value *EmitCoawaitExpr(const CoawaitExpr &E,
+                               ReturnValueSlot ReturnValue = ReturnValueSlot());
+  llvm::Value *EmitCoyieldExpr(const CoyieldExpr &E,
+                               ReturnValueSlot ReturnValue = ReturnValueSlot());
   RValue EmitCoroutineIntrinsic(const CallExpr *E, unsigned int IID);
 
   void EnterCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);

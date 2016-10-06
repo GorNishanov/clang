@@ -37,7 +37,8 @@ extern "C" coro_t f(int n) {
   int val = co_await A{};
   print(42);
 }
-// Does not work yet: extern "C" coro g() { B val = co_await B{}; }
+
+extern "C" coro_t g() { B val = co_await B{}; }
 
 // CHECK-LABEL: @main
 int main() {
