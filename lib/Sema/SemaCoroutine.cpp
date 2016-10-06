@@ -27,7 +27,7 @@ using namespace sema;
 static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
                                   SourceLocation Loc) {
   // FIXME: Cache std::coroutine_traits once we've found it.
-  NamespaceDecl *StdExp = S.getStdExperimentalNamespace();
+  NamespaceDecl *StdExp = S.lookupStdExperimentalNamespace();
   if (!StdExp) {
     S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
     return QualType();
@@ -87,8 +87,7 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
   QualType PromiseType = S.Context.getTypeDeclType(Promise);
   if (!PromiseType->getAsCXXRecordDecl()) {
     // Use the fully-qualified name of the type.
-    auto *NNS = NestedNameSpecifier::Create(S.Context, nullptr, S.getStdNamespace());
-    NNS = NestedNameSpecifier::Create(S.Context, NNS, StdExp);
+    auto *NNS = NestedNameSpecifier::Create(S.Context, nullptr, StdExp);
     NNS = NestedNameSpecifier::Create(S.Context, NNS, false,
                                       CoroTrait.getTypePtr());
     PromiseType = S.Context.getElaboratedType(ETK_None, NNS, PromiseType);
@@ -103,7 +102,7 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
 
 static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S, SourceLocation Loc) {
   // FIXME: Cache std::coroutine_handle once we've found it.
-  NamespaceDecl *Std = S.getStdExperimentalNamespace();
+  NamespaceDecl *Std = S.lookupStdExperimentalNamespace();
   if (!Std) {
     S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
     return nullptr;
@@ -186,6 +185,11 @@ checkCoroutineContext(Sema &S, SourceLocation Loc, StringRef Keyword) {
     S.Diag(Loc, diag::err_coroutine_constexpr) << Keyword;
   } else if (FD->isVariadic()) {
     S.Diag(Loc, diag::err_coroutine_varargs) << Keyword;
+  } else if (FD->isMain()) {
+    S.Diag(FD->getLocStart(), diag::err_coroutine_main);
+    S.Diag(Loc, diag::note_declared_coroutine_here)
+      << (Keyword == "co_await" ? 0 :
+          Keyword == "co_yield" ? 1 : 2);
   } else {
     auto *ScopeInfo = S.getCurFunction();
     assert(ScopeInfo && "missing function scope for function");
@@ -332,6 +336,11 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
 }
 
 ExprResult Sema::ActOnCoawaitExpr(Scope *S, SourceLocation Loc, Expr *E) {
+  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_await");
+  if (!Coroutine) {
+    CorrectDelayedTyposInExpr(E);
+    return ExprError();
+  }
   if (E->getType()->isPlaceholderType()) {
     ExprResult R = CheckPlaceholderExpr(E);
     if (R.isInvalid()) return ExprError();
@@ -341,6 +350,7 @@ ExprResult Sema::ActOnCoawaitExpr(Scope *S, SourceLocation Loc, Expr *E) {
   ExprResult Awaitable = buildOperatorCoawaitCall(*this, S, Loc, E);
   if (Awaitable.isInvalid())
     return ExprError();
+
   return BuildCoawaitExpr(Loc, Awaitable.get());
 }
 ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
@@ -395,8 +405,10 @@ static ExprResult buildPromiseCall(Sema &S, FunctionScopeInfo *Coroutine,
 
 ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
   auto *Coroutine = checkCoroutineContext(*this, Loc, "co_yield");
-  if (!Coroutine)
+  if (!Coroutine) {
+    CorrectDelayedTyposInExpr(E);
     return ExprError();
+  }
 
   return BuildCoyieldExpr(Loc, E);
 }
@@ -450,6 +462,11 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
 }
 
 StmtResult Sema::ActOnCoreturnStmt(SourceLocation Loc, Expr *E) {
+  auto *Coroutine = checkCoroutineContext(*this, Loc, "co_return");
+  if (!Coroutine) {
+    CorrectDelayedTyposInExpr(E);
+    return StmtError();
+  }
   return BuildCoreturnStmt(Loc, E);
 }
 
