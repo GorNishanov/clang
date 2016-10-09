@@ -349,6 +349,33 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
   //  declare i1 @llvm.coro.param(i8* copy, i8* original)
 }
 #endif
+namespace {
+struct CallCoroEnd final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    auto &CGM = CGF.CGM;
+    auto NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
+    llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+    auto *CoroEnd =
+        CGF.Builder.CreateCall(CoroEndFn, {NullPtr, CGF.Builder.getInt1(true)});
+
+    auto *CleanupPad =
+        dyn_cast_or_null<llvm::CleanupPadInst>(CGF.CurrentFuncletPad);
+
+    auto *UnwindToCallerBB = CleanupPad
+                                 ? CGF.createBasicBlock("coro.unwind.to.caller")
+                                 : CGF.getEHResumeBlock(/*cleanup=*/true);
+    auto *ContinueCleanupBB = CGF.createBasicBlock("coro.cont.cleanup");
+    CGF.Builder.CreateCondBr(CoroEnd, UnwindToCallerBB, ContinueCleanupBB);
+
+    if (CleanupPad) {
+      CGF.EmitBlock(UnwindToCallerBB);
+      CGF.Builder.CreateCleanupRet(CleanupPad);
+    }
+
+    CGF.EmitBlock(ContinueCleanupBB);
+  }
+};
+}
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
@@ -420,14 +447,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   // We will insert coro.end to cut any of the destructors for objects that
   // do not need to be destroyed onces the coroutine is resumed.
-  struct CallCoroEnd final : public EHScopeStack::Cleanup {
-    void Emit(CodeGenFunction &CGF, Flags flags) override {
-      auto &CGM = CGF.CGM;
-      auto NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
-      llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-      CGF.Builder.CreateCall(CoroEnd, {NullPtr, CGF.Builder.getInt1(true)});
-    }
-  };
   EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
   // Body of the coroutine.
