@@ -350,6 +350,16 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
 }
 #endif
 
+static SmallVector<llvm::OperandBundleDef, 1>
+getBundlesForCoroEnd(CodeGenFunction &CGF) {
+  SmallVector<llvm::OperandBundleDef, 1> BundleList;
+
+  if (Instruction *EHPad = CGF.CurrentFuncletPad)
+    BundleList.emplace_back("funclet", EHPad);
+
+  return BundleList;
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
@@ -424,8 +434,16 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     void Emit(CodeGenFunction &CGF, Flags flags) override {
       auto &CGM = CGF.CGM;
       auto NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
-      llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-      CGF.Builder.CreateCall(CoroEnd, {NullPtr, CGF.Builder.getInt1(true)});
+      llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+      auto Bundles = getBundlesForCoroEnd(CGF);
+      auto *CoroEnd = CGF.Builder.CreateCall(
+          CoroEndFn, {NullPtr, CGF.Builder.getInt1(true)}, Bundles);
+      if (Bundles.empty()) {
+        auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
+        auto *CleanupContBB = CGF.createBasicBlock("cleanup.cont");
+        CGF.Builder.CreateCondBr(CoroEnd, ResumeBB, CleanupContBB);
+        CGF.EmitBlock(CleanupContBB);
+      }
     }
   };
   EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
