@@ -433,11 +433,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   struct CallCoroEnd final : public EHScopeStack::Cleanup {
     void Emit(CodeGenFunction &CGF, Flags flags) override {
       auto &CGM = CGF.CGM;
-      auto NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
+      auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
       llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
       auto Bundles = getBundlesForCoroEnd(CGF);
       auto *CoroEnd = CGF.Builder.CreateCall(
-          CoroEndFn, {NullPtr, CGF.Builder.getInt1(true)}, Bundles);
+          CoroEndFn, {NullPtr, CGF.Builder.getTrue()}, Bundles);
       if (Bundles.empty()) {
         auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
         auto *CleanupContBB = CGF.createBasicBlock("cleanup.cont");
