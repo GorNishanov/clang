@@ -690,6 +690,10 @@ public:
     if (!S.getLangOpts().CXXExceptions)
       return true;
 
+    if (!Fn.CoroutinePromise ||
+      Fn.CoroutinePromise->getType()->isDependentType())
+      return true;
+
     // [dcl.fct.def.coroutine]/3
     // The unqualified-id set_exception is found in the scope of P by class
     // member access lookup (3.4.5).
@@ -713,9 +717,41 @@ public:
     return true;
   }
 
-  // FIXME: add a call to p.return_void().
+  bool makeOnFallthrough() {
+    if (!Fn.CoroutinePromise ||
+        Fn.CoroutinePromise->getType()->isDependentType())
+      return true;
 
-  bool makeOnFallthrough() { return true; }
+    // [dcl.fct.def.coroutine]/4
+    // The unqualified-ids 'return_void' and 'return_value' are looked up in
+    // the scope of class P. If both are found, the program is ill-formed.
+    DeclarationName RVoidDN = S.PP.getIdentifierInfo("return_void");
+    LookupResult RVoidResult(S, RVoidDN, Loc, Sema::LookupMemberName);
+    CXXRecordDecl *RD = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
+    const bool HasRVoid = S.LookupQualifiedName(RVoidResult, RD);
+
+    DeclarationName RValueDN = S.PP.getIdentifierInfo("return_value");
+    LookupResult RValueResult(S, RValueDN, Loc, Sema::LookupMemberName);
+    const bool HasRValue = S.LookupQualifiedName(RValueResult, RD);
+
+    if (HasRVoid && HasRValue) {
+      // FIXME Improve this diagnostic
+      S.Diag(FD.getLocation(), diag::err_coroutine_promise_return_ill_formed)
+        << RD;
+      return false;
+    }
+    else if (HasRVoid) {
+      // If the unqualified-id return_void is found, flowing off the end of a
+      // coroutine is equivalent to a co_return with no operand. Otherwise,
+      // flowing off the end of a coroutine results in undefined behavior.
+      StmtResult Fallthrough = S.BuildCoreturnStmt(FD.getLocation(), nullptr);
+      Fallthrough = S.ActOnFinishFullStmt(Fallthrough.get());
+      if (Fallthrough.isInvalid())
+        return false;
+      this->OnFallthrough = Fallthrough.get();
+    }
+    return true;
+  }
 
   bool makeNewAndDeleteExpr(LabelDecl *label) {
     TypeSourceInfo *TInfo = Fn.CoroutinePromise->getTypeSourceInfo();

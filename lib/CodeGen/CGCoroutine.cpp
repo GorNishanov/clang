@@ -469,6 +469,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // See if we need to generate final suspend.
     const bool CanFallthrough = Builder.GetInsertBlock();
     const bool HasCoreturns = CurCoro.Data->CoreturnCount > 0;
+    if (auto *OnFallthrough = S.getFallthroughHandler())
+      if (CanFallthrough)
+        EmitStmt(OnFallthrough);
     if (CanFallthrough || HasCoreturns) {
       CurCoro.Data->CurrentAwaitKind = AwaitKind::Final;
       EmitStmt(S.getFinalSuspendStmt());
