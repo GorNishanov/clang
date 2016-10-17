@@ -529,6 +529,34 @@ struct RewriteParams : TreeTransform<RewriteParams> {
 };
 }
 
+static ExprResult buildStdCurrentExceptionCall(Sema &S, SourceLocation Loc) {
+  NamespaceDecl *Std = S.getStdNamespace();
+  if (!Std) {
+    S.Diag(Loc, diag::err_implied_std_current_exception_not_found);
+    return ExprError();
+  }
+  LookupResult Result(S, &S.PP.getIdentifierTable().get("current_exception"),
+    Loc, Sema::LookupOrdinaryName);
+  if (!S.LookupQualifiedName(Result, Std)) {
+    S.Diag(Loc, diag::err_implied_std_current_exception_not_found);
+    return ExprError();
+  }
+
+  // FIXME The STL is free to provide more than one overload.
+  FunctionDecl *FD = Result.getAsSingle<FunctionDecl>();
+  if (!FD) {
+    S.Diag(Loc, diag::err_malformed_std_current_exception);
+    return ExprError();
+  }
+  ExprResult Res = S.BuildDeclRefExpr(FD, FD->getType(), VK_LValue, Loc);
+  Res = S.ActOnCallExpr(/*Scope*/ nullptr, Res.get(), Loc, None, Loc);
+  if (Res.isInvalid()) {
+    S.Diag(Loc, diag::err_malformed_std_current_exception);
+    return ExprError();
+  }
+  return Res;
+}
+
 namespace {
 struct SubStmtBuilder {
   Stmt *Body = nullptr;
@@ -567,7 +595,8 @@ public:
     this->IsValid = makePromiseStmt() && makeInitialSuspend() &&
                     makeFinalSuspend(FinalLabel) && makeOnException() &&
                     makeOnFallthrough() && makeNewAndDeleteExpr(DestroyLabel) &&
-                    makeResultDecl() && makeReturnStmt() && makeParamMoves();
+                    makeResultDecl() && makeReturnStmt() && makeParamMoves() &&
+                    makeBody();
     if (IsValid) {
 #if 0
       // FIXME: parameter handling needs more work.
@@ -583,6 +612,23 @@ public:
       this->Body = NewBody.get();
 #endif
     }
+  }
+
+  bool makeBody() {
+    if (!OnException)
+      return true;
+
+    StmtResult CatchBlock = S.ActOnCXXCatchBlock(Loc, nullptr, OnException);
+    if (CatchBlock.isInvalid())
+      return false;
+
+    StmtResult TryBlock = S.ActOnCXXTryBlock(Loc, Body, {CatchBlock.get()});
+    if (TryBlock.isInvalid())
+      return false;
+
+    Body = TryBlock.get();
+
+    return true;
   }
 
   bool isInvalid() const { return !this->IsValid; }
@@ -639,9 +685,33 @@ public:
     return true;
   }
 
-  // FIXME: Perform analysis of set_exception call.
+  bool makeOnException() {
+    // If exceptions are disabled, don't try to build OnException.
+    if (!S.getLangOpts().CXXExceptions)
+      return true;
 
-  bool makeOnException() { return true; }
+    // [dcl.fct.def.coroutine]/3
+    // The unqualified-id set_exception is found in the scope of P by class
+    // member access lookup (3.4.5).
+    DeclarationName SetExDN = S.PP.getIdentifierInfo("set_exception");
+    LookupResult SetExResult(S, SetExDN, Loc, Sema::LookupMemberName);
+    CXXRecordDecl *RD = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
+    assert(RD && "Type should have already been checked");
+
+    if (S.LookupQualifiedName(SetExResult, RD)) {
+      // Form the call 'p.set_exception(std::current_exception())'
+      auto SetException = buildStdCurrentExceptionCall(S, Loc);
+      if (SetException.isInvalid())
+        return false;
+      Expr *E = SetException.get();
+      SetException = buildPromiseCall(S, &Fn, Loc, "set_exception", E);
+      SetException = S.ActOnFinishFullExpr(SetException.get(), Loc);
+      if (SetException.isInvalid())
+        return false;
+      this->OnException = SetException.get();
+    }
+    return true;
+  }
 
   // FIXME: add a call to p.return_void().
 
