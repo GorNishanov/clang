@@ -3,6 +3,8 @@
 #include "Inputs/coroutine.h"
 
 struct coro_t {
+  void* p;
+  ~coro_t();
   struct promise_type {
     coro_t get_return_object();
     coro::suspend_never initial_suspend();

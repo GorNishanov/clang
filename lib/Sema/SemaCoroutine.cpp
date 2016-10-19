@@ -832,6 +832,7 @@ public:
       return false;
 
     RetType = ReturnObject.get()->getType();
+#if 0
     if (RetType == FD.getReturnType()) {
       // GRO is same type as return type of the function
       // don't need to create GRO temporary.
@@ -841,6 +842,7 @@ public:
       this->ResultDecl = nullptr;
       return true;
     }
+#endif
 
     if (!RetType->isDependentType()) {
       InitializedEntity Entity =
@@ -860,6 +862,10 @@ public:
     if (RetDecl->isInvalidDecl())
       return false;
 
+    if (RetType == FD.getReturnType()) {
+      RetDecl->setNRVOVariable(true);
+    }
+
     S.AddInitializerToDecl(RetDecl, ReturnObject.get(),
                            /*DirectInit=*/false, false); // TypeContainsAuto);
 
@@ -877,32 +883,15 @@ public:
   }
 
   bool makeReturnStmt() {
-    StmtResult ReturnStmt;
-    if (RetDecl) {
-      ExprResult declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
-      if (declRef.isInvalid())
-        return false;
-      ReturnStmt = S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
-    } else {
-      ExprResult ReturnObject =
-          buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
-      if (ReturnObject.isInvalid())
-        return false;
-
-      RetType = FD.getReturnType();
-      if (!RetType->isDependentType()) {
-        InitializedEntity Entity =
-            InitializedEntity::InitializeResult(Loc, RetType, false);
-        ReturnObject = S.PerformMoveOrCopyInitialization(
-            Entity, nullptr, RetType, ReturnObject.get());
-        if (ReturnObject.isInvalid())
-          return false;
-      }
-      ReturnStmt = S.ActOnReturnStmt(Loc, ReturnObject.get(), S.getCurScope());
-    }
+    ExprResult declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
+    if (declRef.isInvalid())
+      return false;
+    StmtResult ReturnStmt =
+        S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
+    if (ReturnStmt.isInvalid())
+      return false;
     this->ReturnStmt = ReturnStmt.get();
-
-    return !ReturnStmt.isInvalid();
+    return true;
   }
 
   // Create a static_cast\<T&&>(expr).

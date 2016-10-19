@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CodeGenFunction.h"
+#include "CGCleanup.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
 #include "llvm/IR/Dominators.h"
@@ -399,6 +400,23 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_begin),
                      {CoroId, Phi});
 
+  Address GroActiveFlag =
+      CreateTempAlloca(Builder.getInt1Ty(), CharUnits::One(), "gro.active");
+
+  // Set GRO flag that it is not initialized yet
+  Builder.CreateStore(Builder.getFalse(), GroActiveFlag);
+  auto *GroDeclStmt = cast<DeclStmt>(S.getResultDecl());
+  auto *GroVarDecl = cast<VarDecl>(GroDeclStmt->getSingleDecl());
+  AutoVarEmission GroEmission = EmitAutoVarAlloca(*GroVarDecl);
+  EmitAutoVarCleanups(GroEmission);
+
+  if (auto *Cleanup = dyn_cast_or_null<EHCleanupScope>(&*EHStack.begin())) {
+    assert(!Cleanup->hasActiveFlag() && "cleanup already has active flag?");
+    Cleanup->setActiveFlag(GroActiveFlag);
+    Cleanup->setTestFlagInEHCleanup();
+    Cleanup->setTestFlagInNormalCleanup();
+  }
+
   // Make sure that we free the memory on any exceptions that happens
   // prior to the first suspend.
   struct CallCoroDelete final : public EHScopeStack::Cleanup {
@@ -417,16 +435,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   // promise local variable was not emitted yet.
   CoroId->setArgOperand(1, PromiseAddrVoidPtr);
 
-  // If SS.ResultDecl is not null, an object returned by get_return_object
-  // requires a conversion to a return type. In this case, we declare at this
-  // point and will emit a return statement at the end. Otherwise, emit return
-  // statement here. Note, EmitReturnStmt omits branch to cleanup if current
-  // function is a coroutine.
-  if (S.getResultDecl()) {
-    EmitStmt(S.getResultDecl());
-  } else {
-    EmitStmt(S.getReturnStmt());
-  }
+  // Now we have the promise, initialize the GRO
+  EmitAutoVarInit(GroEmission);
+  Builder.CreateStore(Builder.getTrue(), GroActiveFlag);
 
   // We will insert coro.end to cut any of the destructors for objects that
   // do not need to be destroyed onces the coroutine is resumed.
@@ -483,11 +494,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
   Builder.CreateCall(CoroEnd, {NullPtr, Builder.getInt1(0)});
 
-  // Emit return statement only if we are doing two stage return initialization.
-  // I.e. when get_return_object requires a conversion to a return type.
-  if (S.getResultDecl()) {
-    EmitStmt(S.getReturnStmt());
-  }
+  EmitStmt(S.getReturnStmt());
 
   runHorribleHackToFixupCleanupBlocks(*CurFn);
 }
