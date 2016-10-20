@@ -51,8 +51,8 @@ CXXTryStmt::CXXTryStmt(SourceLocation tryLoc, Stmt *tryBlock,
 
 CoroutineBodyStmt *CoroutineBodyStmt::Create(
     const ASTContext &C, Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-    LabelStmt *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough, Expr *Allocate,
-    LabelStmt *Deallocate, Stmt *ResultDecl, Stmt *ReturnStmt,
+    Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough, Expr *Allocate,
+    Expr *Deallocate, Stmt *ResultDecl, Stmt *ReturnStmt,
     ArrayRef<Stmt *> ParamMoves) {
   std::size_t Size = sizeof(CoroutineBodyStmt) + sizeof(SubStmt);
   Size += (ParamMoves.size() * sizeof(Stmt *));
@@ -65,9 +65,9 @@ CoroutineBodyStmt *CoroutineBodyStmt::Create(
 
 CoroutineBodyStmt::CoroutineBodyStmt(Stmt *Body, Stmt *Promise,
                                      Expr *InitialSuspend,
-                                     LabelStmt *FinalSuspend, Stmt *OnException,
+                                     Expr *FinalSuspend, Stmt *OnException,
                                      Stmt *OnFallthrough, Expr *Allocate,
-                                     LabelStmt *Deallocate, Stmt *ResultDecl,
+                                     Expr *Deallocate, Stmt *ResultDecl,
                                      Stmt *ReturnStmt,
                                      ArrayRef<Stmt *> ParamMoves)
     : Stmt(CoroutineBodyStmtClass), NumParams(ParamMoves.size()) {

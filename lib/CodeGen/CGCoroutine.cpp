@@ -50,9 +50,10 @@ namespace CodeGen {
 
 struct CGCoroData {
   AwaitKind CurrentAwaitKind = AwaitKind::Init;
-  LabelDecl *DeleteLabel = nullptr;
-  LabelDecl *FinalLabel = nullptr;
   llvm::BasicBlock *SuspendBB = nullptr;
+
+  CodeGenFunction::JumpDest CleanupJD;
+  CodeGenFunction::JumpDest FinalJD;
 
   unsigned AwaitNum = 0;
   unsigned YieldNum = 0;
@@ -196,8 +197,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   //   see clang/test/Coroutines/brokenIR.cpp.
   // Current we patch SSA with runHorribleHackToFixupCleanupBlocks(*CurFn)
   // at the end of EmitCoroutineBody.
-  auto jumpDest = CGF.getJumpDestForLabel(Coro.DeleteLabel);
-  CGF.EmitBranchThroughCleanup(jumpDest);
+  CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
 
   // Emit await_resume expression.
   CGF.EmitBlock(ReadyBlock);
@@ -297,8 +297,7 @@ static void runHorribleHackToFixupCleanupBlocks(Function &F) {
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   ++CurCoro.Data->CoreturnCount;
   EmitStmt(S.getPromiseCall());
-  auto JumpDest = getJumpDestForLabel(CurCoro.Data->FinalLabel);
-  EmitBranchThroughCleanup(JumpDest);
+  EmitBranchThroughCleanup(CurCoro.Data->FinalJD);
 }
 
 llvm::Value *CodeGenFunction::EmitCoawaitExpr(const CoawaitExpr &E,
@@ -394,6 +393,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   auto *EntryBB = Builder.GetInsertBlock();
   auto *AllocBB = createBasicBlock("coro.alloc");
+  auto *DeleteBB = createBasicBlock("coro.delete");
+  auto *FinalBB = createBasicBlock("coro.final");
   auto *InitBB = createBasicBlock("coro.init");
   auto *RetBB = createBasicBlock("coro.ret");
 
@@ -402,8 +403,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     return;
   }
   CurCoro.Data->SuspendBB = RetBB;
-  CurCoro.Data->DeleteLabel = S.getDeallocate()->getDecl();
-  CurCoro.Data->FinalLabel = S.getFinalSuspendStmt()->getDecl();
+  // XXX FIXME:
+  //CurCoro.Data->DeleteLabel = S.getDeallocate()->getDecl();
+  //CurCoro.Data->FinalLabel = S.getFinalSuspendStmt()->getDecl();
 
   Builder.CreateCondBr(CoroAlloc, AllocBB, InitBB);
 
@@ -438,6 +440,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     Cleanup->setTestFlagInNormalCleanup();
   }
 
+  CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(DeleteBB);
+
   // Body of the coroutine.
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
@@ -447,7 +451,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     struct CallCoroDelete final : public EHScopeStack::Cleanup {
       Stmt *S;
       void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
-      CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
+      CallCoroDelete(Stmt *S) : S(S) {}
     };
     EHStack.pushCleanup<CallCoroDelete>(EHCleanup, S.getDeallocate());
 
@@ -475,6 +479,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     EmitStmt(S.getInitSuspendStmt());
+    CurCoro.Data->FinalJD = getJumpDestInCurrentScope(FinalBB);
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
     EmitStmt(S.getBody());
@@ -486,10 +491,12 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       if (CanFallthrough)
         EmitStmt(OnFallthrough);
     if (CanFallthrough || HasCoreturns) {
+      EmitBlock(FinalBB);
       CurCoro.Data->CurrentAwaitKind = AwaitKind::Final;
       EmitStmt(S.getFinalSuspendStmt());
     }
   }
+  EmitBlock(DeleteBB);
   EmitStmt(S.getDeallocate());
 
   EmitBlock(RetBB);

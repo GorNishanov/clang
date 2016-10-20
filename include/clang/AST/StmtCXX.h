@@ -321,16 +321,15 @@ class CoroutineBodyStmt : public Stmt {
   }
 
   CoroutineBodyStmt(Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-                    LabelStmt *FinalSuspend, Stmt *OnException,
-                    Stmt *OnFallthrough, Expr *Allocate, LabelStmt *Deallocate,
-                    Stmt *ResultDecl, Stmt *ReturnStmt,
-                    ArrayRef<Stmt *> ParamMoves);
+                    Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
+                    Expr *Allocate, Expr *Deallocate, Stmt *ResultDecl,
+                    Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
 
 public:
   static CoroutineBodyStmt *
   Create(const ASTContext &C, Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-         LabelStmt *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
-         Expr *Allocate, LabelStmt *Deallocate, Stmt *ResultDecl,
+         Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
+         Expr *Allocate, Expr *Deallocate, Stmt *ResultDecl,
          Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
 
   ArrayRef<Stmt const *> getParamMoves() const {
@@ -347,9 +346,7 @@ public:
     return cast<VarDecl>(getPromiseDeclStmt()->getSingleDecl());
   }
   Stmt *getInitSuspendStmt() const { return SubStmts[SubStmt::InitSuspend]; }
-  LabelStmt *getFinalSuspendStmt() const {
-    return cast<LabelStmt>(SubStmts[SubStmt::FinalSuspend]);
-  }
+  Stmt *getFinalSuspendStmt() const { return SubStmts[SubStmt::FinalSuspend]; }
   Stmt *getExceptionHandler() const { return SubStmts[SubStmt::OnException]; }
   Stmt *getFallthroughHandler() const {
     return SubStmts[SubStmt::OnFallthrough];
@@ -357,9 +354,7 @@ public:
   Stmt *getResultDecl() const { return SubStmts[SubStmt::ResultDecl]; }
   Stmt *getReturnStmt() const { return SubStmts[SubStmt::ReturnStmt]; }
   Expr *getAllocate() const { return cast<Expr>(SubStmts[SubStmt::Allocate]); }
-  LabelStmt *getDeallocate() const {
-    return cast<LabelStmt>(SubStmts[SubStmt::Deallocate]);
-  }
+  Stmt *getDeallocate() const { return SubStmts[SubStmt::Deallocate]; }
 
   SourceLocation getLocStart() const LLVM_READONLY {
     return getBody()->getLocStart();

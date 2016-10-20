@@ -562,11 +562,11 @@ struct SubStmtBuilder {
   Stmt *Body = nullptr;
   Stmt *Promise = nullptr;
   Expr *InitialSuspend = nullptr;
-  LabelStmt *FinalSuspend = nullptr;
+  Expr *FinalSuspend = nullptr;
   Stmt *OnException = nullptr;
   Stmt *OnFallthrough = nullptr;
   Expr *Allocate = nullptr;
-  LabelStmt *Deallocate = nullptr;
+  Expr *Deallocate = nullptr;
   Stmt *ResultDecl = nullptr;
   Stmt *ReturnStmt = nullptr;
 
@@ -584,17 +584,10 @@ private:
 public:
   SubStmtBuilder(Sema &S, FunctionDecl &FD, FunctionScopeInfo &Fn, Stmt *Body)
       : S(S), FD(FD), Fn(Fn), Loc(FD.getLocation()) {
-    LabelDecl *DestroyLabel =
-        LabelDecl::Create(S.Context, S.CurContext, SourceLocation(),
-                          S.PP.getIdentifierInfo("coro.destroy.label"));
-    LabelDecl *FinalLabel =
-      LabelDecl::Create(S.Context, S.CurContext, SourceLocation(),
-        S.PP.getIdentifierInfo("coro.final.label"));
-
     this->Body = Body;
     this->IsValid = makePromiseStmt() && makeInitialSuspend() &&
-                    makeFinalSuspend(FinalLabel) && makeOnException() &&
-                    makeOnFallthrough() && makeNewAndDeleteExpr(DestroyLabel) &&
+                    makeFinalSuspend() && makeOnException() &&
+                    makeOnFallthrough() && makeNewAndDeleteExpr() &&
                     makeResultDecl() && makeReturnStmt() && makeParamMoves() &&
                     makeBody();
     if (IsValid) {
@@ -663,7 +656,7 @@ public:
     return true;
   }
 
-  bool makeFinalSuspend(LabelDecl *FinalLabel) {
+  bool makeFinalSuspend() {
     // Form and check implicit 'co_await p.final_suspend();' statement.
     ExprResult FinalSuspend =
         buildPromiseCall(S, &Fn, Loc, "final_suspend", None);
@@ -674,14 +667,7 @@ public:
     if (FinalSuspend.isInvalid())
       return false;
 
-    // Make it a labeled statement.
-    StmtResult Stmt =
-        S.ActOnLabelStmt(Loc, FinalLabel, Loc, FinalSuspend.get());
-
-    if (Stmt.isInvalid())
-      return false;
-
-    this->FinalSuspend = cast<LabelStmt>(Stmt.get());
+    this->FinalSuspend = FinalSuspend.get();
     return true;
   }
 
@@ -753,7 +739,7 @@ public:
     return true;
   }
 
-  bool makeNewAndDeleteExpr(LabelDecl *label) {
+  bool makeNewAndDeleteExpr() {
     TypeSourceInfo *TInfo = Fn.CoroutinePromise->getTypeSourceInfo();
     QualType PromiseType = TInfo->getType();
 
@@ -814,13 +800,7 @@ public:
     if (DeleteExpr.isInvalid())
       return false;
 
-    // Make it a labeled statement.
-    StmtResult Stmt = S.ActOnLabelStmt(Loc, label, Loc, DeleteExpr.get());
-
-    if (Stmt.isInvalid())
-      return false;
-
-    this->Deallocate = cast<LabelStmt>(Stmt.get());
+    this->Deallocate = DeleteExpr.get();
 
     return true;
   }
