@@ -1,4 +1,5 @@
-// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -triple=x86_64-unknown-linux-gnu -emit-llvm -o - %s -fexceptions -fcxx-exceptions -disable-llvm-passes | FileCheck --check-prefix=CHECK-LPAD %s
+// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -triple=x86_64-pc-windows-msvc18.0.0 -emit-llvm -o - %s -fexceptions -fcxx-exceptions -disable-llvm-passes | FileCheck %s
+// -triple=x86_64-unknown-linux-gnu
 
 #include "Inputs/coroutine.h"
 
@@ -23,3 +24,21 @@ coro_t f() {
   may_throw();
   co_return;
 }
+
+// CHECK-LABEL: define void @"\01?f@@YA?AUcoro_t@@XZ"(
+// CHECK:  %gro.active = alloca i1
+// CHECK:  store i1 false, i1* %gro.active
+
+// CHECK:  invoke %"struct.coro_t::promise_type"* @"\01??0promise_type@coro_t@@QEAA@XZ"(
+// CHECK:  invoke void @"\01?get_return_object@promise_type@coro_t@@QEAA?AU2@XZ"(
+// CHECK:  store i1 true, i1* %gro.active
+
+// CHECK:  %[[IS_ACTIVE:.+]] = load i1, i1* %gro.active
+// CHECK:  br i1 %[[IS_ACTIVE]], label %[[CLEANUP1:.+]], label
+
+// CHECK: [[CLEANUP1]]:
+// CHECK:  %[[NRVO:.+]] = load i1, i1* %nrvo
+// CHECK:  br i1 %[[NRVO]], label %{{.+}}, label %[[DTOR:.+]]
+
+// CHECK: [[DTOR]]:
+// CHECK:  call void @"\01??_Dcoro_t@@QEAA@XZ"(

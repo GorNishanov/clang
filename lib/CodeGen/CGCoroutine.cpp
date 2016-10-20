@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CodeGenFunction.h"
 #include "CGCleanup.h"
+#include "CodeGenFunction.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
 #include "llvm/IR/Dominators.h"
@@ -302,12 +302,12 @@ void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
 }
 
 llvm::Value *CodeGenFunction::EmitCoawaitExpr(const CoawaitExpr &E,
-                                        ReturnValueSlot ReturnValue) {
+                                              ReturnValueSlot ReturnValue) {
   return emitSuspendExpression(*this, *CurCoro.Data, E,
                                CurCoro.Data->CurrentAwaitKind, ReturnValue);
 }
 llvm::Value *CodeGenFunction::EmitCoyieldExpr(const CoyieldExpr &E,
-                                        ReturnValueSlot ReturnValue) {
+                                              ReturnValueSlot ReturnValue) {
   return emitSuspendExpression(*this, *CurCoro.Data, E, AwaitKind::Yield,
                                ReturnValue);
 }
@@ -359,6 +359,27 @@ getBundlesForCoroEnd(CodeGenFunction &CGF) {
     BundleList.emplace_back("funclet", EHPad);
 
   return BundleList;
+}
+
+namespace {
+// We will insert coro.end to cut any of the destructors for objects that
+// do not need to be destroyed onces the coroutine is resumed.
+struct CallCoroEnd final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    auto &CGM = CGF.CGM;
+    auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
+    llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+    auto Bundles = getBundlesForCoroEnd(CGF);
+    auto *CoroEnd = CGF.Builder.CreateCall(
+        CoroEndFn, {NullPtr, CGF.Builder.getTrue()}, Bundles);
+    if (Bundles.empty()) {
+      auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
+      auto *CleanupContBB = CGF.createBasicBlock("cleanup.cont");
+      CGF.Builder.CreateCondBr(CoroEnd, ResumeBB, CleanupContBB);
+      CGF.EmitBlock(CleanupContBB);
+    }
+  }
+};
 }
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
@@ -417,52 +438,31 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     Cleanup->setTestFlagInNormalCleanup();
   }
 
-  // Make sure that we free the memory on any exceptions that happens
-  // prior to the first suspend.
-  struct CallCoroDelete final : public EHScopeStack::Cleanup {
-    Stmt *S;
-    void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
-    CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
-  };
-  EHStack.pushCleanup<CallCoroDelete>(EHCleanup, S.getDeallocate());
-
-  EmitStmt(S.getPromiseDeclStmt());
-
-  Address PromiseAddr = GetAddrOfLocalVar(S.getPromiseDecl());
-  auto *PromiseAddrVoidPtr =
-      new llvm::BitCastInst(PromiseAddr.getPointer(), VoidPtrTy, "", CoroId);
-  // Update CoroId to refer to the promise. We could not do it earlier because
-  // promise local variable was not emitted yet.
-  CoroId->setArgOperand(1, PromiseAddrVoidPtr);
-
-  // Now we have the promise, initialize the GRO
-  EmitAutoVarInit(GroEmission);
-  Builder.CreateStore(Builder.getTrue(), GroActiveFlag);
-
-  // We will insert coro.end to cut any of the destructors for objects that
-  // do not need to be destroyed onces the coroutine is resumed.
-  struct CallCoroEnd final : public EHScopeStack::Cleanup {
-    void Emit(CodeGenFunction &CGF, Flags flags) override {
-      auto &CGM = CGF.CGM;
-      auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
-      llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-      auto Bundles = getBundlesForCoroEnd(CGF);
-      auto *CoroEnd = CGF.Builder.CreateCall(
-          CoroEndFn, {NullPtr, CGF.Builder.getTrue()}, Bundles);
-      if (Bundles.empty()) {
-        auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
-        auto *CleanupContBB = CGF.createBasicBlock("cleanup.cont");
-        CGF.Builder.CreateCondBr(CoroEnd, ResumeBB, CleanupContBB);
-        CGF.EmitBlock(CleanupContBB);
-      }
-    }
-  };
-  EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
-
   // Body of the coroutine.
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
-    // TODO: Make sure that promise dtor is called.
+
+    // Make sure that we free the memory on any exceptions that happens
+    // prior to the first suspend.
+    struct CallCoroDelete final : public EHScopeStack::Cleanup {
+      Stmt *S;
+      void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
+      CallCoroDelete(LabelStmt *LS) : S(LS->getSubStmt()) {}
+    };
+    EHStack.pushCleanup<CallCoroDelete>(EHCleanup, S.getDeallocate());
+
+    EmitStmt(S.getPromiseDeclStmt());
+
+    Address PromiseAddr = GetAddrOfLocalVar(S.getPromiseDecl());
+    auto *PromiseAddrVoidPtr =
+        new llvm::BitCastInst(PromiseAddr.getPointer(), VoidPtrTy, "", CoroId);
+    // Update CoroId to refer to the promise. We could not do it earlier because
+    // promise local variable was not emitted yet.
+    CoroId->setArgOperand(1, PromiseAddrVoidPtr);
+
+    // Now we have the promise, initialize the GRO
+    EmitAutoVarInit(GroEmission);
+    Builder.CreateStore(Builder.getTrue(), GroActiveFlag);
 
     for (auto PM : S.getParamMoves()) {
       EmitStmt(PM);
@@ -470,6 +470,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       // for the copy, so that llvm can elide it if the copy is
       // not needed.
     }
+
+    EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     EmitStmt(S.getInitSuspendStmt());
