@@ -381,6 +381,17 @@ struct CallCoroEnd final : public EHScopeStack::Cleanup {
 };
 }
 
+namespace {
+// Make sure to call coro.delete on scope exits.
+struct CallCoroDelete final : public EHScopeStack::Cleanup {
+  Stmt *Deallocate;
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    CGF.EmitStmt(Deallocate);
+  }
+  CallCoroDelete(Stmt *S) : Deallocate(S) {}
+};
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
@@ -393,7 +404,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   auto *EntryBB = Builder.GetInsertBlock();
   auto *AllocBB = createBasicBlock("coro.alloc");
-  auto *DeleteBB = createBasicBlock("coro.delete");
   auto *FinalBB = createBasicBlock("coro.final");
   auto *InitBB = createBasicBlock("coro.init");
   auto *RetBB = createBasicBlock("coro.ret");
@@ -403,9 +413,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     return;
   }
   CurCoro.Data->SuspendBB = RetBB;
-  // XXX FIXME:
-  //CurCoro.Data->DeleteLabel = S.getDeallocate()->getDecl();
-  //CurCoro.Data->FinalLabel = S.getFinalSuspendStmt()->getDecl();
 
   Builder.CreateCondBr(CoroAlloc, AllocBB, InitBB);
 
@@ -440,20 +447,12 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     Cleanup->setTestFlagInNormalCleanup();
   }
 
-  CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(DeleteBB);
+  CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(RetBB);
 
-  // Body of the coroutine.
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
 
-    // Make sure that we free the memory on any exceptions that happens
-    // prior to the first suspend.
-    struct CallCoroDelete final : public EHScopeStack::Cleanup {
-      Stmt *S;
-      void Emit(CodeGenFunction &CGF, Flags flags) override { CGF.EmitStmt(S); }
-      CallCoroDelete(Stmt *S) : S(S) {}
-    };
-    EHStack.pushCleanup<CallCoroDelete>(EHCleanup, S.getDeallocate());
+    EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, S.getDeallocate());
 
     EmitStmt(S.getPromiseDeclStmt());
 
@@ -496,8 +495,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       EmitStmt(S.getFinalSuspendStmt());
     }
   }
-  EmitBlock(DeleteBB);
-  EmitStmt(S.getDeallocate());
 
   EmitBlock(RetBB);
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);

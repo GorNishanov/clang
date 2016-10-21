@@ -50,6 +50,6 @@ coro_t f() {
 // CHECK-LPAD: eh.resume:
 // CHECK-LPAD-NEXT:  %exn = load i8*, i8** %exn.slot, align 8
 // CHECK-LPAD-NEXT:    %sel = load i32, i32* %ehselector.slot, align 4
-// CHECK-LPAD-NEXT:    %lpad.val = insertvalue { i8*, i32 } undef, i8* %exn, 0
-// CHECK-LPAD-NEXT:    %lpad.val29 = insertvalue { i8*, i32 } %lpad.val, i32 %sel, 1
-// CHECK-LPAD-NEXT:    resume { i8*, i32 } %lpad.val29
+// CHECK-LPAD-NEXT:    %[[LPAD0:.+]] = insertvalue { i8*, i32 } undef, i8* %exn, 0
+// CHECK-LPAD-NEXT:    %[[LPAD1:.+]] = insertvalue { i8*, i32 } %[[LPAD0]], i32 %sel, 1
+// CHECK-LPAD-NEXT:    resume { i8*, i32 } %[[LPAD1]]
