@@ -382,13 +382,31 @@ struct CallCoroEnd final : public EHScopeStack::Cleanup {
 }
 
 namespace {
-// Make sure to call coro.delete on scope exits.
+// Make sure to call coro.delete on scope exit.
 struct CallCoroDelete final : public EHScopeStack::Cleanup {
+  llvm::Value *CoroId;
+  llvm::Value *CoroBegin;
   Stmt *Deallocate;
+
+  // Emit "if (coro.free(CoroId, CoroBegin)) Deallocate;"
   void Emit(CodeGenFunction &CGF, Flags flags) override {
+    auto &CGM = CGF.CGM;
+    auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
+    llvm::Function *CoroFreeFn = CGM.getIntrinsic(llvm::Intrinsic::coro_free);
+    auto *CoroFree = CGF.Builder.CreateCall(CoroFreeFn, {CoroId, CoroBegin});
+    auto *Cond = CGF.Builder.CreateICmpNE(CoroFree, NullPtr);
+
+    auto *AfterFreeBB = CGF.createBasicBlock("after.coro.free");
+    auto *FreeBB = CGF.createBasicBlock("coro.free");
+    CGF.Builder.CreateCondBr(Cond, FreeBB, AfterFreeBB);
+
+    CGF.EmitBlock(FreeBB);
     CGF.EmitStmt(Deallocate);
+
+    CGF.EmitBlock(AfterFreeBB);
   }
-  CallCoroDelete(Stmt *S) : Deallocate(S) {}
+  CallCoroDelete(llvm::Value *CoroId, llvm::Value *CoroBegin, Stmt *S)
+      : CoroId(CoroId), CoroBegin(CoroBegin), Deallocate(S) {}
 };
 }
 
@@ -427,8 +445,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   Phi->addIncoming(NullPtr, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
 
-  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_begin),
-                     {CoroId, Phi});
+  auto *CoroBegin = Builder.CreateCall(
+      CGM.getIntrinsic(llvm::Intrinsic::coro_begin), {CoroId, Phi});
 
   Address GroActiveFlag =
       CreateTempAlloca(Builder.getInt1Ty(), CharUnits::One(), "gro.active");
@@ -452,7 +470,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
 
-    EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, S.getDeallocate());
+    EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, CoroId, CoroBegin,
+                                        S.getDeallocate());
 
     EmitStmt(S.getPromiseDeclStmt());
 
