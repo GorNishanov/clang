@@ -173,6 +173,7 @@ class Parser : public CodeCompletionHandler {
   std::unique_ptr<PragmaHandler> MSSection;
   std::unique_ptr<PragmaHandler> MSRuntimeChecks;
   std::unique_ptr<PragmaHandler> MSIntrinsic;
+  std::unique_ptr<PragmaHandler> CUDAForceHostDeviceHandler;
   std::unique_ptr<PragmaHandler> OptimizeHandler;
   std::unique_ptr<PragmaHandler> LoopHintHandler;
   std::unique_ptr<PragmaHandler> UnrollHintHandler;
@@ -245,6 +246,11 @@ class Parser : public CodeCompletionHandler {
   bool ParsingInObjCContainer;
 
   bool SkipFunctionBodies;
+
+  /// The location of the expression statement that is being parsed right now.
+  /// Used to determine if an expression that is being parsed is a statement or
+  /// just a regular sub-expression.
+  SourceLocation ExprStatementTokLoc;
 
 public:
   Parser(Preprocessor &PP, Sema &Actions, bool SkipFunctionBodies);

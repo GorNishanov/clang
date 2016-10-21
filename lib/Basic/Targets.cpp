@@ -2362,6 +2362,8 @@ const Builtin::Info BuiltinInfoX86[] = {
 
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
   { #ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, nullptr },
+#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE)         \
+  { #ID, TYPE, ATTRS, nullptr, ALL_LANGUAGES, FEATURE },
 #define TARGET_HEADER_BUILTIN(ID, TYPE, ATTRS, HEADER, LANGS, FEATURE)         \
   { #ID, TYPE, ATTRS, HEADER, LANGS, FEATURE },
 #include "clang/Basic/BuiltinsX86_64.def"
@@ -4549,6 +4551,7 @@ public:
     case CC_X86VectorCall:
     case CC_IntelOclBicc:
     case CC_X86_64SysV:
+    case CC_Swift:
       return CCCR_OK;
     default:
       return CCCR_Warning;
@@ -4929,6 +4932,8 @@ class ARMTargetInfo : public TargetInfo {
       return "8M_BASE";
     case llvm::ARM::AK_ARMV8MMainline:
       return "8M_MAIN";
+    case llvm::ARM::AK_ARMV8R:
+      return "8R";
     }
   }
 
@@ -5055,7 +5060,7 @@ public:
                  StringRef CPU,
                  const std::vector<std::string> &FeaturesVec) const override {
 
-    std::vector<const char*> TargetFeatures;
+    std::vector<StringRef> TargetFeatures;
     unsigned Arch = llvm::ARM::parseArch(getTriple().getArchName());
 
     // get default FPU features
@@ -5066,9 +5071,9 @@ public:
     unsigned Extensions = llvm::ARM::getDefaultExtensions(CPU, Arch);
     llvm::ARM::getExtensionFeatures(Extensions, TargetFeatures);
 
-    for (const char *Feature : TargetFeatures)
+    for (auto Feature : TargetFeatures)
       if (Feature[0] == '+')
-        Features[Feature+1] = true;
+        Features[Feature.drop_front(1)] = true;
 
     return TargetInfo::initFeatureMap(Features, Diags, CPU, FeaturesVec);
   }
@@ -5583,6 +5588,8 @@ const Builtin::Info ARMTargetInfo::BuiltinInfo[] = {
   { #ID, TYPE, ATTRS, nullptr, LANG, nullptr },
 #define LIBBUILTIN(ID, TYPE, ATTRS, HEADER) \
   { #ID, TYPE, ATTRS, HEADER, ALL_LANGUAGES, nullptr },
+#define TARGET_HEADER_BUILTIN(ID, TYPE, ATTRS, HEADER, LANGS, FEATURE) \
+  { #ID, TYPE, ATTRS, HEADER, LANGS, FEATURE },
 #include "clang/Basic/BuiltinsARM.def"
 };
 

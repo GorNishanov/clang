@@ -787,7 +787,7 @@ namespace {
     /// (Foo(), 1)      // use noteSideEffect
     /// (Foo() || true) // use noteSideEffect
     /// Foo() + 1       // use noteFailure
-    LLVM_ATTRIBUTE_UNUSED_RESULT bool noteFailure() {
+    LLVM_NODISCARD bool noteFailure() {
       // Failure when evaluating some expression often means there is some
       // subexpression whose evaluation was skipped. Therefore, (because we
       // don't track whether we skipped an expression when unwinding after an
@@ -5294,8 +5294,8 @@ bool PointerExprEvaluator::VisitCallExpr(const CallExpr *E) {
 
       if (BaseAlignment < Align) {
         Result.Designator.setInvalid();
-	// FIXME: Quantities here cast to integers because the plural modifier
-	// does not work on APSInts yet.
+        // FIXME: Quantities here cast to integers because the plural modifier
+        // does not work on APSInts yet.
         CCEDiag(E->getArg(0),
                 diag::note_constexpr_baa_insufficient_alignment) << 0
           << (int) BaseAlignment.getQuantity()

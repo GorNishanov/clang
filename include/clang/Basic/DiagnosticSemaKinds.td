@@ -1650,7 +1650,8 @@ def err_init_conversion_failed : Error<
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
   "volatile and restrict|const, volatile, and restrict}5 vs "
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
-  "volatile and restrict|const, volatile, and restrict}6)}4">;
+  "volatile and restrict|const, volatile, and restrict}6)"
+  "|: different exception specifications}4">;
 
 def err_lvalue_to_rvalue_ref : Error<"rvalue reference %diff{to type $ cannot "
   "bind to lvalue of type $|cannot bind to incompatible lvalue}0,1">;
@@ -2310,6 +2311,9 @@ def err_typecheck_vector_not_convertable_non_scalar : Error<
   "cannot convert between vector and non-scalar values (%0 and %1)">;
 def err_typecheck_vector_lengths_not_equal : Error<
   "vector operands do not have the same number of elements (%0 and %1)">;
+def warn_typecheck_vector_element_sizes_not_equal : Warning<
+  "vector operands do not have the same elements sizes (%0 and %1)">,
+  InGroup<DiagGroup<"vec-elem-size">>, DefaultError;
 def err_ext_vector_component_exceeds_length : Error<
   "vector component access exceeds type %0">;
 def err_ext_vector_component_name_illegal : Error<
@@ -2379,11 +2383,6 @@ def err_swift_param_attr_not_swiftcall : Error<
   "'%0' parameter can only be used with swiftcall calling convention">;
 def err_swift_indirect_result_not_first : Error<
   "'swift_indirect_result' parameters must be first parameters of function">;
-def err_swift_context_not_before_swift_error_result : Error<
-  "'swift_context' parameter can only be followed by 'swift_error_result' "
-  "parameter">;
-def err_swift_error_result_not_last : Error<
-  "'swift_error_result' parameter must be last parameter of function">;
 def err_swift_error_result_not_after_swift_context : Error<
   "'swift_error_result' parameter must follow 'swift_context' parameter">;
 def err_swift_abi_parameter_wrong_type : Error<
@@ -2573,25 +2572,50 @@ def err_ifunc_resolver_return : Error<
 def err_ifunc_resolver_params : Error<
   "ifunc resolver function must have no parameters">;
 def warn_attribute_wrong_decl_type : Warning<
-  "%0 attribute only applies to %select{functions|unions|"
-  "variables and functions|"
-  "functions, variables, and Objective-C interfaces|"
-  "functions and methods|parameters|"
-  "functions, methods and blocks|functions, methods, and classes|"
-  "functions, methods, and parameters|classes|enums|variables|methods|"
-  "fields and global variables|structs|parameters and typedefs|variables and typedefs|"
-  "thread-local variables|variables and fields|variables, data members and tag types|"
-  "types and namespaces|Objective-C interfaces|methods and properties|"
-  "struct or union|struct, union or class|types|"
-  "Objective-C instance methods|init methods of interface or class extension declarations|"
-  "variables, functions and classes|"
-  "functions, variables, classes, and Objective-C interfaces|"
-  "Objective-C protocols|variables with static or thread storage duration|"
-  "functions and global variables|structs, unions, and typedefs|structs and typedefs|"
-  "interface or protocol declarations|kernel functions|non-K&R-style functions|"
-  "variables, enums, fields and typedefs|functions, methods, enums, and classes|"
-  "structs, classes, variables, functions, and inline namespaces|"
-  "variables, functions, methods, types, enumerations, enumerators, labels, and non-static data members}1">,
+  "%0 attribute only applies to %select{"
+  "functions"
+  "|unions"
+  "|variables and functions"
+  "|functions, variables, and Objective-C interfaces"
+  "|functions and methods"
+  "|parameters"
+  "|functions, methods and blocks"
+  "|functions, methods, and classes"
+  "|functions, methods, and parameters"
+  "|functions, methods, and global variables"
+  "|classes"
+  "|enums"
+  "|variables"
+  "|methods"
+  "|fields and global variables"
+  "|structs"
+  "|parameters and typedefs"
+  "|variables and typedefs"
+  "|thread-local variables"
+  "|variables and fields"
+  "|variables, data members and tag types"
+  "|types and namespaces"
+  "|Objective-C interfaces"
+  "|methods and properties"
+  "|struct or union"
+  "|struct, union or class"
+  "|types"
+  "|Objective-C instance methods"
+  "|init methods of interface or class extension declarations"
+  "|variables, functions and classes"
+  "|functions, variables, classes, and Objective-C interfaces"
+  "|Objective-C protocols"
+  "|variables with static or thread storage duration"
+  "|functions and global variables"
+  "|structs, unions, and typedefs"
+  "|structs and typedefs"
+  "|interface or protocol declarations"
+  "|kernel functions"
+  "|non-K&R-style functions"
+  "|variables, enums, fields and typedefs"
+  "|functions, methods, enums, and classes"
+  "|structs, classes, variables, functions, and inline namespaces"
+  "|variables, functions, methods, types, enumerations, enumerators, labels, and non-static data members}1">,
   InGroup<IgnoredAttributes>;
 def err_attribute_wrong_decl_type : Error<warn_attribute_wrong_decl_type.Text>;
 def warn_type_attribute_wrong_type : Warning<
@@ -3259,7 +3283,8 @@ def note_ovl_candidate : Note<"candidate "
     "%select{none|const|restrict|const and restrict|volatile|const and volatile"
     "|volatile and restrict|const, volatile, and restrict}3 but found "
     "%select{none|const|restrict|const and restrict|volatile|const and volatile"
-    "|volatile and restrict|const, volatile, and restrict}4)}2">;
+    "|volatile and restrict|const, volatile, and restrict}4)"
+    "| has different exception specification}2">;
 
 def note_ovl_candidate_inherited_constructor : Note<
     "constructor from base class %0 inherited here">;
@@ -6007,6 +6032,10 @@ def err_no_suitable_delete_member_function_found : Error<
   "no suitable member %0 in %1">;
 def err_ambiguous_suitable_delete_member_function_found : Error<
   "multiple suitable %0 functions in %1">;
+def warn_ambiguous_suitable_delete_function_found : Warning<
+  "multiple suitable %0 functions for %1; no 'operator delete' function "
+  "will be invoked if initialization throws an exception">,
+  InGroup<DiagGroup<"ambiguous-delete">>;
 def note_member_declared_here : Note<
   "member %0 declared here">;
 def err_decrement_bool : Error<"cannot decrement expression of type bool">;
@@ -6078,7 +6107,8 @@ def note_hidden_overloaded_virtual_declared_here : Note<
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
   "volatile and restrict|const, volatile, and restrict}2 vs "
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
-  "volatile and restrict|const, volatile, and restrict}3)}1">;
+  "volatile and restrict|const, volatile, and restrict}3)"
+  "|: different exception specifications}1">;
 def warn_using_directive_in_header : Warning<
   "using namespace directive in global context in header">,
   InGroup<HeaderHygiene>, DefaultIgnore;
@@ -6320,7 +6350,8 @@ def err_typecheck_convert_incompatible : Error<
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
   "volatile and restrict|const, volatile, and restrict}5 vs "
   "%select{none|const|restrict|const and restrict|volatile|const and volatile|"
-  "volatile and restrict|const, volatile, and restrict}6)}4">;
+  "volatile and restrict|const, volatile, and restrict}6)"
+  "|: different exception specifications}4">;
 def err_typecheck_missing_return_type_incompatible : Error<
   "%diff{return type $ must match previous return type $|"
   "return type must match previous return type}0,1 when %select{block "
@@ -6677,6 +6708,7 @@ def err_deleted_function_use : Error<"attempt to use a deleted function">;
 def err_deleted_inherited_ctor_use : Error<
   "constructor inherited by %0 from base class %1 is implicitly deleted">;
 
+def note_called_by : Note<"called by %0">;
 def err_kern_type_not_void_return : Error<
   "kernel function type %0 must have void return type">;
 def err_kern_is_nonstatic_method : Error<
@@ -6712,19 +6744,22 @@ def note_cuda_conflicting_device_function_declared_here : Note<
   "conflicting __device__ function declared here">;
 def err_cuda_device_exceptions : Error<
   "cannot use '%0' in "
-  "%select{__device__|__global__|__host__|__host__ __device__}1 function %2">;
+  "%select{__device__|__global__|__host__|__host__ __device__}1 function">;
 def err_dynamic_var_init : Error<
     "dynamic initialization is not supported for "
     "__device__, __constant__, and __shared__ variables.">;
 def err_shared_var_init : Error<
     "initialization is not supported for __shared__ variables.">;
 def err_device_static_local_var : Error<
-    "Within a __device__/__global__ function, "
-    "only __shared__ variables may be marked \"static\"">;
+    "within a %select{__device__|__global__|__host__|__host__ __device__}0 "
+    "function, only __shared__ variables may be marked 'static'">;
 def err_cuda_vla : Error<
     "cannot use variable-length arrays in "
     "%select{__device__|__global__|__host__|__host__ __device__}0 functions">;
 def err_cuda_extern_shared : Error<"__shared__ variable %0 cannot be 'extern'">;
+def err_cuda_host_shared : Error<
+    "__shared__ local variables not allowed in "
+    "%select{__device__|__global__|__host__|__host__ __device__}0 functions">;
 def err_cuda_nonglobal_constant : Error<"__constant__ variables must be global">;
 
 def warn_non_pod_vararg_with_format_string : Warning<
@@ -7724,6 +7759,8 @@ def err_invalid_neon_type_code : Error<
   "incompatible constant for this __builtin_neon function">; 
 def err_argument_invalid_range : Error<
   "argument should be a value from %0 to %1">;
+def err_argument_not_multiple : Error<
+  "argument should be a multiple of %0">;
 def warn_neon_vector_initializer_non_portable : Warning<
   "vector initializers are not compatible with NEON intrinsics in big endian "
   "mode">, InGroup<DiagGroup<"nonportable-vector-initialization">>;

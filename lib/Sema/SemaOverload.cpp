@@ -60,6 +60,8 @@ CreateFunctionRefExpr(Sema &S, FunctionDecl *Fn, NamedDecl *FoundDecl,
   // being used.
   if (FoundDecl != Fn && S.DiagnoseUseOfDecl(Fn, Loc))
     return ExprError();
+  if (auto *FPT = Fn->getType()->getAs<FunctionProtoType>())
+    S.ResolveExceptionSpec(Loc, FPT);
   DeclRefExpr *DRE = new (S.Context) DeclRefExpr(Fn, false, Fn->getType(),
                                                  VK_LValue, Loc, LocInfo);
   if (HadMultipleCandidates)
@@ -150,7 +152,7 @@ static const char* GetImplicitConversionName(ImplicitConversionKind Kind) {
     "Lvalue-to-rvalue",
     "Array-to-pointer",
     "Function-to-pointer",
-    "Noreturn adjustment",
+    "Function pointer conversion",
     "Qualification",
     "Integral promotion",
     "Floating point promotion",
@@ -1390,17 +1392,20 @@ Sema::PerformImplicitConversion(Expr *From, QualType ToType,
 }
 
 /// \brief Determine whether the conversion from FromType to ToType is a valid
-/// conversion that strips "noreturn" off the nested function type.
-bool Sema::IsNoReturnConversion(QualType FromType, QualType ToType,
+/// conversion that strips "noexcept" or "noreturn" off the nested function
+/// type.
+bool Sema::IsFunctionConversion(QualType FromType, QualType ToType,
                                 QualType &ResultTy) {
   if (Context.hasSameUnqualifiedType(FromType, ToType))
     return false;
 
   // Permit the conversion F(t __attribute__((noreturn))) -> F(t)
+  //                    or F(t noexcept) -> F(t)
   // where F adds one of the following at most once:
   //   - a pointer
   //   - a member pointer
   //   - a block pointer
+  // Changes here need matching changes in FindCompositePointerType.
   CanQualType CanTo = Context.getCanonicalType(ToType);
   CanQualType CanFrom = Context.getCanonicalType(FromType);
   Type::TypeClass TyClass = CanTo->getTypeClass();
@@ -1413,8 +1418,13 @@ bool Sema::IsNoReturnConversion(QualType FromType, QualType ToType,
       CanTo = CanTo.getAs<BlockPointerType>()->getPointeeType();
       CanFrom = CanFrom.getAs<BlockPointerType>()->getPointeeType();
     } else if (TyClass == Type::MemberPointer) {
-      CanTo = CanTo.getAs<MemberPointerType>()->getPointeeType();
-      CanFrom = CanFrom.getAs<MemberPointerType>()->getPointeeType();
+      auto ToMPT = CanTo.getAs<MemberPointerType>();
+      auto FromMPT = CanFrom.getAs<MemberPointerType>();
+      // A function pointer conversion cannot change the class of the function.
+      if (ToMPT->getClass() != FromMPT->getClass())
+        return false;
+      CanTo = ToMPT->getPointeeType();
+      CanFrom = FromMPT->getPointeeType();
     } else {
       return false;
     }
@@ -1425,11 +1435,37 @@ bool Sema::IsNoReturnConversion(QualType FromType, QualType ToType,
       return false;
   }
 
-  const FunctionType *FromFn = cast<FunctionType>(CanFrom);
-  FunctionType::ExtInfo EInfo = FromFn->getExtInfo();
-  if (!EInfo.getNoReturn()) return false;
+  const auto *FromFn = cast<FunctionType>(CanFrom);
+  FunctionType::ExtInfo FromEInfo = FromFn->getExtInfo();
 
-  FromFn = Context.adjustFunctionType(FromFn, EInfo.withNoReturn(false));
+  const auto *ToFn = cast<FunctionType>(CanTo);
+  FunctionType::ExtInfo ToEInfo = ToFn->getExtInfo();
+
+  bool Changed = false;
+
+  // Drop 'noreturn' if not present in target type.
+  if (FromEInfo.getNoReturn() && !ToEInfo.getNoReturn()) {
+    FromFn = Context.adjustFunctionType(FromFn, FromEInfo.withNoReturn(false));
+    Changed = true;
+  }
+
+  // Drop 'noexcept' if not present in target type.
+  if (const auto *FromFPT = dyn_cast<FunctionProtoType>(FromFn)) {
+    const auto *ToFPT = cast<FunctionProtoType>(ToFn);
+    if (FromFPT->isNothrow(Context) && !ToFPT->isNothrow(Context)) {
+      FromFn = cast<FunctionType>(
+          Context.getFunctionType(FromFPT->getReturnType(),
+                                  FromFPT->getParamTypes(),
+                                  FromFPT->getExtProtoInfo().withExceptionSpec(
+                                      FunctionProtoType::ExceptionSpecInfo()))
+                 .getTypePtr());
+      Changed = true;
+    }
+  }
+
+  if (!Changed)
+    return false;
+
   assert(QualType(FromFn, 0).isCanonical());
   if (QualType(FromFn, 0) != CanTo) return false;
 
@@ -1534,7 +1570,7 @@ static bool IsStandardConversion(Sema &S, Expr* From, QualType ToType,
                       S.ExtractUnqualifiedFunctionType(ToType), FromType)) {
         QualType resultTy;
         // if the function type matches except for [[noreturn]], it's ok
-        if (!S.IsNoReturnConversion(FromType,
+        if (!S.IsFunctionConversion(FromType,
               S.ExtractUnqualifiedFunctionType(ToType), resultTy))
           // otherwise, only a boolean conversion is standard   
           if (!ToType->isBooleanType()) 
@@ -1727,9 +1763,6 @@ static bool IsStandardConversion(Sema &S, Expr* From, QualType ToType,
     // Compatible conversions (Clang extension for C function overloading)
     SCS.Second = ICK_Compatible_Conversion;
     FromType = ToType.getUnqualifiedType();
-  } else if (S.IsNoReturnConversion(FromType, ToType, FromType)) {
-    // Treat a conversion that strips "noreturn" as an identity conversion.
-    SCS.Second = ICK_NoReturn_Adjustment;
   } else if (IsTransparentUnionStandardConversion(S, From, ToType,
                                              InOverloadResolution,
                                              SCS, CStyle)) {
@@ -1751,34 +1784,36 @@ static bool IsStandardConversion(Sema &S, Expr* From, QualType ToType,
   }
   SCS.setToType(1, FromType);
 
-  QualType CanonFrom;
-  QualType CanonTo;
-  // The third conversion can be a qualification conversion (C++ 4p1).
+  // The third conversion can be a function pointer conversion or a
+  // qualification conversion (C++ [conv.fctptr], [conv.qual]).
   bool ObjCLifetimeConversion;
-  if (S.IsQualificationConversion(FromType, ToType, CStyle, 
-                                  ObjCLifetimeConversion)) {
+  if (S.IsFunctionConversion(FromType, ToType, FromType)) {
+    // Function pointer conversions (removing 'noexcept') including removal of
+    // 'noreturn' (Clang extension).
+    SCS.Third = ICK_Function_Conversion;
+  } else if (S.IsQualificationConversion(FromType, ToType, CStyle,
+                                         ObjCLifetimeConversion)) {
     SCS.Third = ICK_Qualification;
     SCS.QualificationIncludesObjCLifetime = ObjCLifetimeConversion;
     FromType = ToType;
-    CanonFrom = S.Context.getCanonicalType(FromType);
-    CanonTo = S.Context.getCanonicalType(ToType);
   } else {
     // No conversion required
     SCS.Third = ICK_Identity;
-
-    // C++ [over.best.ics]p6:
-    //   [...] Any difference in top-level cv-qualification is
-    //   subsumed by the initialization itself and does not constitute
-    //   a conversion. [...]
-    CanonFrom = S.Context.getCanonicalType(FromType);
-    CanonTo = S.Context.getCanonicalType(ToType);
-    if (CanonFrom.getLocalUnqualifiedType()
-                                       == CanonTo.getLocalUnqualifiedType() &&
-        CanonFrom.getLocalQualifiers() != CanonTo.getLocalQualifiers()) {
-      FromType = ToType;
-      CanonFrom = CanonTo;
-    }
   }
+
+  // C++ [over.best.ics]p6:
+  //   [...] Any difference in top-level cv-qualification is
+  //   subsumed by the initialization itself and does not constitute
+  //   a conversion. [...]
+  QualType CanonFrom = S.Context.getCanonicalType(FromType);
+  QualType CanonTo = S.Context.getCanonicalType(ToType);
+  if (CanonFrom.getLocalUnqualifiedType()
+                                     == CanonTo.getLocalUnqualifiedType() &&
+      CanonFrom.getLocalQualifiers() != CanonTo.getLocalQualifiers()) {
+    FromType = ToType;
+    CanonFrom = CanonTo;
+  }
+
   SCS.setToType(2, FromType);
 
   if (CanonFrom == CanonTo)
@@ -2615,7 +2650,8 @@ enum {
   ft_parameter_arity,
   ft_parameter_mismatch,
   ft_return_type,
-  ft_qualifer_mismatch
+  ft_qualifer_mismatch,
+  ft_noexcept
 };
 
 /// Attempts to get the FunctionProtoType from a Type. Handles
@@ -2712,6 +2748,16 @@ void Sema::HandleFunctionTypeMismatch(PartialDiagnostic &PDiag,
            ToQuals = ToFunction->getTypeQuals();
   if (FromQuals != ToQuals) {
     PDiag << ft_qualifer_mismatch << ToQuals << FromQuals;
+    return;
+  }
+
+  // Handle exception specification differences on canonical type (in C++17
+  // onwards).
+  if (cast<FunctionProtoType>(FromFunction->getCanonicalTypeUnqualified())
+          ->isNothrow(Context) !=
+      cast<FunctionProtoType>(ToFunction->getCanonicalTypeUnqualified())
+          ->isNothrow(Context)) {
+    PDiag << ft_noexcept;
     return;
   }
 
@@ -5096,7 +5142,7 @@ static bool CheckConvertedConstantConversions(Sema &S,
   // conversions are fine.
   switch (SCS.Second) {
   case ICK_Identity:
-  case ICK_NoReturn_Adjustment:
+  case ICK_Function_Conversion:
   case ICK_Integral_Promotion:
   case ICK_Integral_Conversion: // Narrowing conversions are checked elsewhere.
     return true;
@@ -10142,16 +10188,17 @@ static void CompleteNonViableCandidate(Sema &S, OverloadCandidate *Cand,
 /// PrintOverloadCandidates - When overload resolution fails, prints
 /// diagnostic messages containing the candidates in the candidate
 /// set.
-void OverloadCandidateSet::NoteCandidates(Sema &S,
-                                          OverloadCandidateDisplayKind OCD,
-                                          ArrayRef<Expr *> Args,
-                                          StringRef Opc,
-                                          SourceLocation OpLoc) {
+void OverloadCandidateSet::NoteCandidates(
+    Sema &S, OverloadCandidateDisplayKind OCD, ArrayRef<Expr *> Args,
+    StringRef Opc, SourceLocation OpLoc,
+    llvm::function_ref<bool(OverloadCandidate &)> Filter) {
   // Sort the candidates by viability and position.  Sorting directly would
   // be prohibitive, so we make a set of pointers and sort those.
   SmallVector<OverloadCandidate*, 32> Cands;
   if (OCD == OCD_AllCandidates) Cands.reserve(size());
   for (iterator Cand = begin(), LastCand = end(); Cand != LastCand; ++Cand) {
+    if (!Filter(*Cand))
+      continue;
     if (Cand->Viable)
       Cands.push_back(Cand);
     else if (OCD == OCD_AllCandidates) {
@@ -10427,7 +10474,7 @@ private:
   bool candidateHasExactlyCorrectType(const FunctionDecl *FD) {
     QualType Discard;
     return Context.hasSameUnqualifiedType(TargetFunctionType, FD->getType()) ||
-           S.IsNoReturnConversion(FD->getType(), TargetFunctionType, Discard);
+           S.IsFunctionConversion(FD->getType(), TargetFunctionType, Discard);
   }
 
   /// \return true if A is considered a better overload candidate for the
@@ -13124,6 +13171,13 @@ Expr *Sema::FixOverloadedFunctionReference(Expr *E, DeclAccessPair Found,
                                        VK_RValue, OK_Ordinary,
                                        UnOp->getOperatorLoc());
   }
+
+  // C++ [except.spec]p17:
+  //   An exception-specification is considered to be needed when:
+  //   - in an expression the function is the unique lookup result or the
+  //     selected member of a set of overloaded functions
+  if (auto *FPT = Fn->getType()->getAs<FunctionProtoType>())
+    ResolveExceptionSpec(E->getExprLoc(), FPT);
 
   if (UnresolvedLookupExpr *ULE = dyn_cast<UnresolvedLookupExpr>(E)) {
     // FIXME: avoid copy.

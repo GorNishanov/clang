@@ -444,7 +444,7 @@ public:
     LifetimeExtendedCleanupStack.resize(
         LifetimeExtendedCleanupStack.size() + sizeof(Header) + Header.Size);
 
-    static_assert(sizeof(Header) % llvm::AlignOf<T>::Alignment == 0,
+    static_assert(sizeof(Header) % alignof(T) == 0,
                   "Cleanup will be allocated on misaligned address");
     char *Buffer = &LifetimeExtendedCleanupStack[OldSize];
     new (Buffer) LifetimeExtendedCleanupHeader(Header);
@@ -2036,7 +2036,8 @@ public:
   void EmitCXXDeleteExpr(const CXXDeleteExpr *E);
 
   void EmitDeleteCall(const FunctionDecl *DeleteFD, llvm::Value *Ptr,
-                      QualType DeleteTy);
+                      QualType DeleteTy, llvm::Value *NumElements = nullptr,
+                      CharUnits CookieSize = CharUnits());
 
   RValue EmitBuiltinNewDeleteCall(const FunctionProtoType *Type,
                                   const Expr *Arg, bool IsDelete);
@@ -2121,7 +2122,6 @@ public:
 
   void EmitScalarInit(const Expr *init, const ValueDecl *D, LValue lvalue,
                       bool capturedByInit);
-  void EmitScalarInit(llvm::Value *init, LValue lvalue);
 
   typedef void SpecialInitFn(CodeGenFunction &Init, const VarDecl &D,
                              llvm::Value *Address);
@@ -2968,6 +2968,12 @@ public:
   llvm::Value *EmitNVPTXBuiltinExpr(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitWebAssemblyBuiltinExpr(unsigned BuiltinID,
                                           const CallExpr *E);
+
+private:
+  enum class MSVCIntrin;
+
+public:
+  llvm::Value *EmitMSVCBuiltinExpr(MSVCIntrin BuiltinID, const CallExpr *E);
 
   llvm::Value *EmitObjCProtocolExpr(const ObjCProtocolExpr *E);
   llvm::Value *EmitObjCStringLiteral(const ObjCStringLiteral *E);
