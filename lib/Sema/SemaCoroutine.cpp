@@ -745,11 +745,13 @@ public:
 
     FunctionDecl *OperatorNew = nullptr;
     FunctionDecl *OperatorDelete = nullptr;
+    bool PassAlignment = false;
 
     S.FindAllocationFunctions(Loc, SourceRange(),
                               /*UseGlobal*/ false, PromiseType,
-                              /*isArray*/ false, /*PlacementArgs*/ None,
-                              OperatorNew, OperatorDelete);
+                              /*isArray*/ false, PassAlignment,
+                              /*PlacementArgs*/ None, OperatorNew,
+                              OperatorDelete);
 
     assert(OperatorNew && "we need to find at least global operator new");
     assert(OperatorDelete && "we need to find at least global operator new");

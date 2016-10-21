@@ -57,7 +57,7 @@ CoroutineBodyStmt *CoroutineBodyStmt::Create(
   std::size_t Size = sizeof(CoroutineBodyStmt) + sizeof(SubStmt);
   Size += (ParamMoves.size() * sizeof(Stmt *));
 
-  void *Mem = C.Allocate(Size, llvm::alignOf<CoroutineBodyStmt>());
+  void *Mem = C.Allocate(Size, alignof(CoroutineBodyStmt));
   return new (Mem) CoroutineBodyStmt(
       Body, Promise, InitialSuspend, FinalSuspend, OnException, OnFallthrough,
       Allocate, Deallocate, ResultDecl, ReturnStmt, ParamMoves);
