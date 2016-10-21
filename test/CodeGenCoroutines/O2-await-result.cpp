@@ -40,12 +40,11 @@ extern "C" coro_t f(int n) {
 
 extern "C" coro_t g() { B val = co_await B{}; }
 
-// CHECK-LABEL: @main
+// CHECK-LABEL: @main(
 int main() {
   f(0);
   f(1);
-// CHECK:      entry:
-// CHECK-NEXT:    call void @print(i32 0)
-// CHECK-NEXT:    call void @print(i32 42)
-// CHECK-NEXT:    ret i32 0
+// CHECK:    call void @print(i32 0)
+// CHECK:    call void @print(i32 42)
+// CHECK:    ret i32 0
 }
