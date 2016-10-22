@@ -814,17 +814,11 @@ public:
       return false;
 
     RetType = ReturnObject.get()->getType();
-#if 0
-    if (RetType == FD.getReturnType()) {
-      // GRO is same type as return type of the function
-      // don't need to create GRO temporary.
-      // Maybe there is a way to make it work efficiently, with NRVO, but I
-      // was not able to make it work.
+    if (RetType->isVoidType()) {
       this->RetDecl = nullptr;
-      this->ResultDecl = nullptr;
+      this->ResultDecl = ReturnObject.get();
       return true;
     }
-#endif
 
     if (!RetType->isDependentType()) {
       InitializedEntity Entity =
@@ -865,6 +859,9 @@ public:
   }
 
   bool makeReturnStmt() {
+    if (!RetDecl)
+      return true;
+
     ExprResult declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
     if (declRef.isInvalid())
       return false;
