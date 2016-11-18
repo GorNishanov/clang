@@ -2667,6 +2667,7 @@ StringRef FunctionType::getNameForCallConv(CallingConv CC) {
   case CC_X86VectorCall: return "vectorcall";
   case CC_X86_64Win64: return "ms_abi";
   case CC_X86_64SysV: return "sysv_abi";
+  case CC_X86RegCall : return "regcall";
   case CC_AAPCS: return "aapcs";
   case CC_AAPCS_VFP: return "aapcs-vfp";
   case CC_IntelOclBicc: return "intel_ocl_bicc";
@@ -2787,6 +2788,15 @@ bool FunctionProtoType::hasDependentExceptionSpec() const {
     // because we don't know whether the pattern is in the exception spec
     // or not (that depends on whether the pack has 0 expansions).
     if (ET->isDependentType() || ET->getAs<PackExpansionType>())
+      return true;
+  return false;
+}
+
+bool FunctionProtoType::hasInstantiationDependentExceptionSpec() const {
+  if (Expr *NE = getNoexceptExpr())
+    return NE->isInstantiationDependent();
+  for (QualType ET : exceptions())
+    if (ET->isInstantiationDependentType())
       return true;
   return false;
 }
@@ -3034,6 +3044,7 @@ bool AttributedType::isQualifier() const {
   case AttributedType::attr_fastcall:
   case AttributedType::attr_stdcall:
   case AttributedType::attr_thiscall:
+  case AttributedType::attr_regcall:
   case AttributedType::attr_pascal:
   case AttributedType::attr_swiftcall:
   case AttributedType::attr_vectorcall:
@@ -3091,6 +3102,7 @@ bool AttributedType::isCallingConv() const {
   case attr_fastcall:
   case attr_stdcall:
   case attr_thiscall:
+  case attr_regcall:
   case attr_swiftcall:
   case attr_vectorcall:
   case attr_pascal:

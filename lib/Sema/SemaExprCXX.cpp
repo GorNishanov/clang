@@ -1150,7 +1150,7 @@ bool Sema::CheckCXXThisCapture(SourceLocation Loc, const bool Explicit,
 
   // In the loop below, respect the ByCopy flag only for the closure requesting
   // the capture (i.e. first iteration through the loop below).  Ignore it for
-  // all enclosing closure's upto NumCapturingClosures (since they must be
+  // all enclosing closure's up to NumCapturingClosures (since they must be
   // implicitly capturing the *enclosing  object* by reference (see loop
   // above)).
   assert((!ByCopy ||
@@ -1220,6 +1220,17 @@ Sema::ActOnCXXTypeConstructExpr(ParsedType TypeRep,
   QualType Ty = GetTypeFromParser(TypeRep, &TInfo);
   if (!TInfo)
     TInfo = Context.getTrivialTypeSourceInfo(Ty, SourceLocation());
+
+  // Handle errors like: int({0})
+  if (exprs.size() == 1 && !canInitializeWithParenthesizedList(Ty) &&
+      LParenLoc.isValid() && RParenLoc.isValid())
+    if (auto IList = dyn_cast<InitListExpr>(exprs[0])) {
+      Diag(TInfo->getTypeLoc().getLocStart(), diag::err_list_init_in_parens)
+          << Ty << IList->getSourceRange()
+          << FixItHint::CreateRemoval(LParenLoc)
+          << FixItHint::CreateRemoval(RParenLoc);
+      LParenLoc = RParenLoc = SourceLocation();
+    }
 
   auto Result = BuildCXXTypeConstructExpr(TInfo, LParenLoc, exprs, RParenLoc);
   // Avoid creating a non-type-dependent expression that contains typos.
@@ -1562,8 +1573,20 @@ Sema::ActOnCXXNew(SourceLocation StartLoc, bool UseGlobal,
     return ExprError();
 
   SourceRange DirectInitRange;
-  if (ParenListExpr *List = dyn_cast_or_null<ParenListExpr>(Initializer))
+  if (ParenListExpr *List = dyn_cast_or_null<ParenListExpr>(Initializer)) {
     DirectInitRange = List->getSourceRange();
+    // Handle errors like: new int a({0})
+    if (List->getNumExprs() == 1 &&
+        !canInitializeWithParenthesizedList(AllocType))
+      if (auto IList = dyn_cast<InitListExpr>(List->getExpr(0))) {
+        Diag(TInfo->getTypeLoc().getLocStart(), diag::err_list_init_in_parens)
+            << AllocType << List->getSourceRange()
+            << FixItHint::CreateRemoval(List->getLocStart())
+            << FixItHint::CreateRemoval(List->getLocEnd());
+        DirectInitRange = SourceRange();
+        Initializer = IList;
+      }
+  }
 
   return BuildCXXNew(SourceRange(StartLoc, D.getLocEnd()), UseGlobal,
                      PlacementLParen,
@@ -2600,28 +2623,39 @@ void Sema::DeclareGlobalAllocationFunction(DeclarationName Name,
         getLangOpts().CPlusPlus11 ? EST_BasicNoexcept : EST_DynamicNone;
   }
 
-  QualType FnType = Context.getFunctionType(Return, Params, EPI);
-  FunctionDecl *Alloc =
-    FunctionDecl::Create(Context, GlobalCtx, SourceLocation(),
-                         SourceLocation(), Name,
-                         FnType, /*TInfo=*/nullptr, SC_None, false, true);
-  Alloc->setImplicit();
+  auto CreateAllocationFunctionDecl = [&](Attr *ExtraAttr) {
+    QualType FnType = Context.getFunctionType(Return, Params, EPI);
+    FunctionDecl *Alloc = FunctionDecl::Create(
+        Context, GlobalCtx, SourceLocation(), SourceLocation(), Name,
+        FnType, /*TInfo=*/nullptr, SC_None, false, true);
+    Alloc->setImplicit();
 
-  // Implicit sized deallocation functions always have default visibility.
-  Alloc->addAttr(VisibilityAttr::CreateImplicit(Context,
-                                                VisibilityAttr::Default));
+    // Implicit sized deallocation functions always have default visibility.
+    Alloc->addAttr(
+        VisibilityAttr::CreateImplicit(Context, VisibilityAttr::Default));
 
-  llvm::SmallVector<ParmVarDecl*, 3> ParamDecls;
-  for (QualType T : Params) {
-    ParamDecls.push_back(
-        ParmVarDecl::Create(Context, Alloc, SourceLocation(), SourceLocation(),
-                            nullptr, T, /*TInfo=*/nullptr, SC_None, nullptr));
-    ParamDecls.back()->setImplicit();
+    llvm::SmallVector<ParmVarDecl *, 3> ParamDecls;
+    for (QualType T : Params) {
+      ParamDecls.push_back(ParmVarDecl::Create(
+          Context, Alloc, SourceLocation(), SourceLocation(), nullptr, T,
+          /*TInfo=*/nullptr, SC_None, nullptr));
+      ParamDecls.back()->setImplicit();
+    }
+    Alloc->setParams(ParamDecls);
+    if (ExtraAttr)
+      Alloc->addAttr(ExtraAttr);
+    Context.getTranslationUnitDecl()->addDecl(Alloc);
+    IdResolver.tryAddTopLevelDecl(Alloc, Name);
+  };
+
+  if (!LangOpts.CUDA)
+    CreateAllocationFunctionDecl(nullptr);
+  else {
+    // Host and device get their own declaration so each can be
+    // defined or re-declared independently.
+    CreateAllocationFunctionDecl(CUDAHostAttr::CreateImplicit(Context));
+    CreateAllocationFunctionDecl(CUDADeviceAttr::CreateImplicit(Context));
   }
-  Alloc->setParams(ParamDecls);
-
-  Context.getTranslationUnitDecl()->addDecl(Alloc);
-  IdResolver.tryAddTopLevelDecl(Alloc, Name);
 }
 
 FunctionDecl *Sema::FindUsualDeallocationFunction(SourceLocation StartLoc,
@@ -5366,23 +5400,29 @@ QualType Sema::CXXCheckConditionalOperands(ExprResult &Cond, ExprResult &LHS,
   //   if both are glvalues of the same value category and the same type except
   //   for cv-qualification, an attempt is made to convert each of those
   //   operands to the type of the other.
+  // FIXME:
+  //   Resolving a defect in P0012R1: we extend this to cover all cases where
+  //   one of the operands is reference-compatible with the other, in order
+  //   to support conditionals between functions differing in noexcept.
   ExprValueKind LVK = LHS.get()->getValueKind();
   ExprValueKind RVK = RHS.get()->getValueKind();
   if (!Context.hasSameType(LTy, RTy) &&
-      Context.hasSameUnqualifiedType(LTy, RTy) &&
       LVK == RVK && LVK != VK_RValue) {
-    // Since the unqualified types are reference-related and we require the
-    // result to be as if a reference bound directly, the only conversion
-    // we can perform is to add cv-qualifiers.
-    Qualifiers LCVR = Qualifiers::fromCVRMask(LTy.getCVRQualifiers());
-    Qualifiers RCVR = Qualifiers::fromCVRMask(RTy.getCVRQualifiers());
-    if (RCVR.isStrictSupersetOf(LCVR)) {
-      LHS = ImpCastExprToType(LHS.get(), RTy, CK_NoOp, LVK);
-      LTy = LHS.get()->getType();
-    }
-    else if (LCVR.isStrictSupersetOf(RCVR)) {
+    // DerivedToBase was already handled by the class-specific case above.
+    // FIXME: Should we allow ObjC conversions here?
+    bool DerivedToBase, ObjCConversion, ObjCLifetimeConversion;
+    if (CompareReferenceRelationship(
+            QuestionLoc, LTy, RTy, DerivedToBase,
+            ObjCConversion, ObjCLifetimeConversion) == Ref_Compatible &&
+        !DerivedToBase && !ObjCConversion && !ObjCLifetimeConversion) {
       RHS = ImpCastExprToType(RHS.get(), LTy, CK_NoOp, RVK);
       RTy = RHS.get()->getType();
+    } else if (CompareReferenceRelationship(
+                   QuestionLoc, RTy, LTy, DerivedToBase,
+                   ObjCConversion, ObjCLifetimeConversion) == Ref_Compatible &&
+               !DerivedToBase && !ObjCConversion && !ObjCLifetimeConversion) {
+      LHS = ImpCastExprToType(LHS.get(), RTy, CK_NoOp, LVK);
+      LTy = LHS.get()->getType();
     }
   }
 
@@ -5406,7 +5446,7 @@ QualType Sema::CXXCheckConditionalOperands(ExprResult &Cond, ExprResult &LHS,
     // exception specifications, if any.
     if (LTy->isFunctionPointerType() || LTy->isMemberFunctionPointerType()) {
       Qualifiers Qs = LTy.getQualifiers();
-      LTy = FindCompositePointerType(QuestionLoc, LHS, RHS, nullptr,
+      LTy = FindCompositePointerType(QuestionLoc, LHS, RHS,
                                      /*ConvertArgs*/false);
       LTy = Context.getQualifiedType(LTy, Qs);
 
@@ -5518,19 +5558,9 @@ QualType Sema::CXXCheckConditionalOperands(ExprResult &Cond, ExprResult &LHS,
   //      performed to bring them to a common type, whose cv-qualification
   //      shall match the cv-qualification of either the second or the third
   //      operand. The result is of the common type.
-  bool NonStandardCompositeType = false;
-  QualType Composite = FindCompositePointerType(QuestionLoc, LHS, RHS,
-                                 isSFINAEContext() ? nullptr
-                                                   : &NonStandardCompositeType);
-  if (!Composite.isNull()) {
-    if (NonStandardCompositeType)
-      Diag(QuestionLoc,
-           diag::ext_typecheck_cond_incompatible_operands_nonstandard)
-        << LTy << RTy << Composite
-        << LHS.get()->getSourceRange() << RHS.get()->getSourceRange();
-
+  QualType Composite = FindCompositePointerType(QuestionLoc, LHS, RHS);
+  if (!Composite.isNull())
     return Composite;
-  }
 
   // Similarly, attempt to find composite type of two objective-c pointers.
   Composite = FindCompositeObjCPointerType(LHS, RHS, QuestionLoc);
@@ -5629,19 +5659,10 @@ mergeExceptionSpecs(Sema &S, FunctionProtoType::ExceptionSpecInfo ESI1,
 /// \param Loc The location of the operator requiring these two expressions to
 /// be converted to the composite pointer type.
 ///
-/// If \p NonStandardCompositeType is non-NULL, then we are permitted to find
-/// a non-standard (but still sane) composite type to which both expressions
-/// can be converted. When such a type is chosen, \c *NonStandardCompositeType
-/// will be set true.
-///
 /// \param ConvertArgs If \c false, do not convert E1 and E2 to the target type.
 QualType Sema::FindCompositePointerType(SourceLocation Loc,
                                         Expr *&E1, Expr *&E2,
-                                        bool *NonStandardCompositeType,
                                         bool ConvertArgs) {
-  if (NonStandardCompositeType)
-    *NonStandardCompositeType = false;
-
   assert(getLangOpts().CPlusPlus && "This function assumes C++");
 
   // C++1z [expr]p14:
@@ -5734,8 +5755,7 @@ QualType Sema::FindCompositePointerType(SourceLocation Loc,
 
       // If we're allowed to create a non-standard composite type, keep track
       // of where we need to fill in additional 'const' qualifiers.
-      if (NonStandardCompositeType &&
-          Composite1.getCVRQualifiers() != Composite2.getCVRQualifiers())
+      if (Composite1.getCVRQualifiers() != Composite2.getCVRQualifiers())
         NeedConstBefore = QualifierUnion.size();
 
       QualifierUnion.push_back(
@@ -5752,8 +5772,7 @@ QualType Sema::FindCompositePointerType(SourceLocation Loc,
 
       // If we're allowed to create a non-standard composite type, keep track
       // of where we need to fill in additional 'const' qualifiers.
-      if (NonStandardCompositeType &&
-          Composite1.getCVRQualifiers() != Composite2.getCVRQualifiers())
+      if (Composite1.getCVRQualifiers() != Composite2.getCVRQualifiers())
         NeedConstBefore = QualifierUnion.size();
 
       QualifierUnion.push_back(
@@ -5804,16 +5823,13 @@ QualType Sema::FindCompositePointerType(SourceLocation Loc,
     }
   }
 
-  if (NeedConstBefore && NonStandardCompositeType) {
+  if (NeedConstBefore) {
     // Extension: Add 'const' to qualifiers that come before the first qualifier
     // mismatch, so that our (non-standard!) composite type meets the
     // requirements of C++ [conv.qual]p4 bullet 3.
-    for (unsigned I = 0; I != NeedConstBefore; ++I) {
-      if ((QualifierUnion[I] & Qualifiers::Const) == 0) {
+    for (unsigned I = 0; I != NeedConstBefore; ++I)
+      if ((QualifierUnion[I] & Qualifiers::Const) == 0)
         QualifierUnion[I] = QualifierUnion[I] | Qualifiers::Const;
-        *NonStandardCompositeType = true;
-      }
-    }
   }
 
   // Rewrap the composites as pointers or member pointers with the union CVRs.
@@ -6893,8 +6909,14 @@ static void CheckIfAnyEnclosingLambdasMustCaptureAnyPotentialCaptures(
 
   assert(!S.isUnevaluatedContext());
   assert(S.CurContext->isDependentContext());
-  assert(CurrentLSI->CallOperator == S.CurContext &&
+#ifndef NDEBUG
+  DeclContext *DC = S.CurContext;
+  while (DC && isa<CapturedDecl>(DC))
+    DC = DC->getParent();
+  assert(
+      CurrentLSI->CallOperator == DC &&
       "The current call operator must be synchronized with Sema's CurContext");
+#endif // NDEBUG
 
   const bool IsFullExprInstantiationDependent = FE->isInstantiationDependent();
 
@@ -7360,7 +7382,8 @@ ExprResult Sema::ActOnFinishFullExpr(Expr *FE, SourceLocation CC,
   // and then the full-expression +n + ({ 0; }); ends, but it's too late
   // for us to see that we need to capture n after all.
 
-  LambdaScopeInfo *const CurrentLSI = getCurLambda();
+  LambdaScopeInfo *const CurrentLSI =
+      getCurLambda(/*IgnoreCapturedRegions=*/true);
   // FIXME: PR 17877 showed that getCurLambda() can return a valid pointer
   // even if CurContext is not a lambda call operator. Refer to that Bug Report
   // for an example of the code that might cause this asynchrony.
@@ -7375,7 +7398,10 @@ ExprResult Sema::ActOnFinishFullExpr(Expr *FE, SourceLocation CC,
   //     constructor/destructor.
   //  - Teach the handful of places that iterate over FunctionScopes to
   //    stop at the outermost enclosing lexical scope."
-  const bool IsInLambdaDeclContext = isLambdaCallOperator(CurContext);
+  DeclContext *DC = CurContext;
+  while (DC && isa<CapturedDecl>(DC))
+    DC = DC->getParent();
+  const bool IsInLambdaDeclContext = isLambdaCallOperator(DC);
   if (IsInLambdaDeclContext && CurrentLSI &&
       CurrentLSI->hasPotentialCaptures() && !FullExpr.isInvalid())
     CheckIfAnyEnclosingLambdasMustCaptureAnyPotentialCaptures(FE, CurrentLSI,

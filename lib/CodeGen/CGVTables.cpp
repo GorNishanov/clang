@@ -229,8 +229,11 @@ void CodeGenFunction::StartThunk(llvm::Function *Fn, GlobalDecl GD,
     CGM.getCXXABI().addImplicitStructorParams(*this, ResultType, FunctionArgs);
 
   // Start defining the function.
+  auto NL = ApplyDebugLocation::CreateEmpty(*this);
   StartFunction(GlobalDecl(), ResultType, Fn, FnInfo, FunctionArgs,
-                MD->getLocation(), MD->getLocation());
+                MD->getLocation());
+  // Create a scope with an artificial location for the body of this function.
+  auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
   // Since we didn't pass a GlobalDecl to StartFunction, do this ourselves.
   CGM.getCXXABI().EmitInstanceFunctionProlog(*this);
@@ -248,7 +251,7 @@ void CodeGenFunction::FinishThunk() {
   FinishFunction();
 }
 
-void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Value *Callee,
+void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Constant *CalleePtr,
                                                 const ThunkInfo *Thunk) {
   assert(isa<CXXMethodDecl>(CurGD.getDecl()) &&
          "Please use a new CGF for this thunk");
@@ -268,7 +271,7 @@ void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Value *Callee,
       CGM.ErrorUnsupported(
           MD, "non-trivial argument copy for return-adjusting thunk");
     }
-    EmitMustTailThunk(MD, AdjustedThisPtr, Callee);
+    EmitMustTailThunk(MD, AdjustedThisPtr, CalleePtr);
     return;
   }
 
@@ -282,7 +285,7 @@ void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Value *Callee,
 
   // Add the rest of the arguments.
   for (const ParmVarDecl *PD : MD->parameters())
-    EmitDelegateCallArg(CallArgs, PD, PD->getLocStart());
+    EmitDelegateCallArg(CallArgs, PD, SourceLocation());
 
   const FunctionProtoType *FPT = MD->getType()->getAs<FunctionProtoType>();
 
@@ -317,7 +320,8 @@ void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Value *Callee,
 
   // Now emit our call.
   llvm::Instruction *CallOrInvoke;
-  RValue RV = EmitCall(*CurFnInfo, Callee, Slot, CallArgs, MD, &CallOrInvoke);
+  CGCallee Callee = CGCallee::forDirect(CalleePtr, MD);
+  RValue RV = EmitCall(*CurFnInfo, Callee, Slot, CallArgs, &CallOrInvoke);
 
   // Consider return adjustment if we have ThunkInfo.
   if (Thunk && !Thunk->Return.isEmpty())
@@ -337,7 +341,7 @@ void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Value *Callee,
 
 void CodeGenFunction::EmitMustTailThunk(const CXXMethodDecl *MD,
                                         llvm::Value *AdjustedThisPtr,
-                                        llvm::Value *Callee) {
+                                        llvm::Value *CalleePtr) {
   // Emitting a musttail call thunk doesn't use any of the CGCall.cpp machinery
   // to translate AST arguments into LLVM IR arguments.  For thunks, we know
   // that the caller prototype more or less matches the callee prototype with
@@ -366,13 +370,14 @@ void CodeGenFunction::EmitMustTailThunk(const CXXMethodDecl *MD,
 
   // Emit the musttail call manually.  Even if the prologue pushed cleanups, we
   // don't actually want to run them.
-  llvm::CallInst *Call = Builder.CreateCall(Callee, Args);
+  llvm::CallInst *Call = Builder.CreateCall(CalleePtr, Args);
   Call->setTailCallKind(llvm::CallInst::TCK_MustTail);
 
   // Apply the standard set of call attributes.
   unsigned CallingConv;
   CodeGen::AttributeListType AttributeList;
-  CGM.ConstructAttributeList(Callee->getName(), *CurFnInfo, MD, AttributeList,
+  CGM.ConstructAttributeList(CalleePtr->getName(),
+                             *CurFnInfo, MD, AttributeList,
                              CallingConv, /*AttrOnCallSite=*/true);
   llvm::AttributeSet Attrs =
       llvm::AttributeSet::get(getLLVMContext(), AttributeList);
@@ -394,11 +399,13 @@ void CodeGenFunction::generateThunk(llvm::Function *Fn,
                                     const CGFunctionInfo &FnInfo,
                                     GlobalDecl GD, const ThunkInfo &Thunk) {
   StartThunk(Fn, GD, FnInfo);
+  // Create a scope with an artificial location for the body of this function.
+  auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
   // Get our callee.
   llvm::Type *Ty =
     CGM.getTypes().GetFunctionType(CGM.getTypes().arrangeGlobalDeclaration(GD));
-  llvm::Value *Callee = CGM.GetAddrOfFunction(GD, Ty, /*ForVTable=*/true);
+  llvm::Constant *Callee = CGM.GetAddrOfFunction(GD, Ty, /*ForVTable=*/true);
 
   // Make the call and return the result.
   EmitCallAndReturnForThunk(Callee, &Thunk);

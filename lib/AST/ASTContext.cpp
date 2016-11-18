@@ -3153,10 +3153,14 @@ static bool isCanonicalExceptionSpecification(
   // expansions (so we can't tell whether it's non-throwing) and all its
   // contained types are canonical.
   if (ESI.Type == EST_Dynamic) {
-    for (QualType ET : ESI.Exceptions)
-      if (!ET.isCanonical() || !ET->getAs<PackExpansionType>())
+    bool AnyPackExpansions = false;
+    for (QualType ET : ESI.Exceptions) {
+      if (!ET.isCanonical())
         return false;
-    return true;
+      if (ET->getAs<PackExpansionType>())
+        AnyPackExpansions = true;
+    }
+    return AnyPackExpansions;
   }
 
   // A noexcept(expr) specification is (possibly) canonical if expr is
@@ -3226,13 +3230,13 @@ QualType ASTContext::getFunctionTypeInternal(
     for (unsigned i = 0; i != NumArgs; ++i)
       CanonicalArgs.push_back(getCanonicalParamType(ArgArray[i]));
 
+    llvm::SmallVector<QualType, 8> ExceptionTypeStorage;
     FunctionProtoType::ExtProtoInfo CanonicalEPI = EPI;
     CanonicalEPI.HasTrailingReturn = false;
 
     if (IsCanonicalExceptionSpec) {
       // Exception spec is already OK.
     } else if (NoexceptInType) {
-      llvm::SmallVector<QualType, 8> ExceptionTypeStorage;
       switch (EPI.ExceptionSpec.Type) {
       case EST_Unparsed: case EST_Unevaluated: case EST_Uninstantiated:
         // We don't know yet. It shouldn't matter what we pick here; no-one
@@ -4909,7 +4913,15 @@ QualType ASTContext::getArrayDecayedType(QualType Ty) const {
   QualType PtrTy = getPointerType(PrettyArrayType->getElementType());
 
   // int x[restrict 4] ->  int *restrict
-  return getQualifiedType(PtrTy, PrettyArrayType->getIndexTypeQualifiers());
+  QualType Result = getQualifiedType(PtrTy,
+                                     PrettyArrayType->getIndexTypeQualifiers());
+
+  // int x[_Nullable] -> int * _Nullable
+  if (auto Nullability = Ty->getNullability(*this)) {
+    Result = const_cast<ASTContext *>(this)->getAttributedType(
+        AttributedType::getNullabilityAttrKind(*Nullability), Result, Result);
+  }
+  return Result;
 }
 
 QualType ASTContext::getBaseElementType(const ArrayType *array) const {

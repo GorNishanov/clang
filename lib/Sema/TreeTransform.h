@@ -5119,6 +5119,8 @@ bool TreeTransform<Derived>::TransformExceptionSpec(
   }
 
   ESI.Exceptions = Exceptions;
+  if (ESI.Exceptions.empty())
+    ESI.Type = EST_DynamicNone;
   return false;
 }
 
@@ -6652,6 +6654,7 @@ template<typename Derived>
 StmtResult
 TreeTransform<Derived>::TransformCoroutineBodyStmt(CoroutineBodyStmt *S) {
   // The coroutine body should be re-formed by the caller if necessary.
+  // FIXME: The coroutine body is always rebuilt by ActOnFinishFunctionBody
   return getDerived().TransformStmt(S->getBody());
 }
 
@@ -7678,6 +7681,17 @@ StmtResult TreeTransform<Derived>::TransformOMPTeamsDistributeDirective(
   DeclarationNameInfo DirName;
   getDerived().getSema().StartOpenMPDSABlock(OMPD_teams_distribute, DirName,
                                              nullptr, D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformOMPTeamsDistributeSimdDirective(
+    OMPTeamsDistributeSimdDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(
+      OMPD_teams_distribute_simd, DirName, nullptr, D->getLocStart());
   StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
   getDerived().getSema().EndOpenMPDSABlock(Res.get());
   return Res;
@@ -8923,6 +8937,19 @@ TreeTransform<Derived>::TransformDesignatedInitExpr(DesignatedInitExpr *E) {
       Desig.AddDesignator(Designator::getField(D.getFieldName(),
                                                D.getDotLoc(),
                                                D.getFieldLoc()));
+      if (D.getField()) {
+        FieldDecl *Field = cast_or_null<FieldDecl>(
+            getDerived().TransformDecl(D.getFieldLoc(), D.getField()));
+        if (Field != D.getField())
+          // Rebuild the expression when the transformed FieldDecl is
+          // different to the already assigned FieldDecl.
+          ExprChanged = true;
+      } else {
+        // Ensure that the designator expression is rebuilt when there isn't
+        // a resolved FieldDecl in the designator as we don't want to assign
+        // a FieldDecl to a pattern designator that will be instantiated again.
+        ExprChanged = true;
+      }
       continue;
     }
 

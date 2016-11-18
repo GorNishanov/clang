@@ -357,6 +357,9 @@ def warn_decl_shadow :
           "static data member of %2|"
           "field of %2}1">,
   InGroup<Shadow>, DefaultIgnore;
+def warn_decl_shadow_uncaptured_local :
+  Warning<warn_decl_shadow.Text>,
+  InGroup<ShadowUncapturedLocal>, DefaultIgnore;
 def warn_ctor_parm_shadows_field:
   Warning<"constructor parameter %0 shadows the field %1 of %2">,
   InGroup<ShadowFieldInConstructor>, DefaultIgnore;
@@ -481,6 +484,9 @@ def warn_deprecated_copy_operation : Warning<
   "for %0 is deprecated because it has a user-declared "
   "%select{copy %select{assignment operator|constructor}1|destructor}2">,
   InGroup<Deprecated>, DefaultIgnore;
+def warn_cxx1z_compat_exception_spec_in_signature : Warning<
+  "mangled name of %0 will change in C++17 due to non-throwing exception "
+  "specification in function signature">, InGroup<CXX1zCompat>;
 
 def warn_global_constructor : Warning<
   "declaration requires a global constructor">,
@@ -514,7 +520,7 @@ def warn_maybe_falloff_nonvoid_coroutine : Warning<
   InGroup<ReturnType>;
 def warn_falloff_nonvoid_coroutine : Warning<
   "control reaches end of non-void coroutine">,
-  InGroup<ReturnType>;  
+  InGroup<ReturnType>;
 def warn_suggest_noreturn_function : Warning<
   "%select{function|method}0 %1 could be declared with attribute 'noreturn'">,
   InGroup<MissingNoreturn>, DefaultIgnore;
@@ -736,7 +742,9 @@ def err_recursive_superclass : Error<
   "trying to recursively use %0 as superclass of %1">;
 def err_conflicting_aliasing_type : Error<"conflicting types for alias %0">;
 def warn_undef_interface : Warning<"cannot find interface declaration for %0">;
-def warn_duplicate_protocol_def : Warning<"duplicate protocol definition of %0 is ignored">;
+def warn_duplicate_protocol_def : Warning<
+  "duplicate protocol definition of %0 is ignored">,
+  InGroup<DiagGroup<"duplicate-protocol">>;
 def err_protocol_has_circular_dependency : Error<
   "protocol has circular dependency">;
 def err_undeclared_protocol : Error<"cannot find protocol declaration for %0">;
@@ -778,6 +786,9 @@ def note_suppressed_class_declare : Note<
   "class with specified objc_requires_property_definitions attribute is declared here">;
 def err_objc_root_class_subclass : Error<
   "objc_root_class attribute may only be specified on a root class declaration">;
+def err_restricted_superclass_mismatch : Error<
+  "cannot subclass a class that was declared with the "
+  "'objc_subclassing_restricted' attribute">;
 def warn_objc_root_class_missing : Warning<
   "class %0 defined without specifying a base class">,
   InGroup<ObjCRootClass>;
@@ -1300,8 +1311,12 @@ def ext_override_exception_spec : ExtWarn<err_override_exception_spec.Text>,
   InGroup<MicrosoftExceptionSpec>;
 def err_incompatible_exception_specs : Error<
   "target exception specification is not superset of source">;
+def warn_incompatible_exception_specs : Warning<
+  err_incompatible_exception_specs.Text>, InGroup<IncompatibleExceptionSpec>;
 def err_deep_exception_specs_differ : Error<
   "exception specifications of %select{return|argument}0 types differ">;
+def warn_deep_exception_specs_differ : Warning<
+  err_deep_exception_specs_differ.Text>, InGroup<IncompatibleExceptionSpec>;
 def err_missing_exception_specification : Error<
   "%0 is missing exception specification '%1'">;
 def ext_missing_exception_specification : ExtWarn<
@@ -1765,6 +1780,8 @@ def note_uninit_fixit_remove_cond : Note<
   "remove the %select{'%1' if its condition|condition if it}0 "
   "is always %select{false|true}2">;
 def err_init_incomplete_type : Error<"initialization of incomplete type %0">;
+def err_list_init_in_parens : Error<"list-initializer for non-class type %0 "
+  "must not be parenthesized">;
 
 def warn_unsequenced_mod_mod : Warning<
   "multiple unsequenced modifications to %0">, InGroup<Unsequenced>;
@@ -2430,6 +2447,14 @@ def err_no_accessor_for_property : Error<
 def error_cannot_find_suitable_accessor : Error<
   "cannot find suitable %select{getter|setter}0 for property %1">;
 
+def warn_alloca_align_alignof : Warning<
+  "second argument to __builtin_alloca_with_align is supposed to be in bits">,
+  InGroup<DiagGroup<"alloca-with-align-alignof">>;
+
+def err_alignment_too_small : Error<
+  "requested alignment must be %0 or greater">;
+def err_alignment_too_big : Error<
+  "requested alignment must be %0 or smaller">;
 def err_alignment_not_power_of_two : Error<
   "requested alignment is not a power of 2">;
 def err_alignment_dependent_typedef_name : Error<
@@ -2576,6 +2601,7 @@ def warn_attribute_wrong_decl_type : Warning<
   "functions"
   "|unions"
   "|variables and functions"
+  "|functions and global variables"
   "|functions, variables, and Objective-C interfaces"
   "|functions and methods"
   "|parameters"
@@ -2606,7 +2632,7 @@ def warn_attribute_wrong_decl_type : Warning<
   "|functions, variables, classes, and Objective-C interfaces"
   "|Objective-C protocols"
   "|variables with static or thread storage duration"
-  "|functions and global variables"
+  "|functions, methods, properties, and global variables"
   "|structs, unions, and typedefs"
   "|structs and typedefs"
   "|interface or protocol declarations"
@@ -4484,6 +4510,8 @@ def err_extern_c_global_conflict : Error<
   "conflicts with declaration %select{in global scope|with C language linkage}0">;
 def note_extern_c_global_conflict : Note<
   "declared %select{in global scope|with C language linkage}0 here">;
+def note_extern_c_begins_here : Note<
+  "extern \"C\" language linkage specification begins here">;
 def warn_weak_import : Warning <
   "an already-declared variable is made a weak_import declaration %0">;
 def ext_static_non_static : Extension<
@@ -5079,6 +5107,16 @@ def err_arc_inconsistent_property_ownership : Error<
 
 } // end "ARC and @properties" category
 
+def warn_block_capture_autoreleasing : Warning<
+  "block captures an autoreleasing out-parameter, which may result in "
+  "use-after-free bugs">,
+  InGroup<BlockCaptureAutoReleasing>, DefaultIgnore;
+def note_declare_parameter_autoreleasing : Note<
+  "declare the parameter __autoreleasing explicitly to suppress this warning">;
+def note_declare_parameter_strong : Note<
+  "declare the parameter __strong or capture a __block __strong variable to "
+  "keep values alive across autorelease pools">;
+
 def err_arc_atomic_ownership : Error<
   "cannot perform atomic operation on a pointer to type %0: type has "
   "non-trivial ownership">;
@@ -5542,6 +5580,8 @@ def ext_typecheck_ordered_comparison_of_pointer_integer : ExtWarn<
   "ordered comparison between pointer and integer (%0 and %1)">;
 def ext_typecheck_ordered_comparison_of_pointer_and_zero : Extension<
   "ordered comparison between pointer and zero (%0 and %1) is an extension">;
+def err_typecheck_ordered_comparison_of_pointer_and_zero : Error<
+  "ordered comparison between pointer and zero (%0 and %1)">;
 def ext_typecheck_ordered_comparison_of_function_pointers : ExtWarn<
   "ordered comparison of function pointers (%0 and %1)">;
 def ext_typecheck_comparison_of_fptr_to_void : Extension<
@@ -5562,9 +5602,6 @@ def err_cond_voidptr_arc : Error <
   "in ARC mode">;
 def err_typecheck_comparison_of_distinct_pointers : Error<
   "comparison of distinct pointer types%diff{ ($ and $)|}0,1">;
-def ext_typecheck_comparison_of_distinct_pointers_nonstandard : ExtWarn<
-  "comparison of distinct pointer types (%0 and %1) uses non-standard "
-  "composite pointer type %2">, InGroup<CompareDistinctPointerType>;
 def err_typecheck_op_on_nonoverlapping_address_space_pointers : Error<
   "%select{comparison between %diff{ ($ and $)|}0,1"
   "|arithmetic operation with operands of type %diff{ ($ and $)|}0,1"
@@ -5616,11 +5653,13 @@ def err_shift_rhs_only_vector : Error<
   "requested shift is a vector of type %0 but the first operand is not a "
   "vector (%1)">;
 
-def warn_logical_not_on_lhs_of_comparison : Warning<
-  "logical not is only applied to the left hand side of this comparison">,
+def warn_logical_not_on_lhs_of_check : Warning<
+  "logical not is only applied to the left hand side of this "
+  "%select{comparison|bitwise operator}0">,
   InGroup<LogicalNotParentheses>;
 def note_logical_not_fix : Note<
-  "add parentheses after the '!' to evaluate the comparison first">;
+  "add parentheses after the '!' to evaluate the "
+  "%select{comparison|bitwise operator}0 first">;
 def note_logical_not_silence_with_parens : Note<
   "add parentheses around left hand side expression to silence this warning">;
 
@@ -5913,6 +5952,9 @@ def err_bad_cxx_cast_vector_to_vector_different_size : Error<
 def err_bad_lvalue_to_rvalue_cast : Error<
   "cannot cast from lvalue of type %1 to rvalue reference type %2; types are "
   "not compatible">;
+def err_bad_rvalue_to_rvalue_cast : Error<
+  "cannot cast from rvalue of type %1 to rvalue reference type %2; types are "
+  "not compatible">;
 def err_bad_static_cast_pointer_nonpointer : Error<
   "cannot cast from type %1 to pointer type %2">;
 def err_bad_static_cast_member_pointer_nonmp : Error<
@@ -6196,6 +6238,8 @@ let CategoryName = "Lambda Issue" in {
   def note_lambda_to_block_conv : Note<
     "implicit capture of lambda object due to conversion to block pointer "
     "here">;
+  def note_var_explicitly_captured_here : Note<"variable %0 is"
+    "%select{| explicitly}1 captured here">;
 
   // C++14 lambda init-captures.
   def warn_cxx11_compat_init_capture : Warning<
@@ -6843,9 +6887,6 @@ def err_typecheck_expect_scalar_operand : Error<
   "operand of type %0 where arithmetic or pointer type is required">;
 def err_typecheck_cond_incompatible_operands : Error<
   "incompatible operand types%diff{ ($ and $)|}0,1">;
-def ext_typecheck_cond_incompatible_operands_nonstandard : ExtWarn<
-  "incompatible operand types%diff{ ($ and $)|}0,1 use non-standard composite "
-  "pointer type %2">;
 def err_cast_selector_expr : Error<
   "cannot type cast @selector expression">;
 def ext_typecheck_cond_incompatible_pointers : ExtWarn<
@@ -7419,6 +7460,12 @@ def warn_format_non_standard: Warning<
 def warn_format_non_standard_conversion_spec: Warning<
   "using length modifier '%0' with conversion specifier '%1' is not supported by ISO C">,
   InGroup<FormatNonStandard>, DefaultIgnore;
+def warn_format_invalid_annotation : Warning<
+  "using '%0' format specifier annotation outside of os_log()/os_trace()">,
+  InGroup<Format>;
+def warn_format_P_no_precision : Warning<
+  "using '%%P' format specifier without precision">,
+  InGroup<Format>;
 def warn_printf_ignored_flag: Warning<
   "flag '%0' is ignored when flag '%1' is present">,
   InGroup<Format>;
@@ -7554,6 +7601,15 @@ def warn_cfstring_truncated : Warning<
   "input conversion stopped due to an input byte that does not "
   "belong to the input codeset UTF-8">,
   InGroup<DiagGroup<"CFString-literal">>;
+
+// os_log checking
+// TODO: separate diagnostic for os_trace()
+def err_os_log_format_not_string_constant : Error<
+  "os_log() format argument is not a string constant">;
+def err_os_log_argument_too_big : Error<
+  "os_log() argument %0 is too big (%1 bytes, max %2)">;
+def warn_os_log_format_narg : Error<
+ "os_log() '%%n' format specifier is not allowed">, DefaultError;
 
 // Statements.
 def err_continue_not_in_loop : Error<
@@ -8047,8 +8103,6 @@ def err_atomic_init_constant : Error<
   " in the declaration statement in the program scope">;
 def err_opencl_implicit_vector_conversion : Error<
   "implicit conversions between vector types (%0 and %1) are not permitted">;
-def err_opencl_block_proto_variadic : Error<
-  "invalid block prototype, variadic arguments are not allowed in OpenCL">;
 def err_opencl_invalid_type_array : Error<
   "array of %0 type is invalid in OpenCL">;
 def err_opencl_ternary_with_block : Error<
@@ -8060,6 +8114,8 @@ def err_opencl_type_can_only_be_used_as_function_parameter : Error <
 def warn_opencl_attr_deprecated_ignored : Warning <
   "%0 attribute is deprecated and ignored in OpenCL version %1">,
   InGroup<IgnoredAttributes>;
+def err_opencl_variadic_function : Error<
+  "invalid prototype, variadic arguments are not allowed in OpenCL">;
 
 // OpenCL v2.0 s6.13.6 -- Builtin Pipe Functions
 def err_opencl_builtin_pipe_first_arg : Error<
@@ -8107,7 +8163,7 @@ def err_opencl_enqueue_kernel_expected_type : Error<
 def err_opencl_enqueue_kernel_local_size_args : Error<
   "mismatch in number of block parameters and local size arguments passed">;
 def err_opencl_enqueue_kernel_invalid_local_size_type : Error<
-  "local memory sizes need to be specified as uint">;
+  "illegal call to enqueue_kernel, parameter needs to be specified as integer type">;
 def err_opencl_enqueue_kernel_blocks_non_local_void_args : Error<
   "blocks used in device side enqueue are expected to have parameters of type 'local void*'">;
 def err_opencl_enqueue_kernel_blocks_no_args : Error<
@@ -8564,8 +8620,6 @@ def ext_module_import_in_extern_c : ExtWarn<
   "import of C++ module '%0' appears within extern \"C\" language linkage "
   "specification">, DefaultError,
   InGroup<DiagGroup<"module-import-in-extern-c">>;
-def note_module_import_in_extern_c : Note<
-  "extern \"C\" language linkage specification begins here">;
 def err_module_import_not_at_top_level_fatal : Error<
   "import of module '%0' appears within %1">, DefaultFatal;
 def ext_module_import_not_at_top_level_noop : ExtWarn<
@@ -8598,14 +8652,11 @@ def err_coroutine_unevaluated_context : Error<
   "'%0' cannot be used in an unevaluated context">;
 def err_coroutine_outside_function : Error<
   "'%0' cannot be used outside a function">;
-def err_coroutine_ctor_dtor : Error<
-  "'%1' cannot be used in a %select{constructor|destructor}0">;
-def err_coroutine_constexpr : Error<
-  "'%0' cannot be used in a constexpr function">;
-def err_coroutine_main : Error<
-  "'main' cannot be a coroutine">;
-def err_coroutine_varargs : Error<
-  "'%0' cannot be used in a varargs function">;
+def err_coroutine_invalid_func_context : Error<
+  "'%1' cannot be used in %select{a constructor|a destructor"
+  "|a copy assignment operator|a move assignment operator|the 'main' function"
+  "|a constexpr function|a function with a deduced return type"
+  "|a varargs function}0">;
 def err_malformed_std_coroutine_handle : Error<
   "std::coroutine_handle must be a class template with a single type parameter">;
 def err_implied_std_coroutine_handle_not_found : Error<
@@ -8684,6 +8735,15 @@ def warn_nullability_missing : Warning<
   "%select{pointer|block pointer|member pointer}0 is missing a nullability "
   "type specifier (_Nonnull, _Nullable, or _Null_unspecified)">,
   InGroup<NullabilityCompleteness>;
+def warn_nullability_missing_array : Warning<
+  "array parameter is missing a nullability type specifier (_Nonnull, "
+  "_Nullable, or _Null_unspecified)">,
+  InGroup<NullabilityCompletenessOnArrays>;
+
+def warn_nullability_inferred_on_nested_type : Warning<
+  "inferring '_Nonnull' for pointer type within %select{array|reference}0 is "
+  "deprecated">,
+  InGroup<NullabilityInferredOnNestedType>;
 
 def err_objc_type_arg_explicit_nullability : Error<
   "type argument %0 cannot explicitly specify nullability">;

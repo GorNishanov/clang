@@ -2729,6 +2729,13 @@ CheckOriginalCallArgDeduction(Sema &S, Sema::OriginalCallArg OriginalArg,
     // We don't want to keep the reference around any more.
     OriginalParamType = OriginalParamRef->getPointeeType();
 
+    // FIXME: Resolve core issue (no number yet): if the original P is a
+    // reference type and the transformed A is function type "noexcept F",
+    // the deduced A can be F.
+    QualType Tmp;
+    if (A->isFunctionType() && S.IsFunctionConversion(A, DeducedA, Tmp))
+      return false;
+
     Qualifiers AQuals = A.getQualifiers();
     Qualifiers DeducedAQuals = DeducedA.getQualifiers();
 
@@ -2760,8 +2767,8 @@ CheckOriginalCallArgDeduction(Sema &S, Sema::OriginalCallArg OriginalArg,
   //      type that can be converted to the deduced A via a function pointer
   //      conversion and/or a qualification conversion.
   //
-  // Also allow conversions which merely strip [[noreturn]] from function types
-  // (recursively) as an extension.
+  // Also allow conversions which merely strip __attribute__((noreturn)) from
+  // function types (recursively).
   bool ObjCLifetimeConversion = false;
   QualType ResultTy;
   if ((A->isAnyPointerType() || A->isMemberPointerType()) &&
@@ -2769,7 +2776,6 @@ CheckOriginalCallArgDeduction(Sema &S, Sema::OriginalCallArg OriginalArg,
                                    ObjCLifetimeConversion) ||
        S.IsFunctionConversion(A, DeducedA, ResultTy)))
     return false;
-
 
   //    - If P is a class and P has the form simple-template-id, then the
   //      transformed A can be a derived class of the deduced A. [...]
@@ -3679,6 +3685,15 @@ Sema::DeduceTemplateArguments(FunctionTemplateDecl *FunctionTemplate,
   if (HasDeducedReturnType &&
       Specialization->getReturnType()->isUndeducedType() &&
       DeduceReturnType(Specialization, Info.getLocation(), false))
+    return TDK_MiscellaneousDeductionFailure;
+
+  // If the function has a dependent exception specification, resolve it now,
+  // so we can check that the exception specification matches.
+  auto *SpecializationFPT =
+      Specialization->getType()->castAs<FunctionProtoType>();
+  if (getLangOpts().CPlusPlus1z &&
+      isUnresolvedExceptionSpec(SpecializationFPT->getExceptionSpecType()) &&
+      !ResolveExceptionSpec(Info.getLocation(), SpecializationFPT))
     return TDK_MiscellaneousDeductionFailure;
 
   // If the requested function type does not match the actual type of the

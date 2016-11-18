@@ -75,9 +75,10 @@ struct CGCoroData {
 clang::CodeGen::CodeGenFunction::CGCoroInfo::CGCoroInfo() {}
 CodeGenFunction::CGCoroInfo::~CGCoroInfo() {}
 
-static bool createCoroData(CodeGenFunction &CGF,
+static void createCoroData(CodeGenFunction &CGF,
                            CodeGenFunction::CGCoroInfo &CurCoro,
-                           llvm::CallInst *CoroId, CallExpr const *CoroIdExpr) {
+                           llvm::CallInst *CoroId,
+                           CallExpr const *CoroIdExpr = nullptr) {
   if (CurCoro.Data) {
     if (CurCoro.Data->CoroIdExpr)
       CGF.CGM.Error(CoroIdExpr->getLocStart(),
@@ -88,13 +89,13 @@ static bool createCoroData(CodeGenFunction &CGF,
     else
       llvm_unreachable("EmitCoroutineBodyStatement called twice?");
 
-    return false;
+    return;
   }
 
   CurCoro.Data = std::unique_ptr<CGCoroData>(new CGCoroData);
   CurCoro.Data->CoroId = CoroId;
   CurCoro.Data->CoroIdExpr = CoroIdExpr;
-  return true;
+}
 }
 
 bool CodeGenFunction::isCoroutine() const { return CurCoro.Data != nullptr; }

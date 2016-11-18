@@ -98,6 +98,9 @@ static unsigned getOptimizationLevel(ArgList &Args, InputKind IK,
     if (S == "s" || S == "z" || S.empty())
       return 2;
 
+    if (S == "g")
+      return 1;
+
     return getLastArgIntValue(Args, OPT_O, DefaultOpt, Diags);
   }
 
@@ -553,6 +556,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.ObjCAutoRefCountExceptions = Args.hasArg(OPT_fobjc_arc_exceptions);
   Opts.CXAAtExit = !Args.hasArg(OPT_fno_use_cxa_atexit);
   Opts.CXXCtorDtorAliases = Args.hasArg(OPT_mconstructor_aliases);
+  Opts.QualifiedFunctionTypeInfo = Args.hasArg(OPT_mqualified_function_type_info);
   Opts.CodeModel = getCodeModel(Args, Diags);
   Opts.DebugPass = Args.getLastArgValue(OPT_mdebug_pass);
   Opts.DisableFPElim =
@@ -1111,7 +1115,8 @@ static bool parseTestModuleFileExtensionArg(StringRef Arg,
 }
 
 static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
-                                   DiagnosticsEngine &Diags) {
+                                   DiagnosticsEngine &Diags,
+                                   bool &IsHeaderFile) {
   using namespace options;
   Opts.ProgramAction = frontend::ParseSyntaxOnly;
   if (const Arg *A = Args.getLastArg(OPT_Action_Group)) {
@@ -1358,6 +1363,13 @@ static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     if (DashX == IK_None)
       Diags.Report(diag::err_drv_invalid_value)
         << A->getAsString(Args) << A->getValue();
+    IsHeaderFile = llvm::StringSwitch<bool>(A->getValue())
+      .Case("c-header", true)
+      .Case("cl-header", true)
+      .Case("objective-c-header", true)
+      .Case("c++-header", true)
+      .Case("objective-c++-header", true)
+      .Default(false);
   }
 
   // '-' is the default input if none is given.
@@ -1432,7 +1444,8 @@ static void ParseHeaderSearchArgs(HeaderSearchOptions &Opts, ArgList &Args) {
 
   for (const Arg *A : Args.filtered(OPT_fmodules_ignore_macro)) {
     StringRef MacroDef = A->getValue();
-    Opts.ModulesIgnoreMacros.insert(MacroDef.split('=').first);
+    Opts.ModulesIgnoreMacros.insert(
+        llvm::CachedHashString(MacroDef.split('=').first));
   }
 
   // Add -I..., -F..., and -index-header-map options in order.
@@ -1459,7 +1472,7 @@ static void ParseHeaderSearchArgs(HeaderSearchOptions &Opts, ArgList &Args) {
       Path = Buffer.str();
     }
 
-    Opts.AddPath(Path.c_str(), Group, IsFramework,
+    Opts.AddPath(Path, Group, IsFramework,
                  /*IgnoreSysroot*/ true);
     IsIndexHeaderMap = false;
   }
@@ -2375,6 +2388,7 @@ static void ParseTargetArgs(TargetOptions &Opts, ArgList &Args,
   // Use the default target triple if unspecified.
   if (Opts.Triple.empty())
     Opts.Triple = llvm::sys::getDefaultTargetTriple();
+  Opts.OpenCLExtensionsAsWritten = Args.getAllArgValues(OPT_cl_ext_EQ);
 }
 
 bool CompilerInvocation::CreateFromArgs(CompilerInvocation &Res,
@@ -2414,7 +2428,8 @@ bool CompilerInvocation::CreateFromArgs(CompilerInvocation &Res,
   ParseCommentArgs(LangOpts.CommentOpts, Args);
   ParseFileSystemArgs(Res.getFileSystemOpts(), Args);
   // FIXME: We shouldn't have to pass the DashX option around here
-  InputKind DashX = ParseFrontendArgs(Res.getFrontendOpts(), Args, Diags);
+  InputKind DashX = ParseFrontendArgs(Res.getFrontendOpts(), Args, Diags,
+                                      LangOpts.IsHeaderFile);
   ParseTargetArgs(Res.getTargetOpts(), Args, Diags);
   Success &= ParseCodeGenArgs(Res.getCodeGenOpts(), Args, DashX, Diags,
                               Res.getTargetOpts());
@@ -2519,7 +2534,8 @@ std::string CompilerInvocation::getModuleHash() const {
     if (!hsOpts.ModulesIgnoreMacros.empty()) {
       // Check whether we're ignoring this macro.
       StringRef MacroDef = I->first;
-      if (hsOpts.ModulesIgnoreMacros.count(MacroDef.split('=').first))
+      if (hsOpts.ModulesIgnoreMacros.count(
+              llvm::CachedHashString(MacroDef.split('=').first)))
         continue;
     }
 

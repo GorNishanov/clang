@@ -1599,6 +1599,8 @@ static bool IsStandardConversion(Sema &S, Expr* From, QualType ToType,
       }
 
       // Check that we've computed the proper type after overload resolution.
+      // FIXME: FixOverloadedFunctionReference has side-effects; we shouldn't
+      // be calling it from within an NDEBUG block.
       assert(S.Context.hasSameType(
         FromType,
         S.FixOverloadedFunctionReference(From, AccessPair, Fn)->getType()));
@@ -4172,6 +4174,7 @@ Sema::CompareReferenceRelationship(SourceLocation Loc,
   DerivedToBase = false;
   ObjCConversion = false;
   ObjCLifetimeConversion = false;
+  QualType ConvertedT2;
   if (UnqualT1 == UnqualT2) {
     // Nothing to do.
   } else if (isCompleteType(Loc, OrigT2) &&
@@ -4182,6 +4185,15 @@ Sema::CompareReferenceRelationship(SourceLocation Loc,
            UnqualT2->isObjCObjectOrInterfaceType() &&
            Context.canBindObjCObjectType(UnqualT1, UnqualT2))
     ObjCConversion = true;
+  else if (UnqualT2->isFunctionType() &&
+           IsFunctionConversion(UnqualT2, UnqualT1, ConvertedT2))
+    // C++1z [dcl.init.ref]p4:
+    //   cv1 T1" is reference-compatible with "cv2 T2" if [...] T2 is "noexcept
+    //   function" and T1 is "function"
+    //
+    // We extend this to also apply to 'noreturn', so allow any function
+    // conversion between function types.
+    return Ref_Compatible;
   else
     return Ref_Incompatible;
 
@@ -4220,10 +4232,8 @@ Sema::CompareReferenceRelationship(SourceLocation Loc,
   T1Quals.removeUnaligned();
   T2Quals.removeUnaligned();
 
-  if (T1Quals == T2Quals)
+  if (T1Quals.compatiblyIncludes(T2Quals))
     return Ref_Compatible;
-  else if (T1Quals.compatiblyIncludes(T2Quals))
-    return Ref_Compatible_With_Added_Qualification;
   else
     return Ref_Related;
 }
@@ -4401,8 +4411,7 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
     //        reference-compatible with "cv2 T2," or
     //
     // Per C++ [over.ics.ref]p4, we don't check the bit-field property here.
-    if (InitCategory.isLValue() &&
-        RefRelationship >= Sema::Ref_Compatible_With_Added_Qualification) {
+    if (InitCategory.isLValue() && RefRelationship == Sema::Ref_Compatible) {
       // C++ [over.ics.ref]p1:
       //   When a parameter of reference type binds directly (8.5.3)
       //   to an argument expression, the implicit conversion sequence
@@ -4464,10 +4473,10 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
   //
   //            -- is an xvalue, class prvalue, array prvalue or function
   //               lvalue and "cv1 T1" is reference-compatible with "cv2 T2", or
-  if (RefRelationship >= Sema::Ref_Compatible_With_Added_Qualification &&
+  if (RefRelationship == Sema::Ref_Compatible &&
       (InitCategory.isXValue() ||
-      (InitCategory.isPRValue() && (T2->isRecordType() || T2->isArrayType())) ||
-      (InitCategory.isLValue() && T2->isFunctionType()))) {
+       (InitCategory.isPRValue() && (T2->isRecordType() || T2->isArrayType())) ||
+       (InitCategory.isLValue() && T2->isFunctionType()))) {
     ICS.setStandard();
     ICS.Standard.First = ICK_Identity;
     ICS.Standard.Second = DerivedToBase? ICK_Derived_To_Base
@@ -7624,12 +7633,12 @@ public:
   }
 
   // C++ [over.match.oper]p16:
-  //   For every pointer to member type T, there exist candidate operator
-  //   functions of the form
+  //   For every pointer to member type T or type std::nullptr_t, there
+  //   exist candidate operator functions of the form
   //
   //        bool operator==(T,T);
   //        bool operator!=(T,T);
-  void addEqualEqualOrNotEqualMemberPointerOverloads() {
+  void addEqualEqualOrNotEqualMemberPointerOrNullptrOverloads() {
     /// Set of (canonical) types that we've already handled.
     llvm::SmallPtrSet<QualType, 8> AddedTypes;
 
@@ -7646,13 +7655,22 @@ public:
         QualType ParamTypes[2] = { *MemPtr, *MemPtr };
         S.AddBuiltinCandidate(S.Context.BoolTy, ParamTypes, Args, CandidateSet);
       }
+
+      if (CandidateTypes[ArgIdx].hasNullPtrType()) {
+        CanQualType NullPtrTy = S.Context.getCanonicalType(S.Context.NullPtrTy);
+        if (AddedTypes.insert(NullPtrTy).second) {
+          QualType ParamTypes[2] = { NullPtrTy, NullPtrTy };
+          S.AddBuiltinCandidate(S.Context.BoolTy, ParamTypes, Args,
+                                CandidateSet);
+        }
+      }
     }
   }
 
   // C++ [over.built]p15:
   //
-  //   For every T, where T is an enumeration type, a pointer type, or 
-  //   std::nullptr_t, there exist candidate operator functions of the form
+  //   For every T, where T is an enumeration type or a pointer type,
+  //   there exist candidate operator functions of the form
   //
   //        bool       operator<(T, T);
   //        bool       operator>(T, T);
@@ -7736,17 +7754,6 @@ public:
 
         QualType ParamTypes[2] = { *Enum, *Enum };
         S.AddBuiltinCandidate(S.Context.BoolTy, ParamTypes, Args, CandidateSet);
-      }
-      
-      if (CandidateTypes[ArgIdx].hasNullPtrType()) {
-        CanQualType NullPtrTy = S.Context.getCanonicalType(S.Context.NullPtrTy);
-        if (AddedTypes.insert(NullPtrTy).second &&
-            !UserDefinedBinaryOperators.count(std::make_pair(NullPtrTy,
-                                                             NullPtrTy))) {
-          QualType ParamTypes[2] = { NullPtrTy, NullPtrTy };
-          S.AddBuiltinCandidate(S.Context.BoolTy, ParamTypes, Args,
-                                CandidateSet);
-        }
       }
     }
   }
@@ -8443,7 +8450,7 @@ void Sema::AddBuiltinOperatorCandidates(OverloadedOperatorKind Op,
 
   case OO_EqualEqual:
   case OO_ExclaimEqual:
-    OpBuilder.addEqualEqualOrNotEqualMemberPointerOverloads();
+    OpBuilder.addEqualEqualOrNotEqualMemberPointerOrNullptrOverloads();
     // Fall through.
 
   case OO_Less:
@@ -8977,10 +8984,9 @@ enum OverloadCandidateKind {
   oc_inherited_constructor_template
 };
 
-OverloadCandidateKind ClassifyOverloadCandidate(Sema &S,
-                                                NamedDecl *Found,
-                                                FunctionDecl *Fn,
-                                                std::string &Description) {
+static OverloadCandidateKind
+ClassifyOverloadCandidate(Sema &S, NamedDecl *Found, FunctionDecl *Fn,
+                          std::string &Description) {
   bool isTemplate = false;
 
   if (FunctionTemplateDecl *FunTmpl = Fn->getPrimaryTemplate()) {
@@ -10384,6 +10390,21 @@ QualType Sema::ExtractUnqualifiedFunctionType(QualType PossiblyAFunctionType) {
   return Ret;
 }
 
+static bool completeFunctionType(Sema &S, FunctionDecl *FD, SourceLocation Loc,
+                                 bool Complain = true) {
+  if (S.getLangOpts().CPlusPlus14 && FD->getReturnType()->isUndeducedType() &&
+      S.DeduceReturnType(FD, Loc, Complain))
+    return true;
+
+  auto *FPT = FD->getType()->castAs<FunctionProtoType>();
+  if (S.getLangOpts().CPlusPlus1z &&
+      isUnresolvedExceptionSpec(FPT->getExceptionSpecType()) &&
+      !S.ResolveExceptionSpec(Loc, FPT))
+    return true;
+
+  return false;
+}
+
 namespace {
 // A helper class to help with address of function resolution
 // - allows us to avoid passing around all those ugly parameters
@@ -10592,9 +10613,8 @@ private:
 
       // If any candidate has a placeholder return type, trigger its deduction
       // now.
-      if (S.getLangOpts().CPlusPlus14 &&
-          FunDecl->getReturnType()->isUndeducedType() &&
-          S.DeduceReturnType(FunDecl, SourceExpr->getLocStart(), Complain)) {
+      if (completeFunctionType(S, FunDecl, SourceExpr->getLocStart(),
+                               Complain)) {
         HasComplained |= Complain;
         return false;
       }
@@ -10819,6 +10839,8 @@ Sema::ResolveAddressOfOverloadedFunction(Expr *AddressOfExpr,
   else if (NumMatches == 1) {
     Fn = Resolver.getMatchingFunctionDecl();
     assert(Fn);
+    if (auto *FPT = Fn->getType()->getAs<FunctionProtoType>())
+      ResolveExceptionSpec(AddressOfExpr->getExprLoc(), FPT);
     FoundResult = *Resolver.getMatchingFunctionAccessPair();
     if (Complain) {
       if (Resolver.IsStaticMemberFunctionFromBoundPointer())
@@ -10978,9 +11000,8 @@ Sema::ResolveSingleFunctionTemplateSpecialization(OverloadExpr *ovl,
     if (FoundResult) *FoundResult = I.getPair();    
   }
 
-  if (Matched && getLangOpts().CPlusPlus14 &&
-      Matched->getReturnType()->isUndeducedType() &&
-      DeduceReturnType(Matched, ovl->getExprLoc(), Complain))
+  if (Matched &&
+      completeFunctionType(*this, Matched, ovl->getExprLoc(), Complain))
     return nullptr;
 
   return Matched;
@@ -12477,10 +12498,10 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
 
   // In the case the method to call was not selected by the overloading
   // resolution process, we still need to handle the enable_if attribute. Do
-  // that here, so it will not hide previous -- and more relevant -- errors
-  if (isa<MemberExpr>(NakedMemExpr)) {
+  // that here, so it will not hide previous -- and more relevant -- errors.
+  if (auto *MemE = dyn_cast<MemberExpr>(NakedMemExpr)) {
     if (const EnableIfAttr *Attr = CheckEnableIf(Method, Args, true)) {
-      Diag(MemExprE->getLocStart(),
+      Diag(MemE->getMemberLoc(),
            diag::err_ovl_no_viable_member_function_in_call)
           << Method << Method->getSourceRange();
       Diag(Method->getLocation(),

@@ -13,9 +13,9 @@
 
 #include "CGDebugInfo.h"
 #include "CGBlocks.h"
-#include "CGRecordLayout.h"
 #include "CGCXXABI.h"
 #include "CGObjCRuntime.h"
+#include "CGRecordLayout.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
 #include "clang/AST/ASTContext.h"
@@ -31,6 +31,7 @@
 #include "clang/Lex/HeaderSearchOptions.h"
 #include "clang/Lex/ModuleMap.h"
 #include "clang/Lex/PreprocessorOptions.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
@@ -904,6 +905,7 @@ static unsigned getDwarfCC(CallingConv CC) {
   case CC_Swift:
   case CC_PreserveMost:
   case CC_PreserveAll:
+  case CC_X86RegCall:
     return 0;
   }
   return 0;
@@ -1380,13 +1382,33 @@ void CGDebugInfo::CollectCXXMemberFunctions(
 void CGDebugInfo::CollectCXXBases(const CXXRecordDecl *RD, llvm::DIFile *Unit,
                                   SmallVectorImpl<llvm::Metadata *> &EltTys,
                                   llvm::DIType *RecordTy) {
-  const ASTRecordLayout &RL = CGM.getContext().getASTRecordLayout(RD);
-  for (const auto &BI : RD->bases()) {
-    llvm::DINode::DIFlags BFlags = llvm::DINode::FlagZero;
-    uint64_t BaseOffset;
+  llvm::DenseSet<CanonicalDeclPtr<const CXXRecordDecl>> SeenTypes;
+  CollectCXXBasesAux(RD, Unit, EltTys, RecordTy, RD->bases(), SeenTypes,
+                     llvm::DINode::FlagZero);
 
+  // If we are generating CodeView debug info, we also need to emit records for
+  // indirect virtual base classes.
+  if (CGM.getCodeGenOpts().EmitCodeView) {
+    CollectCXXBasesAux(RD, Unit, EltTys, RecordTy, RD->vbases(), SeenTypes,
+                       llvm::DINode::FlagIndirectVirtualBase);
+  }
+}
+
+void CGDebugInfo::CollectCXXBasesAux(
+    const CXXRecordDecl *RD, llvm::DIFile *Unit,
+    SmallVectorImpl<llvm::Metadata *> &EltTys, llvm::DIType *RecordTy,
+    const CXXRecordDecl::base_class_const_range &Bases,
+    llvm::DenseSet<CanonicalDeclPtr<const CXXRecordDecl>> &SeenTypes,
+    llvm::DINode::DIFlags StartingFlags) {
+  const ASTRecordLayout &RL = CGM.getContext().getASTRecordLayout(RD);
+  for (const auto &BI : Bases) {
     const auto *Base =
         cast<CXXRecordDecl>(BI.getType()->getAs<RecordType>()->getDecl());
+    if (!SeenTypes.insert(Base).second)
+      continue;
+    auto *BaseTy = getOrCreateType(BI.getType(), Unit);
+    llvm::DINode::DIFlags BFlags = StartingFlags;
+    uint64_t BaseOffset;
 
     if (BI.isVirtual()) {
       if (CGM.getTarget().getCXXABI().isItaniumFamily()) {
@@ -1401,15 +1423,15 @@ void CGDebugInfo::CollectCXXBases(const CXXRecordDecl *RD, llvm::DIFile *Unit,
         BaseOffset =
             4 * CGM.getMicrosoftVTableContext().getVBTableIndex(RD, Base);
       }
-      BFlags = llvm::DINode::FlagVirtual;
+      BFlags |= llvm::DINode::FlagVirtual;
     } else
       BaseOffset = CGM.getContext().toBits(RL.getBaseClassOffset(Base));
     // FIXME: Inconsistent units for BaseOffset. It is in bytes when
     // BI->isVirtual() and bits when not.
 
     BFlags |= getAccessFlag(BI.getAccessSpecifier(), RD);
-    llvm::DIType *DTy = DBuilder.createInheritance(
-        RecordTy, getOrCreateType(BI.getType(), Unit), BaseOffset, BFlags);
+    llvm::DIType *DTy =
+        DBuilder.createInheritance(RecordTy, BaseTy, BaseOffset, BFlags);
     EltTys.push_back(DTy);
   }
 }
@@ -2266,9 +2288,8 @@ llvm::DIType *CGDebugInfo::CreateType(const MemberPointerType *Ty,
 }
 
 llvm::DIType *CGDebugInfo::CreateType(const AtomicType *Ty, llvm::DIFile *U) {
-  // Ignore the atomic wrapping
-  // FIXME: What is the correct representation?
-  return getOrCreateType(Ty->getValueType(), U);
+  auto *FromTy = getOrCreateType(Ty->getValueType(), U);
+  return DBuilder.createQualifiedType(llvm::dwarf::DW_TAG_atomic_type, FromTy);
 }
 
 llvm::DIType* CGDebugInfo::CreateType(const PipeType *Ty,
@@ -2395,10 +2416,16 @@ static QualType UnwrapTypeForDebugInfo(QualType T, const ASTContext &C) {
     case Type::SubstTemplateTypeParm:
       T = cast<SubstTemplateTypeParmType>(T)->getReplacementType();
       break;
-    case Type::Auto:
+    case Type::Auto: {
       QualType DT = cast<AutoType>(T)->getDeducedType();
       assert(!DT.isNull() && "Undeduced types shouldn't reach here.");
       T = DT;
+      break;
+    }
+    case Type::Adjusted:
+    case Type::Decayed:
+      // Decayed and adjusted types use the adjusted type in LLVM and DWARF.
+      T = cast<AdjustedType>(T)->getAdjustedType();
       break;
     }
 
@@ -2519,11 +2546,6 @@ llvm::DIType *CGDebugInfo::CreateTypeNode(QualType Ty, llvm::DIFile *Unit) {
     return CreateType(cast<ComplexType>(Ty));
   case Type::Pointer:
     return CreateType(cast<PointerType>(Ty), Unit);
-  case Type::Adjusted:
-  case Type::Decayed:
-    // Decayed and adjusted types use the adjusted type in LLVM and DWARF.
-    return CreateType(
-        cast<PointerType>(cast<AdjustedType>(Ty)->getAdjustedType()), Unit);
   case Type::BlockPointer:
     return CreateType(cast<BlockPointerType>(Ty), Unit);
   case Type::Typedef:
@@ -2559,6 +2581,8 @@ llvm::DIType *CGDebugInfo::CreateTypeNode(QualType Ty, llvm::DIFile *Unit) {
 
   case Type::Auto:
   case Type::Attributed:
+  case Type::Adjusted:
+  case Type::Decayed:
   case Type::Elaborated:
   case Type::Paren:
   case Type::SubstTemplateTypeParm:
@@ -3011,9 +3035,8 @@ void CGDebugInfo::EmitFunctionStart(GlobalDecl GD, SourceLocation Loc,
 
   if (!HasDecl || D->isImplicit()) {
     Flags |= llvm::DINode::FlagArtificial;
-    // Artificial functions without a location should not silently reuse CurLoc.
-    if (Loc.isInvalid())
-      CurLoc = SourceLocation();
+    // Artificial functions should not silently reuse CurLoc.
+    CurLoc = SourceLocation();
   }
   unsigned LineNo = getLineNumber(Loc);
   unsigned ScopeLine = getLineNumber(ScopeLoc);
@@ -3654,6 +3677,13 @@ void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
   assert(DebugKind >= codegenoptions::LimitedDebugInfo);
   if (D->hasAttr<NoDebugAttr>())
     return;
+
+  // If we already created a DIGlobalVariable for this declaration, just attach
+  // it to the llvm::GlobalVariable.
+  auto Cached = DeclCache.find(D->getCanonicalDecl());
+  if (Cached != DeclCache.end())
+    return Var->addDebugInfo(cast<llvm::DIGlobalVariable>(Cached->second));
+
   // Create global variable debug descriptor.
   llvm::DIFile *Unit = nullptr;
   llvm::DIScope *DContext = nullptr;
@@ -3827,8 +3857,8 @@ CGDebugInfo::getOrCreateNameSpace(const NamespaceDecl *NSDecl) {
   unsigned LineNo = getLineNumber(NSDecl->getLocation());
   llvm::DIFile *FileD = getOrCreateFile(NSDecl->getLocation());
   llvm::DIScope *Context = getDeclContextDescriptor(NSDecl);
-  llvm::DINamespace *NS =
-      DBuilder.createNameSpace(Context, NSDecl->getName(), FileD, LineNo);
+  llvm::DINamespace *NS = DBuilder.createNameSpace(
+      Context, NSDecl->getName(), FileD, LineNo, NSDecl->isInline());
   NameSpaceCache[NSDecl].reset(NS);
   return NS;
 }
@@ -3896,4 +3926,13 @@ void CGDebugInfo::EmitExplicitCastType(QualType Ty) {
   if (auto *DieTy = getOrCreateType(Ty, getOrCreateMainFile()))
     // Don't ignore in case of explicit cast where it is referenced indirectly.
     DBuilder.retainType(DieTy);
+}
+
+llvm::DebugLoc CGDebugInfo::SourceLocToDebugLoc(SourceLocation Loc) {
+  if (LexicalBlockStack.empty())
+    return llvm::DebugLoc();
+
+  llvm::MDNode *Scope = LexicalBlockStack.back();
+  return llvm::DebugLoc::get(
+          getLineNumber(Loc), getColumnNumber(Loc), Scope);
 }

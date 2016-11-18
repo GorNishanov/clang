@@ -553,6 +553,8 @@ def fbootclasspath_EQ : Joined<["-"], "fbootclasspath=">, Group<f_Group>;
 def fborland_extensions : Flag<["-"], "fborland-extensions">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Accept non-standard constructs supported by the Borland compiler">;
 def fbuiltin : Flag<["-"], "fbuiltin">, Group<f_Group>;
+def fbuiltin_module_map : Flag <["-"], "fbuiltin-module-map">, Group<f_Group>,
+  Flags<[DriverOption]>, HelpText<"Load the clang builtins module map file.">;
 def fcaret_diagnostics : Flag<["-"], "fcaret-diagnostics">, Group<f_Group>;
 def fclasspath_EQ : Joined<["-"], "fclasspath=">, Group<f_Group>;
 def fcolor_diagnostics : Flag<["-"], "fcolor-diagnostics">, Group<f_Group>,
@@ -726,6 +728,24 @@ def fsanitize_stats : Flag<["-"], "fsanitize-stats">,
 def fno_sanitize_stats : Flag<["-"], "fno-sanitize-stats">,
                                  Group<f_clang_Group>, Flags<[CC1Option]>,
                                  HelpText<"Disable sanitizer statistics gathering.">;
+def fsanitize_thread_memory_access : Flag<["-"], "fsanitize-thread-memory-access">,
+                                     Group<f_clang_Group>,
+                                     HelpText<"Enable memory access instrumentation in ThreadSanitizer (default)">;
+def fno_sanitize_thread_memory_access : Flag<["-"], "fno-sanitize-thread-memory-access">,
+                                        Group<f_clang_Group>,
+                                        HelpText<"Disable memory access instrumentation in ThreadSanitizer">;
+def fsanitize_thread_func_entry_exit : Flag<["-"], "fsanitize-thread-func-entry-exit">,
+                                       Group<f_clang_Group>,
+                                       HelpText<"Enable function entry/exit instrumentation in ThreadSanitizer (default)">;
+def fno_sanitize_thread_func_entry_exit : Flag<["-"], "fno-sanitize-thread-func-entry-exit">,
+                                          Group<f_clang_Group>,
+                                          HelpText<"Disable function entry/exit instrumentation in ThreadSanitizer">;
+def fsanitize_thread_atomics : Flag<["-"], "fsanitize-thread-atomics">,
+                               Group<f_clang_Group>,
+                               HelpText<"Enable atomic operations instrumentation in ThreadSanitizer (default)">;
+def fno_sanitize_thread_atomics : Flag<["-"], "fno-sanitize-thread-atomics">,
+                                  Group<f_clang_Group>,
+                                  HelpText<"Disable atomic operations instrumentation in ThreadSanitizer">;
 def fsanitize_undefined_strip_path_components_EQ : Joined<["-"], "fsanitize-undefined-strip-path-components=">,
   Group<f_clang_Group>, Flags<[CC1Option]>, MetaVarName<"<number>">,
   HelpText<"Strip (or keep only, if negative) a given number of path components "
@@ -1103,6 +1123,8 @@ def fopenmp_use_tls : Flag<["-"], "fopenmp-use-tls">, Group<f_Group>, Flags<[NoA
 def fnoopenmp_use_tls : Flag<["-"], "fnoopenmp-use-tls">, Group<f_Group>, Flags<[CC1Option, NoArgumentUnused]>;
 def fopenmp_targets_EQ : CommaJoined<["-"], "fopenmp-targets=">, Flags<[DriverOption, CC1Option]>,
   HelpText<"Specify comma-separated list of triples OpenMP offloading targets to be supported">;
+def fopenmp_dump_offload_linker_script : Flag<["-"], "fopenmp-dump-offload-linker-script">, Group<f_Group>, 
+  Flags<[NoArgumentUnused]>;
 def fno_optimize_sibling_calls : Flag<["-"], "fno-optimize-sibling-calls">, Group<f_Group>;
 def foptimize_sibling_calls : Flag<["-"], "foptimize-sibling-calls">, Group<f_Group>;
 def force__cpusubtype__ALL : Flag<["-"], "force_cpusubtype_ALL">;

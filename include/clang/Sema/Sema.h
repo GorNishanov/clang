@@ -896,19 +896,6 @@ public:
         NumTypos(0),
         ManglingContextDecl(ManglingContextDecl), MangleNumbering() { }
 
-    // FIXME: This is here only to make MSVC 2013 happy.  Remove it and rely on
-    // the default move constructor once MSVC 2013 is gone.
-    ExpressionEvaluationContextRecord(ExpressionEvaluationContextRecord &&E)
-        : Context(E.Context), ParentCleanup(E.ParentCleanup),
-          IsDecltype(E.IsDecltype), NumCleanupObjects(E.NumCleanupObjects),
-          NumTypos(E.NumTypos),
-          SavedMaybeODRUseExprs(std::move(E.SavedMaybeODRUseExprs)),
-          Lambdas(std::move(E.Lambdas)),
-          ManglingContextDecl(E.ManglingContextDecl),
-          MangleNumbering(std::move(E.MangleNumbering)),
-          DelayedDecltypeCalls(std::move(E.DelayedDecltypeCalls)),
-          DelayedDecltypeBinds(std::move(E.DelayedDecltypeBinds)) {}
-
     /// \brief Retrieve the mangling numbering context, used to consistently
     /// number constructs like lambdas for mangling.
     MangleNumberingContext &getMangleNumberingContext(ASTContext &Ctx);
@@ -1241,8 +1228,10 @@ public:
   /// \brief Retrieve the current block, if any.
   sema::BlockScopeInfo *getCurBlock();
 
-  /// \brief Retrieve the current lambda scope info, if any.
-  sema::LambdaScopeInfo *getCurLambda();
+  /// Retrieve the current lambda scope info, if any.
+  /// \param IgnoreCapturedRegions true if should find the top-most lambda scope
+  /// info ignoring all inner captured regions scope infos.
+  sema::LambdaScopeInfo *getCurLambda(bool IgnoreCapturedRegions = false);
 
   /// \brief Retrieve the current generic lambda info, if any.
   sema::LambdaScopeInfo *getCurGenericLambda();
@@ -1347,13 +1336,19 @@ public:
       bool *MissingEmptyExceptionSpecification = nullptr,
       bool AllowNoexceptAllMatchWithNoSpec = false,
       bool IsOperatorNew = false);
-  bool CheckExceptionSpecSubset(
-      const PartialDiagnostic &DiagID, const PartialDiagnostic & NoteID,
-      const FunctionProtoType *Superset, SourceLocation SuperLoc,
-      const FunctionProtoType *Subset, SourceLocation SubLoc);
-  bool CheckParamExceptionSpec(const PartialDiagnostic & NoteID,
-      const FunctionProtoType *Target, SourceLocation TargetLoc,
-      const FunctionProtoType *Source, SourceLocation SourceLoc);
+  bool CheckExceptionSpecSubset(const PartialDiagnostic &DiagID,
+                                const PartialDiagnostic &NestedDiagID,
+                                const PartialDiagnostic &NoteID,
+                                const FunctionProtoType *Superset,
+                                SourceLocation SuperLoc,
+                                const FunctionProtoType *Subset,
+                                SourceLocation SubLoc);
+  bool CheckParamExceptionSpec(const PartialDiagnostic &NestedDiagID,
+                               const PartialDiagnostic &NoteID,
+                               const FunctionProtoType *Target,
+                               SourceLocation TargetLoc,
+                               const FunctionProtoType *Source,
+                               SourceLocation SourceLoc);
 
   TypeResult ActOnTypeName(Scope *S, Declarator &D);
 
@@ -1723,6 +1718,8 @@ public:
   /// to a shadowing declaration.
   void CheckShadowingDeclModification(Expr *E, SourceLocation Loc);
 
+  void DiagnoseShadowingLambdaDecls(const sema::LambdaScopeInfo *LSI);
+
 private:
   /// Map of current shadowing declarations to shadowed declarations. Warn if
   /// it looks like the user is trying to modify the shadowing declaration.
@@ -1799,6 +1796,8 @@ public:
                             bool TypeMayContainAuto);
   void ActOnUninitializedDecl(Decl *dcl, bool TypeMayContainAuto);
   void ActOnInitializerError(Decl *Dcl);
+  bool canInitializeWithParenthesizedList(QualType TargetType);
+
   void ActOnPureSpecifier(Decl *D, SourceLocation PureSpecLoc);
   void ActOnCXXForRangeDecl(Decl *D);
   StmtResult ActOnCXXForRangeIdentifier(Scope *S, SourceLocation IdentLoc,
@@ -3127,10 +3126,14 @@ public:
   /// method) or an Objective-C property attribute, rather than as an
   /// underscored type specifier.
   ///
+  /// \param allowArrayTypes Whether to accept nullability specifiers on an
+  /// array type (e.g., because it will decay to a pointer).
+  ///
   /// \returns true if nullability cannot be applied, false otherwise.
   bool checkNullabilityTypeSpecifier(QualType &type, NullabilityKind nullability,
                                      SourceLocation nullabilityLoc,
-                                     bool isContextSensitive);
+                                     bool isContextSensitive,
+                                     bool allowArrayTypes);
 
   /// \brief Stmt attributes - this routine is the top level dispatcher.
   StmtResult ProcessStmtAttributes(Stmt *Stmt, AttributeList *Attrs,
@@ -7477,6 +7480,7 @@ public:
                                        SourceRange SuperTypeArgsRange);
   
   void ActOnTypedefedProtocols(SmallVectorImpl<Decl *> &ProtocolRefs,
+                               SmallVectorImpl<SourceLocation> &ProtocolLocs,
                                IdentifierInfo *SuperName,
                                SourceLocation SuperLoc);
 
@@ -8372,6 +8376,12 @@ public:
       ArrayRef<OMPClause *> Clauses, Stmt *AStmt, SourceLocation StartLoc,
       SourceLocation EndLoc,
       llvm::DenseMap<ValueDecl *, Expr *> &VarsWithImplicitDSA);
+  /// Called on well-formed '\#pragma omp teams distribute simd' after parsing
+  /// of the associated statement.
+  StmtResult ActOnOpenMPTeamsDistributeSimdDirective(
+      ArrayRef<OMPClause *> Clauses, Stmt *AStmt, SourceLocation StartLoc,
+      SourceLocation EndLoc,
+      llvm::DenseMap<ValueDecl *, Expr *> &VarsWithImplicitDSA);
 
   /// Checks correctness of linear modifiers.
   bool CheckOpenMPLinearModifier(OpenMPLinearClauseKind LinKind,
@@ -8928,8 +8938,8 @@ public:
     ExprResult &LHS, ExprResult &RHS, SourceLocation Loc,
     BinaryOperatorKind Opc, bool isRelational);
   QualType CheckBitwiseOperands( // C99 6.5.[10...12]
-    ExprResult &LHS, ExprResult &RHS, SourceLocation Loc,
-    bool IsCompAssign = false);
+      ExprResult &LHS, ExprResult &RHS, SourceLocation Loc,
+      BinaryOperatorKind Opc);
   QualType CheckLogicalOperands( // C99 6.5.[13,14]
     ExprResult &LHS, ExprResult &RHS, SourceLocation Loc,
     BinaryOperatorKind Opc);
@@ -8954,15 +8964,13 @@ public:
     ExprResult &cond, ExprResult &lhs, ExprResult &rhs,
     ExprValueKind &VK, ExprObjectKind &OK, SourceLocation questionLoc);
   QualType FindCompositePointerType(SourceLocation Loc, Expr *&E1, Expr *&E2,
-                                    bool *NonStandardCompositeType = nullptr,
                                     bool ConvertArgs = true);
   QualType FindCompositePointerType(SourceLocation Loc,
                                     ExprResult &E1, ExprResult &E2,
-                                    bool *NonStandardCompositeType = nullptr,
                                     bool ConvertArgs = true) {
     Expr *E1Tmp = E1.get(), *E2Tmp = E2.get();
-    QualType Composite = FindCompositePointerType(
-        Loc, E1Tmp, E2Tmp, NonStandardCompositeType, ConvertArgs);
+    QualType Composite =
+        FindCompositePointerType(Loc, E1Tmp, E2Tmp, ConvertArgs);
     E1 = E1Tmp;
     E2 = E2Tmp;
     return Composite;
@@ -9007,13 +9015,7 @@ public:
     /// that their unqualified forms (T1 and T2) are either the same
     /// or T1 is a base class of T2.
     Ref_Related,
-    /// Ref_Compatible_With_Added_Qualification - The two types are
-    /// reference-compatible with added qualification, meaning that
-    /// they are reference-compatible and the qualifiers on T1 (cv1)
-    /// are greater than the qualifiers on T2 (cv2).
-    Ref_Compatible_With_Added_Qualification,
-    /// Ref_Compatible - The two types are reference-compatible and
-    /// have equivalent qualifiers (cv1 == cv2).
+    /// Ref_Compatible - The two types are reference-compatible.
     Ref_Compatible
   };
 
@@ -9263,17 +9265,17 @@ public:
                  std::vector<PartialDiagnosticAt>>
       CUDADeferredDiags;
 
-  /// FunctionDecls plus raw encodings of SourceLocations for which
-  /// CheckCUDACall has emitted a (maybe deferred) "bad call" diagnostic.  We
-  /// use this to avoid emitting the same deferred diag twice.
-  llvm::DenseSet<std::pair<CanonicalDeclPtr<FunctionDecl>, unsigned>>
-      LocsWithCUDACallDiags;
-
-  /// A pair of a canonical FunctionDecl and a SourceLocation.
+  /// A pair of a canonical FunctionDecl and a SourceLocation.  When used as the
+  /// key in a hashtable, both the FD and location are hashed.
   struct FunctionDeclAndLoc {
     CanonicalDeclPtr<FunctionDecl> FD;
     SourceLocation Loc;
   };
+
+  /// FunctionDecls and SourceLocations for which CheckCUDACall has emitted a
+  /// (maybe deferred) "bad call" diagnostic.  We use this to avoid emitting the
+  /// same deferred diag twice.
+  llvm::DenseSet<FunctionDeclAndLoc> LocsWithCUDACallDiags;
 
   /// An inverse call graph, mapping known-emitted functions to one of their
   /// known-emitted callers (plus the location of the call).
@@ -9694,6 +9696,7 @@ private:
                  VariadicCallType CallType);
 
   bool CheckObjCString(Expr *Arg);
+  ExprResult CheckOSLogFormatStringArg(Expr *Arg);
 
   ExprResult CheckBuiltinFunctionCall(FunctionDecl *FDecl,
                                       unsigned BuiltinID, CallExpr *TheCall);
@@ -9716,6 +9719,7 @@ private:
   bool SemaBuiltinVAStartARM(CallExpr *Call);
   bool SemaBuiltinUnorderedCompare(CallExpr *TheCall);
   bool SemaBuiltinFPClassification(CallExpr *TheCall, unsigned NumArgs);
+  bool SemaBuiltinOSLogFormat(CallExpr *TheCall);
 
 public:
   // Used by C++ template instantiation.
@@ -9726,6 +9730,7 @@ public:
 
 private:
   bool SemaBuiltinPrefetch(CallExpr *TheCall);
+  bool SemaBuiltinAllocaWithAlign(CallExpr *TheCall);
   bool SemaBuiltinAssume(CallExpr *TheCall);
   bool SemaBuiltinAssumeAligned(CallExpr *TheCall);
   bool SemaBuiltinLongjmp(CallExpr *TheCall);
@@ -9753,6 +9758,7 @@ public:
     FST_Kprintf,
     FST_FreeBSDKPrintf,
     FST_OSTrace,
+    FST_OSLog,
     FST_Unknown
   };
   static FormatStringType GetFormatStringType(const FormatAttr *Format);
@@ -9915,23 +9921,16 @@ public:
     return OriginalLexicalContext ? OriginalLexicalContext : CurContext;
   }
 
-  AvailabilityResult getCurContextAvailability() const;
-
-  /// \brief Get the verison that this context implies.
-  /// For instance, a method in an interface that is annotated with an
-  /// availability attribuite effectively has the availability of the interface.
-  VersionTuple getVersionForDecl(const Decl *Ctx) const;
-
   /// \brief The diagnostic we should emit for \c D, or \c AR_Available.
   ///
   /// \param D The declaration to check. Note that this may be altered to point
   /// to another declaration that \c D gets it's availability from. i.e., we
   /// walk the list of typedefs to find an availability attribute.
   ///
-  /// \param ContextVersion The version to compare availability against.
-  AvailabilityResult
-  ShouldDiagnoseAvailabilityOfDecl(NamedDecl *&D, VersionTuple ContextVersion,
-                                   std::string *Message);
+  /// \param Message If non-null, this will be populated with the message from
+  /// the availability attribute that is selected.
+  AvailabilityResult ShouldDiagnoseAvailabilityOfDecl(NamedDecl *&D,
+                                                      std::string *Message);
 
   const DeclContext *getCurObjCLexicalContext() const {
     const DeclContext *DC = getCurLexicalContext();
@@ -9999,7 +9998,7 @@ public:
   /// local diagnostics like in reference binding.
   void RefersToMemberWithReducedAlignment(
       Expr *E,
-      std::function<void(Expr *, RecordDecl *, ValueDecl *, CharUnits)> Action);
+      std::function<void(Expr *, RecordDecl *, FieldDecl *, CharUnits)> Action);
 };
 
 /// \brief RAII object that enters a new expression evaluation context.
@@ -10047,5 +10046,32 @@ struct LateParsedTemplate {
 };
 
 } // end namespace clang
+
+namespace llvm {
+// Hash a FunctionDeclAndLoc by looking at both its FunctionDecl and its
+// SourceLocation.
+template <> struct DenseMapInfo<clang::Sema::FunctionDeclAndLoc> {
+  using FunctionDeclAndLoc = clang::Sema::FunctionDeclAndLoc;
+  using FDBaseInfo = DenseMapInfo<clang::CanonicalDeclPtr<clang::FunctionDecl>>;
+
+  static FunctionDeclAndLoc getEmptyKey() {
+    return {FDBaseInfo::getEmptyKey(), clang::SourceLocation()};
+  }
+
+  static FunctionDeclAndLoc getTombstoneKey() {
+    return {FDBaseInfo::getTombstoneKey(), clang::SourceLocation()};
+  }
+
+  static unsigned getHashValue(const FunctionDeclAndLoc &FDL) {
+    return hash_combine(FDBaseInfo::getHashValue(FDL.FD),
+                        FDL.Loc.getRawEncoding());
+  }
+
+  static bool isEqual(const FunctionDeclAndLoc &LHS,
+                      const FunctionDeclAndLoc &RHS) {
+    return LHS.FD == RHS.FD && LHS.Loc == RHS.Loc;
+  }
+};
+} // namespace llvm
 
 #endif

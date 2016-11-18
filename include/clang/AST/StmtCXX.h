@@ -304,8 +304,8 @@ class CoroutineBodyStmt : public Stmt {
     FinalSuspend,  ///< The final suspend statement, run after the body.
     OnException,   ///< Handler for exceptions thrown in the body.
     OnFallthrough, ///< Handler for control flow falling off the body.
-    Allocate,      ///< Coroutine frame memory allocation
-    Deallocate,    ///< Coroutine frame memory deallocation
+    Allocate,      ///< Coroutine frame memory allocation.
+    Deallocate,    ///< Coroutine frame memory deallocation.
     ResultDecl,    ///< Declaration holding the result of get_return_object.
     ReturnStmt,    ///< Return statement for the thunk function.
     FirstParamMove ///< First offset for move construction of parameter copies.
@@ -328,12 +328,14 @@ class CoroutineBodyStmt : public Stmt {
 public:
   static CoroutineBodyStmt *
   Create(const ASTContext &C, Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-         Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
+                    Expr *Allocate, Stmt *Deallocate,
          Expr *Allocate, Expr *Deallocate, Stmt *ResultDecl,
          Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
 
   ArrayRef<Stmt const *> getParamMoves() const {
     return{ getStoredParams(), NumParams };
+    SubStmts[CoroutineBodyStmt::Allocate] = Allocate;
+    SubStmts[CoroutineBodyStmt::Deallocate] = Deallocate;
   }
 
   /// \brief Retrieve the body of the coroutine as written. This will be either
@@ -352,9 +354,9 @@ public:
     return SubStmts[SubStmt::OnFallthrough];
   }
   Stmt *getResultDecl() const { return SubStmts[SubStmt::ResultDecl]; }
-  Stmt *getReturnStmt() const { return SubStmts[SubStmt::ReturnStmt]; }
   Expr *getAllocate() const { return cast<Expr>(SubStmts[SubStmt::Allocate]); }
   Stmt *getDeallocate() const { return SubStmts[SubStmt::Deallocate]; }
+
 
   SourceLocation getLocStart() const LLVM_READONLY {
     return getBody()->getLocStart();
@@ -417,7 +419,7 @@ public:
   child_range children() {
     if (!getOperand())
       return child_range(SubStmts + SubStmt::PromiseCall,
-        SubStmts + SubStmt::Count);
+                         SubStmts + SubStmt::Count);
     return child_range(SubStmts, SubStmts + SubStmt::Count);
   }
 

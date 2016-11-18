@@ -303,7 +303,8 @@ void ModuleMap::diagnoseHeaderInclusion(Module *RequestingModule,
     diag::kind DiagID = RequestingModule->getTopLevelModule()->IsFramework ?
         diag::warn_non_modular_include_in_framework_module :
         diag::warn_non_modular_include_in_module;
-    Diags.Report(FilenameLoc, DiagID) << RequestingModule->getFullModuleName();
+    Diags.Report(FilenameLoc, DiagID) << RequestingModule->getFullModuleName()
+        << File->getName();
   }
 }
 
@@ -595,8 +596,7 @@ static void inferFrameworkLink(Module *Mod, const DirectoryEntry *FrameworkDir,
   // The library name of a framework has more than one possible extension since
   // the introduction of the text-based dynamic library format. We need to check
   // for both before we give up.
-  static const char *frameworkExtensions[] = {"", ".tbd"};
-  for (const auto *extension : frameworkExtensions) {
+  for (const char *extension : {"", ".tbd"}) {
     llvm::sys::path::replace_extension(LibName, extension);
     if (FileMgr.getFile(LibName)) {
       Mod->LinkLibraries.push_back(Module::LinkLibrary(Mod->Name,
@@ -1654,15 +1654,12 @@ void ModuleMapParser::parseExternModuleDecl() {
 ///    was never correct and causes issues now that we check it, so drop it.
 static bool shouldAddRequirement(Module *M, StringRef Feature,
                                  bool &IsRequiresExcludedHack) {
-  static const StringRef DarwinCExcluded[] = {"Darwin", "C", "excluded"};
-  static const StringRef TclPrivate[] = {"Tcl", "Private"};
-  static const StringRef IOKitAVC[] = {"IOKit", "avc"};
-
-  if (Feature == "excluded" && (M->fullModuleNameIs(DarwinCExcluded) ||
-                                M->fullModuleNameIs(TclPrivate))) {
+  if (Feature == "excluded" &&
+      (M->fullModuleNameIs({"Darwin", "C", "excluded"}) ||
+       M->fullModuleNameIs({"Tcl", "Private"}))) {
     IsRequiresExcludedHack = true;
     return false;
-  } else if (Feature == "cplusplus" && M->fullModuleNameIs(IOKitAVC)) {
+  } else if (Feature == "cplusplus" && M->fullModuleNameIs({"IOKit", "avc"})) {
     return false;
   }
 
@@ -1880,16 +1877,20 @@ void ModuleMapParser::parseHeaderDecl(MMToken::TokenKind LeadingToken,
       Module::Header H = {RelativePathName.str(), File};
       Map.excludeHeader(ActiveModule, H);
     } else {
-      // If there is a builtin counterpart to this file, add it now as a textual
-      // header, so it can be #include_next'd by the wrapper header, and can
-      // receive macros from the wrapper header.
+      // If there is a builtin counterpart to this file, add it now so it can
+      // wrap the system header.
       if (BuiltinFile) {
         // FIXME: Taking the name from the FileEntry is unstable and can give
         // different results depending on how we've previously named that file
         // in this build.
         Module::Header H = { BuiltinFile->getName(), BuiltinFile };
-        Map.addHeader(ActiveModule, H, ModuleMap::ModuleHeaderRole(
-                                           Role | ModuleMap::TextualHeader));
+        Map.addHeader(ActiveModule, H, Role);
+
+        // If we have both a builtin and system version of the file, the
+        // builtin version may want to inject macros into the system header, so
+        // force the system header to be treated as a textual header in this
+        // case.
+        Role = ModuleMap::ModuleHeaderRole(Role | ModuleMap::TextualHeader);
       }
 
       // Record this header.

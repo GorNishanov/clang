@@ -538,6 +538,11 @@ void CompilerInstance::createSema(TranslationUnitKind TUKind,
                                   CodeCompleteConsumer *CompletionConsumer) {
   TheSema.reset(new Sema(getPreprocessor(), getASTContext(), getASTConsumer(),
                          TUKind, CompletionConsumer));
+  // Attach the external sema source if there is any.
+  if (ExternalSemaSrc) {
+    TheSema->addExternalSource(ExternalSemaSrc.get());
+    ExternalSemaSrc->InitializeSema(*TheSema);
+  }
 }
 
 // Output Files
@@ -955,7 +960,8 @@ static bool compileModuleImpl(CompilerInstance &ImportingInstance,
       std::remove_if(PPOpts.Macros.begin(), PPOpts.Macros.end(),
                      [&HSOpts](const std::pair<std::string, bool> &def) {
         StringRef MacroDef = def.first;
-        return HSOpts.ModulesIgnoreMacros.count(MacroDef.split('=').first) > 0;
+        return HSOpts.ModulesIgnoreMacros.count(
+                   llvm::CachedHashString(MacroDef.split('=').first)) > 0;
       }),
       PPOpts.Macros.end());
 
@@ -1819,3 +1825,8 @@ CompilerInstance::lookupMissingImports(StringRef Name,
   return false;
 }
 void CompilerInstance::resetAndLeakSema() { BuryPointer(takeSema()); }
+
+void CompilerInstance::setExternalSemaSource(
+    IntrusiveRefCntPtr<ExternalSemaSource> ESS) {
+  ExternalSemaSrc = std::move(ESS);
+}

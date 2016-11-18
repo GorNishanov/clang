@@ -4803,10 +4803,21 @@ bool LValueExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
   return Error(E);
 }
 
+
 bool LValueExprEvaluator::VisitVarDecl(const Expr *E, const VarDecl *VD) {
   CallStackFrame *Frame = nullptr;
-  if (VD->hasLocalStorage() && Info.CurrentCall->Index > 1)
-    Frame = Info.CurrentCall;
+  if (VD->hasLocalStorage() && Info.CurrentCall->Index > 1) {
+    // Only if a local variable was declared in the function currently being
+    // evaluated, do we expect to be able to find its value in the current
+    // frame. (Otherwise it was likely declared in an enclosing context and
+    // could either have a valid evaluatable value (for e.g. a constexpr
+    // variable) or be ill-formed (and trigger an appropriate evaluation
+    // diagnostic)).
+    if (Info.CurrentCall->Callee &&
+        Info.CurrentCall->Callee->Equals(VD->getDeclContext())) {
+      Frame = Info.CurrentCall;
+    }
+  }
 
   if (!VD->getType()->isReferenceType()) {
     if (Frame) {
@@ -5062,6 +5073,7 @@ public:
   bool VisitAddrLabelExpr(const AddrLabelExpr *E)
       { return Success(E); }
   bool VisitCallExpr(const CallExpr *E);
+  bool VisitBuiltinCallExpr(const CallExpr *E, unsigned BuiltinOp);
   bool VisitBlockExpr(const BlockExpr *E) {
     if (!E->getBlockDecl()->hasCaptures())
       return Success(E);
@@ -5256,7 +5268,15 @@ bool PointerExprEvaluator::VisitCallExpr(const CallExpr *E) {
   if (IsStringLiteralCall(E))
     return Success(E);
 
-  switch (E->getBuiltinCallee()) {
+  if (unsigned BuiltinOp = E->getBuiltinCallee())
+    return VisitBuiltinCallExpr(E, BuiltinOp);
+
+  return ExprEvaluatorBaseTy::VisitCallExpr(E);
+}
+
+bool PointerExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
+                                                unsigned BuiltinOp) {
+  switch (BuiltinOp) {
   case Builtin::BI__builtin_addressof:
     return EvaluateLValue(E->getArg(0), Result, Info);
   case Builtin::BI__builtin_assume_aligned: {
@@ -5324,6 +5344,65 @@ bool PointerExprEvaluator::VisitCallExpr(const CallExpr *E) {
 
     return true;
   }
+
+  case Builtin::BIstrchr:
+  case Builtin::BImemchr:
+    if (Info.getLangOpts().CPlusPlus11)
+      Info.CCEDiag(E, diag::note_constexpr_invalid_function)
+        << /*isConstexpr*/0 << /*isConstructor*/0
+        << (BuiltinOp == Builtin::BIstrchr ? "'strchr'" : "'memchr'");
+    else
+      Info.CCEDiag(E, diag::note_invalid_subexpr_in_const_expr);
+    // Fall through.
+  case Builtin::BI__builtin_strchr:
+  case Builtin::BI__builtin_memchr: {
+    if (!Visit(E->getArg(0)))
+      return false;
+    APSInt Desired;
+    if (!EvaluateInteger(E->getArg(1), Desired, Info))
+      return false;
+    uint64_t MaxLength = uint64_t(-1);
+    if (BuiltinOp != Builtin::BIstrchr &&
+        BuiltinOp != Builtin::BI__builtin_strchr) {
+      APSInt N;
+      if (!EvaluateInteger(E->getArg(2), N, Info))
+        return false;
+      MaxLength = N.getExtValue();
+    }
+
+    QualType CharTy = Info.Ctx.CharTy;
+    bool IsStrchr = (BuiltinOp != Builtin::BImemchr &&
+                     BuiltinOp != Builtin::BI__builtin_memchr);
+
+    // strchr compares directly to the passed integer, and therefore
+    // always fails if given an int that is not a char.
+    if (IsStrchr &&
+        !APSInt::isSameValue(HandleIntToIntCast(Info, E, CharTy,
+                                                E->getArg(1)->getType(),
+                                                Desired),
+                             Desired))
+      return ZeroInitialization(E);
+
+    // memchr compares by converting both sides to unsigned char. That's also
+    // correct for strchr if we get this far.
+    uint64_t DesiredVal = Desired.trunc(Info.Ctx.getCharWidth()).getZExtValue();
+
+    for (; MaxLength; --MaxLength) {
+      APValue Char;
+      if (!handleLValueToRValueConversion(Info, E, CharTy, Result, Char) ||
+          !Char.isInt())
+        return false;
+      if (Char.getInt().getZExtValue() == DesiredVal)
+        return true;
+      if (IsStrchr && !Char.getInt())
+        break;
+      if (!HandleLValueArrayAdjustment(Info, E, Result, CharTy, 1))
+        return false;
+    }
+    // Not found: return nullptr.
+    return ZeroInitialization(E);
+  }
+
   default:
     return ExprEvaluatorBaseTy::VisitCallExpr(E);
   }
@@ -6282,6 +6361,7 @@ public:
   }
 
   bool VisitCallExpr(const CallExpr *E);
+  bool VisitBuiltinCallExpr(const CallExpr *E, unsigned BuiltinOp);
   bool VisitBinaryOperator(const BinaryOperator *E);
   bool VisitOffsetOfExpr(const OffsetOfExpr *E);
   bool VisitUnaryOperator(const UnaryOperator *E);
@@ -6862,6 +6942,14 @@ bool IntExprEvaluator::TryEvaluateBuiltinObjectSize(const CallExpr *E,
 }
 
 bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
+  if (unsigned BuiltinOp = E->getBuiltinCallee())
+    return VisitBuiltinCallExpr(E, BuiltinOp);
+
+  return ExprEvaluatorBaseTy::VisitCallExpr(E);
+}
+
+bool IntExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
+                                            unsigned BuiltinOp) {
   switch (unsigned BuiltinOp = E->getBuiltinCallee()) {
   default:
     return ExprEvaluatorBaseTy::VisitCallExpr(E);
@@ -7065,7 +7153,7 @@ bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
     }
 
     // Slow path: scan the bytes of the string looking for the terminating 0.
-    QualType CharTy = E->getArg(0)->getType()->getPointeeType();
+    QualType CharTy = Info.Ctx.CharTy;
     for (uint64_t Strlen = 0; /**/; ++Strlen) {
       APValue Char;
       if (!handleLValueToRValueConversion(Info, E, CharTy, String, Char) ||
@@ -7076,6 +7164,56 @@ bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
       if (!HandleLValueArrayAdjustment(Info, E, String, CharTy, 1))
         return false;
     }
+  }
+
+  case Builtin::BIstrcmp:
+  case Builtin::BIstrncmp:
+  case Builtin::BImemcmp:
+    // A call to strlen is not a constant expression.
+    if (Info.getLangOpts().CPlusPlus11)
+      Info.CCEDiag(E, diag::note_constexpr_invalid_function)
+        << /*isConstexpr*/0 << /*isConstructor*/0
+        << (BuiltinOp == Builtin::BIstrncmp ? "'strncmp'" :
+            BuiltinOp == Builtin::BImemcmp ? "'memcmp'" :
+            "'strcmp'");
+    else
+      Info.CCEDiag(E, diag::note_invalid_subexpr_in_const_expr);
+    // Fall through.
+  case Builtin::BI__builtin_strcmp:
+  case Builtin::BI__builtin_strncmp:
+  case Builtin::BI__builtin_memcmp: {
+    LValue String1, String2;
+    if (!EvaluatePointer(E->getArg(0), String1, Info) ||
+        !EvaluatePointer(E->getArg(1), String2, Info))
+      return false;
+    uint64_t MaxLength = uint64_t(-1);
+    if (BuiltinOp != Builtin::BIstrcmp &&
+        BuiltinOp != Builtin::BI__builtin_strcmp) {
+      APSInt N;
+      if (!EvaluateInteger(E->getArg(2), N, Info))
+        return false;
+      MaxLength = N.getExtValue();
+    }
+    bool StopAtNull = (BuiltinOp != Builtin::BImemcmp &&
+                       BuiltinOp != Builtin::BI__builtin_memcmp);
+    QualType CharTy = Info.Ctx.CharTy;
+    for (; MaxLength; --MaxLength) {
+      APValue Char1, Char2;
+      if (!handleLValueToRValueConversion(Info, E, CharTy, String1, Char1) ||
+          !handleLValueToRValueConversion(Info, E, CharTy, String2, Char2) ||
+          !Char1.isInt() || !Char2.isInt())
+        return false;
+      if (Char1.getInt() != Char2.getInt())
+        return Success(Char1.getInt() < Char2.getInt() ? -1 : 1, E);
+      if (StopAtNull && !Char1.getInt())
+        return Success(0, E);
+      assert(!(StopAtNull && !Char2.getInt()));
+      if (!HandleLValueArrayAdjustment(Info, E, String1, CharTy, 1) ||
+          !HandleLValueArrayAdjustment(Info, E, String2, CharTy, 1))
+        return false;
+    }
+    // We hit the strncmp / memcmp limit.
+    return Success(0, E);
   }
 
   case Builtin::BI__atomic_always_lock_free:
@@ -7199,9 +7337,7 @@ class DataRecursiveIntBinOpEvaluator {
     enum { AnyExprKind, BinOpKind, BinOpVisitedLHSKind } Kind;
 
     Job() = default;
-    Job(Job &&J)
-        : E(J.E), LHSResult(J.LHSResult), Kind(J.Kind),
-          SpecEvalRAII(std::move(J.SpecEvalRAII)) {}
+    Job(Job &&) = default;
 
     void startSpeculativeEval(EvalInfo &Info) {
       SpecEvalRAII = SpeculativeEvaluationRAII(Info);

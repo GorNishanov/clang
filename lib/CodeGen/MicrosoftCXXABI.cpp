@@ -284,9 +284,9 @@ public:
   llvm::GlobalVariable *getAddrOfVTable(const CXXRecordDecl *RD,
                                         CharUnits VPtrOffset) override;
 
-  llvm::Value *getVirtualFunctionPointer(CodeGenFunction &CGF, GlobalDecl GD,
-                                         Address This, llvm::Type *Ty,
-                                         SourceLocation Loc) override;
+  CGCallee getVirtualFunctionPointer(CodeGenFunction &CGF, GlobalDecl GD,
+                                     Address This, llvm::Type *Ty,
+                                     SourceLocation Loc) override;
 
   llvm::Value *EmitVirtualDestructorCall(CodeGenFunction &CGF,
                                          const CXXDestructorDecl *Dtor,
@@ -660,7 +660,7 @@ public:
       CastKind CK, CastExpr::path_const_iterator PathBegin,
       CastExpr::path_const_iterator PathEnd, llvm::Constant *Src);
 
-  llvm::Value *
+  CGCallee
   EmitLoadOfMemberFunctionPointer(CodeGenFunction &CGF, const Expr *E,
                                   Address This, llvm::Value *&ThisPtrForCall,
                                   llvm::Value *MemPtr,
@@ -1494,7 +1494,9 @@ void MicrosoftCXXABI::EmitDestructorCall(CodeGenFunction &CGF,
                                          const CXXDestructorDecl *DD,
                                          CXXDtorType Type, bool ForVirtualBase,
                                          bool Delegating, Address This) {
-  llvm::Value *Callee = CGM.getAddrOfCXXStructor(DD, getFromDtorType(Type));
+  CGCallee Callee = CGCallee::forDirect(
+                          CGM.getAddrOfCXXStructor(DD, getFromDtorType(Type)),
+                                        DD);
 
   if (DD->isVirtual()) {
     assert(Type != CXXDtorType::Dtor_Deleting &&
@@ -1760,47 +1762,11 @@ llvm::GlobalVariable *MicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *RD,
   return VTable;
 }
 
-// Compute the identity of the most derived class whose virtual table is located
-// at the given offset into RD.
-static const CXXRecordDecl *getClassAtVTableLocation(ASTContext &Ctx,
-                                                     const CXXRecordDecl *RD,
-                                                     CharUnits Offset) {
-  if (Offset.isZero())
-    return RD;
-
-  const ASTRecordLayout &Layout = Ctx.getASTRecordLayout(RD);
-  const CXXRecordDecl *MaxBase = nullptr;
-  CharUnits MaxBaseOffset;
-  for (auto &&B : RD->bases()) {
-    const CXXRecordDecl *Base = B.getType()->getAsCXXRecordDecl();
-    CharUnits BaseOffset = B.isVirtual() ? Layout.getVBaseClassOffset(Base)
-                                         : Layout.getBaseClassOffset(Base);
-    if (BaseOffset <= Offset && BaseOffset >= MaxBaseOffset) {
-      MaxBase = Base;
-      MaxBaseOffset = BaseOffset;
-    }
-  }
-  assert(MaxBase);
-  return getClassAtVTableLocation(Ctx, MaxBase, Offset - MaxBaseOffset);
-}
-
-// Compute the identity of the most derived class whose virtual table is located
-// at the MethodVFTableLocation ML.
-static const CXXRecordDecl *
-getClassAtVTableLocation(ASTContext &Ctx, GlobalDecl GD,
-                         MicrosoftVTableContext::MethodVFTableLocation &ML) {
-  const CXXRecordDecl *RD = ML.VBase;
-  if (!RD)
-    RD = cast<CXXMethodDecl>(GD.getDecl())->getParent();
-
-  return getClassAtVTableLocation(Ctx, RD, ML.VFPtrOffset);
-}
-
-llvm::Value *MicrosoftCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
-                                                        GlobalDecl GD,
-                                                        Address This,
-                                                        llvm::Type *Ty,
-                                                        SourceLocation Loc) {
+CGCallee MicrosoftCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
+                                                    GlobalDecl GD,
+                                                    Address This,
+                                                    llvm::Type *Ty,
+                                                    SourceLocation Loc) {
   GD = GD.getCanonicalDecl();
   CGBuilderTy &Builder = CGF.Builder;
 
@@ -1811,22 +1777,38 @@ llvm::Value *MicrosoftCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
   auto *MethodDecl = cast<CXXMethodDecl>(GD.getDecl());
   llvm::Value *VTable = CGF.GetVTablePtr(VPtr, Ty, MethodDecl->getParent());
 
+  MicrosoftVTableContext &VFTContext = CGM.getMicrosoftVTableContext();
   MicrosoftVTableContext::MethodVFTableLocation ML =
-      CGM.getMicrosoftVTableContext().getMethodVFTableLocation(GD);
+      VFTContext.getMethodVFTableLocation(GD);
 
+  // Compute the identity of the most derived class whose virtual table is
+  // located at the MethodVFTableLocation ML.
+  auto getObjectWithVPtr = [&] {
+    return llvm::find_if(VFTContext.getVFPtrOffsets(
+                             ML.VBase ? ML.VBase : MethodDecl->getParent()),
+                         [&](const std::unique_ptr<VPtrInfo> &Info) {
+                           return Info->FullOffsetInMDC == ML.VFPtrOffset;
+                         })
+        ->get()
+        ->ObjectWithVPtr;
+  };
+
+  llvm::Value *VFunc;
   if (CGF.ShouldEmitVTableTypeCheckedLoad(MethodDecl->getParent())) {
-    return CGF.EmitVTableTypeCheckedLoad(
-        getClassAtVTableLocation(getContext(), GD, ML), VTable,
+    VFunc = CGF.EmitVTableTypeCheckedLoad(
+        getObjectWithVPtr(), VTable,
         ML.Index * CGM.getContext().getTargetInfo().getPointerWidth(0) / 8);
   } else {
     if (CGM.getCodeGenOpts().PrepareForLTO)
-      CGF.EmitTypeMetadataCodeForVCall(
-          getClassAtVTableLocation(getContext(), GD, ML), VTable, Loc);
+      CGF.EmitTypeMetadataCodeForVCall(getObjectWithVPtr(), VTable, Loc);
 
     llvm::Value *VFuncPtr =
         Builder.CreateConstInBoundsGEP1_64(VTable, ML.Index, "vfn");
-    return Builder.CreateAlignedLoad(VFuncPtr, CGF.getPointerAlign());
+    VFunc = Builder.CreateAlignedLoad(VFuncPtr, CGF.getPointerAlign());
   }
+
+  CGCallee Callee(MethodDecl, VFunc);
+  return Callee;
 }
 
 llvm::Value *MicrosoftCXXABI::EmitVirtualDestructorCall(
@@ -1841,7 +1823,7 @@ llvm::Value *MicrosoftCXXABI::EmitVirtualDestructorCall(
   const CGFunctionInfo *FInfo = &CGM.getTypes().arrangeCXXStructorDeclaration(
       Dtor, StructorType::Deleting);
   llvm::Type *Ty = CGF.CGM.getTypes().GetFunctionType(*FInfo);
-  llvm::Value *Callee = getVirtualFunctionPointer(
+  CGCallee Callee = getVirtualFunctionPointer(
       CGF, GD, This, Ty, CE ? CE->getLocStart() : SourceLocation());
 
   ASTContext &Context = getContext();
@@ -3231,7 +3213,7 @@ llvm::Constant *MicrosoftCXXABI::EmitMemberPointerConversion(
   return Dst;
 }
 
-llvm::Value *MicrosoftCXXABI::EmitLoadOfMemberFunctionPointer(
+CGCallee MicrosoftCXXABI::EmitLoadOfMemberFunctionPointer(
     CodeGenFunction &CGF, const Expr *E, Address This,
     llvm::Value *&ThisPtrForCall, llvm::Value *MemPtr,
     const MemberPointerType *MPT) {
@@ -3278,7 +3260,10 @@ llvm::Value *MicrosoftCXXABI::EmitLoadOfMemberFunctionPointer(
                                            "this.adjusted");
   }
 
-  return Builder.CreateBitCast(FunctionPointer, FTy->getPointerTo());
+  FunctionPointer =
+    Builder.CreateBitCast(FunctionPointer, FTy->getPointerTo());
+  CGCallee Callee(FPT, FunctionPointer);
+  return Callee;
 }
 
 CGCXXABI *clang::CodeGen::CreateMicrosoftCXXABI(CodeGenModule &CGM) {
@@ -3855,8 +3840,11 @@ MicrosoftCXXABI::getAddrOfCXXCtorClosure(const CXXConstructorDecl *CD,
     FunctionArgs.push_back(&IsMostDerived);
 
   // Start defining the function.
+  auto NL = ApplyDebugLocation::CreateEmpty(CGF);
   CGF.StartFunction(GlobalDecl(), FnInfo.getReturnType(), ThunkFn, FnInfo,
                     FunctionArgs, CD->getLocation(), SourceLocation());
+  // Create a scope with an artificial location for the body of this function.
+  auto AL = ApplyDebugLocation::CreateArtificial(CGF);
   EmitThisParam(CGF);
   llvm::Value *This = getThisValue(CGF);
 
@@ -3892,10 +3880,12 @@ MicrosoftCXXABI::getAddrOfCXXCtorClosure(const CXXConstructorDecl *CD,
                                                   /*Delegating=*/false, Args);
 
   // Call the destructor with our arguments.
-  llvm::Value *CalleeFn = CGM.getAddrOfCXXStructor(CD, StructorType::Complete);
+  llvm::Constant *CalleePtr =
+    CGM.getAddrOfCXXStructor(CD, StructorType::Complete);
+  CGCallee Callee = CGCallee::forDirect(CalleePtr, CD);
   const CGFunctionInfo &CalleeInfo = CGM.getTypes().arrangeCXXConstructorCall(
       Args, CD, Ctor_Complete, ExtraArgs);
-  CGF.EmitCall(CalleeInfo, CalleeFn, ReturnValueSlot(), Args, CD);
+  CGF.EmitCall(CalleeInfo, Callee, ReturnValueSlot(), Args);
 
   Cleanups.ForceCleanup();
 

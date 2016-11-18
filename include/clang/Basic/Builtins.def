@@ -512,6 +512,7 @@ BUILTIN(__builtin_unreachable, "v", "nr")
 BUILTIN(__builtin_shufflevector, "v."   , "nc")
 BUILTIN(__builtin_convertvector, "v."   , "nct")
 BUILTIN(__builtin_alloca, "v*z"   , "Fn")
+BUILTIN(__builtin_alloca_with_align, "v*zIz", "Fn")
 BUILTIN(__builtin_call_with_static_chain, "v.", "nt")
 
 // "Overloaded" Atomic operator builtins.  These are overloaded to support data
@@ -1383,6 +1384,10 @@ LANGBUILTIN(get_kernel_preferred_work_group_size_multiple, "i.", "tn", OCLC20_LA
 LANGBUILTIN(to_global, "v*v*", "tn", OCLC20_LANG)
 LANGBUILTIN(to_local, "v*v*", "tn", OCLC20_LANG)
 LANGBUILTIN(to_private, "v*v*", "tn", OCLC20_LANG)
+
+// Builtins for os_log/os_trace
+BUILTIN(__builtin_os_log_format_buffer_size, "zcC*.", "p:0:nut")
+BUILTIN(__builtin_os_log_format, "v*v*cC*.", "p:0:nt")
 
 #undef BUILTIN
 #undef LIBBUILTIN
