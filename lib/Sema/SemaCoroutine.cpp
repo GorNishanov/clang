@@ -214,6 +214,7 @@ static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID Id,
   return Call.get();
 }
 
+#if 0
 static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID id,
                               MutableArrayRef<Expr *> CallArgs) {
   StringRef Name = S.Context.BuiltinInfo.getName(id);
@@ -234,6 +235,7 @@ static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID id,
   assert(!Call.isInvalid() && "Call to builtin cannot fail!");
   return Call.get();
 }
+#endif
 
 /// Build a call to 'operator co_await' if there is a suitable operator for
 /// the given expression.
