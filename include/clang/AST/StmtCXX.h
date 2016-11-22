@@ -322,20 +322,18 @@ class CoroutineBodyStmt : public Stmt {
 
   CoroutineBodyStmt(Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
                     Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
-                    Expr *Allocate, Expr *Deallocate, Stmt *ResultDecl,
+                    Expr *Allocate, Stmt *Deallocate, Stmt *ResultDecl,
                     Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
 
 public:
   static CoroutineBodyStmt *
   Create(const ASTContext &C, Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-                    Expr *Allocate, Stmt *Deallocate,
-         Expr *Allocate, Expr *Deallocate, Stmt *ResultDecl,
-         Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
+         Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
+         Expr *Allocate, Stmt *Deallocate, Stmt *ResultDecl, Stmt *ReturnStmt,
+         ArrayRef<Stmt *> ParamMoves);
 
   ArrayRef<Stmt const *> getParamMoves() const {
-    return{ getStoredParams(), NumParams };
-    SubStmts[CoroutineBodyStmt::Allocate] = Allocate;
-    SubStmts[CoroutineBodyStmt::Deallocate] = Deallocate;
+    return {getStoredParams(), NumParams};
   }
 
   /// \brief Retrieve the body of the coroutine as written. This will be either
