@@ -100,6 +100,64 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
   return PromiseType;
 }
 
+static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S,
+                                                   SourceLocation Loc) {
+  // FIXME: Cache std::coroutine_handle once we've found it.
+  NamespaceDecl *Std = S.lookupStdExperimentalNamespace();
+  if (!Std) {
+    S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
+    return nullptr;
+  }
+
+  LookupResult Result(S, &S.PP.getIdentifierTable().get("coroutine_handle"),
+    Loc, Sema::LookupOrdinaryName);
+  if (!S.LookupQualifiedName(Result, Std)) {
+    S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
+    return nullptr;
+  }
+  ClassTemplateDecl *Template = Result.getAsSingle<ClassTemplateDecl>();
+  if (!Template) {
+    Result.suppressDiagnostics();
+    // We found something weird. Complain about the first thing we found.
+    NamedDecl *Found = *Result.begin();
+    S.Diag(Found->getLocation(), diag::err_malformed_std_coroutine_handle);
+    return nullptr;
+  }
+
+  // We found some template called std::coroutine_handle. Now verify that it's
+  // correct.
+  TemplateParameterList *Params = Template->getTemplateParameters();
+  if (Params->getMinRequiredArguments() > 1 ||
+    !isa<TemplateTypeParmDecl>(Params->getParam(0))) {
+    S.Diag(Template->getLocation(), diag::err_malformed_std_coroutine_handle);
+    return nullptr;
+  }
+
+  return Template;
+}
+
+static QualType buildStdCoroutineHandle(Sema &S, QualType Element,
+                                        SourceLocation Loc) {
+  // FIXME: Cache std::coroutine_handle once we've found it.
+  /*
+  if (!StdCoroutineHandle) {
+  StdCoroutineHandle = lookupStdCoroutineHandle(*this, Loc);
+  if (!StdCoroutineHandle)
+  return QualType();
+  }
+  */
+  ClassTemplateDecl *StdCoroutineHandle = lookupStdCoroutineHandle(S, Loc);
+  if (!StdCoroutineHandle)
+    return QualType();
+
+  TemplateArgumentListInfo Args(Loc, Loc);
+  Args.addArgument(TemplateArgumentLoc(TemplateArgument(Element),
+    S.Context.getTrivialTypeSourceInfo(Element,
+      Loc)));
+  return S.Context.getCanonicalType(
+    S.CheckTemplateIdType(TemplateName(StdCoroutineHandle), Loc, Args));
+}
+
 static bool isValidCoroutineContext(Sema &S, SourceLocation Loc,
                                     StringRef Keyword) {
   // 'co_await' and 'co_yield' are not permitted in unevaluated operands.
@@ -213,29 +271,6 @@ static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID Id,
   assert(!Call.isInvalid() && "Call to builtin cannot fail!");
   return Call.get();
 }
-
-#if 0
-static Expr *buildBuiltinCall(Sema &S, SourceLocation Loc, Builtin::ID id,
-                              MutableArrayRef<Expr *> CallArgs) {
-  StringRef Name = S.Context.BuiltinInfo.getName(id);
-  LookupResult R(S, &S.Context.Idents.get(Name), Loc, Sema::LookupOrdinaryName);
-  S.LookupName(R, S.TUScope, true);
-
-  FunctionDecl *BuiltInDecl = R.getAsSingle<FunctionDecl>();
-  assert(BuiltInDecl && "failed to find builtin declaration");
-
-  ExprResult DeclRef = S.BuildDeclRefExpr(BuiltInDecl, BuiltInDecl->getType(),
-                                          // S.Context.BuiltinFnTy,
-                                          VK_RValue, Loc, nullptr);
-  assert(DeclRef.isUsable() && "Builtin reference cannot fail");
-
-  ExprResult Call =
-      S.ActOnCallExpr(/*Scope=*/nullptr, DeclRef.get(), Loc, CallArgs, Loc);
-
-  assert(!Call.isInvalid() && "Call to builtin cannot fail!");
-  return Call.get();
-}
-#endif
 
 /// Build a call to 'operator co_await' if there is a suitable operator for
 /// the given expression.
@@ -633,7 +668,7 @@ static bool buildAllocationAndDeallocation(Sema &S, SourceLocation Loc,
   return true;
 }
 
-
+namespace {
 struct RewriteParams : TreeTransform<RewriteParams> {
   typedef TreeTransform<RewriteParams> BaseTransform;
 
@@ -657,34 +692,6 @@ struct RewriteParams : TreeTransform<RewriteParams> {
     return BaseTransform::TransformDeclRefExpr(E);
   }
 };
-}
-
-static ExprResult buildStdCurrentExceptionCall(Sema &S, SourceLocation Loc) {
-  NamespaceDecl *Std = S.getStdNamespace();
-  if (!Std) {
-    S.Diag(Loc, diag::err_implied_std_current_exception_not_found);
-    return ExprError();
-  }
-  LookupResult Result(S, &S.PP.getIdentifierTable().get("current_exception"),
-    Loc, Sema::LookupOrdinaryName);
-  if (!S.LookupQualifiedName(Result, Std)) {
-    S.Diag(Loc, diag::err_implied_std_current_exception_not_found);
-    return ExprError();
-  }
-
-  // FIXME The STL is free to provide more than one overload.
-  FunctionDecl *FD = Result.getAsSingle<FunctionDecl>();
-  if (!FD) {
-    S.Diag(Loc, diag::err_malformed_std_current_exception);
-    return ExprError();
-  }
-  ExprResult Res = S.BuildDeclRefExpr(FD, FD->getType(), VK_LValue, Loc);
-  Res = S.ActOnCallExpr(/*Scope*/ nullptr, Res.get(), Loc, None, Loc);
-  if (Res.isInvalid()) {
-    S.Diag(Loc, diag::err_malformed_std_current_exception);
-    return ExprError();
-  }
-  return Res;
 }
 
 namespace {
@@ -797,64 +804,14 @@ public:
     if (FinalSuspend.isInvalid())
       return false;
 
-  // Form and check allocation and deallocation calls.
-  Expr *Allocation = nullptr;
-  Stmt *Deallocation = nullptr;
-  if (!buildAllocationAndDeallocation(*this, Loc, Fn, Allocation, Deallocation))
-    return FD->setInvalidDecl();
-
-    // If exceptions are disabled, don't try to build OnException.
-  // Also try to form 'p.set_exception(std::current_exception());' to handle
-  // uncaught exceptions.
-  ExprResult SetException;
-  StmtResult Fallthrough;
-  if (Fn->CoroutinePromise &&
-      !Fn->CoroutinePromise->getType()->isDependentType()) {
-    CXXRecordDecl *RD = Fn->CoroutinePromise->getType()->getAsCXXRecordDecl();
-    assert(RD && "Type should have already been checked");
-    // [dcl.fct.def.coroutine]/4
-    // The unqualified-ids 'return_void' and 'return_value' are looked up in
-    // the scope of class P. If both are found, the program is ill-formed.
-    DeclarationName RVoidDN = PP.getIdentifierInfo("return_void");
-    LookupResult RVoidResult(*this, RVoidDN, Loc, Sema::LookupMemberName);
-    const bool HasRVoid = LookupQualifiedName(RVoidResult, RD);
-
-    DeclarationName RValueDN = PP.getIdentifierInfo("return_value");
-    LookupResult RValueResult(*this, RValueDN, Loc, Sema::LookupMemberName);
-    const bool HasRValue = LookupQualifiedName(RValueResult, RD);
-
-    if (HasRVoid && HasRValue) {
-      // FIXME Improve this diagnostic
-      Diag(FD->getLocation(), diag::err_coroutine_promise_return_ill_formed)
-          << RD;
-      return FD->setInvalidDecl();
-    } else if (HasRVoid) {
-      // If the unqualified-id return_void is found, flowing off the end of a
-      // coroutine is equivalent to a co_return with no operand. Otherwise,
-      // flowing off the end of a coroutine results in undefined behavior.
-      Fallthrough = BuildCoreturnStmt(FD->getLocation(), nullptr);
-      Fallthrough = ActOnFinishFullStmt(Fallthrough.get());
-      if (Fallthrough.isInvalid())
-        return FD->setInvalidDecl();
-    }
-
-    // [dcl.fct.def.coroutine]/3
-    // The unqualified-id set_exception is found in the scope of P by class
-    // member access lookup (3.4.5).
-    DeclarationName SetExDN = PP.getIdentifierInfo("set_exception");
-    LookupResult SetExResult(*this, SetExDN, Loc, Sema::LookupMemberName);
-    if (LookupQualifiedName(SetExResult, RD)) {
-      // Form the call 'p.set_exception(std::current_exception())'
-      SetException = buildStdCurrentExceptionCall(*this, Loc);
-      if (SetException.isInvalid())
-        return FD->setInvalidDecl();
-      Expr *E = SetException.get();
-      SetException = buildPromiseCall(*this, Fn, Loc, "set_exception", E);
-      SetException = ActOnFinishFullExpr(SetException.get(), Loc);
-      if (SetException.isInvalid())
-        return FD->setInvalidDecl();
-    }
+    this->FinalSuspend = FinalSuspend.get();
+    return true;
   }
+
+  bool makeOnException() {
+    // If exceptions are disabled, don't try to build OnException.
+    if (!S.getLangOpts().CXXExceptions)
+      return true;
 
     if (!Fn.CoroutinePromise ||
       Fn.CoroutinePromise->getType()->isDependentType())
@@ -989,7 +946,7 @@ public:
 
   bool makeResultDecl() {
     ExprResult ReturnObject =
-      buildPromiseCall(*this, Fn, Loc, "get_return_object", None);
+      buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
     if (ReturnObject.isInvalid())
       return false;
 

@@ -352,6 +352,7 @@ public:
     return SubStmts[SubStmt::OnFallthrough];
   }
   Stmt *getResultDecl() const { return SubStmts[SubStmt::ResultDecl]; }
+  Stmt *getReturnStmt() const { return SubStmts[SubStmt::ReturnStmt]; }
   Expr *getAllocate() const { return cast<Expr>(SubStmts[SubStmt::Allocate]); }
   Stmt *getDeallocate() const { return SubStmts[SubStmt::Deallocate]; }
 

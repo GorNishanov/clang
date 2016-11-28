@@ -96,7 +96,6 @@ static void createCoroData(CodeGenFunction &CGF,
   CurCoro.Data->CoroId = CoroId;
   CurCoro.Data->CoroIdExpr = CoroIdExpr;
 }
-}
 
 bool CodeGenFunction::isCoroutine() const { return CurCoro.Data != nullptr; }
 
@@ -427,10 +426,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *InitBB = createBasicBlock("coro.init");
   auto *RetBB = createBasicBlock("coro.ret");
 
-  if (!createCoroData(*this, CurCoro, CoroId, nullptr)) {
-    // User inserted __builtin_coro_id by hand. Should not try to emit anything.
-    return;
-  }
+  createCoroData(*this, CurCoro, CoroId);
   CurCoro.Data->SuspendBB = RetBB;
 
   Builder.CreateCondBr(CoroAlloc, AllocBB, InitBB);
