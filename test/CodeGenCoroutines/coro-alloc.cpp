@@ -4,12 +4,17 @@ namespace std {
 namespace experimental {
 template <typename... T>
 struct coroutine_traits; // expected-note {{declared here}}
+template <typename Promise>
+struct coroutine_handle{
+  static coroutine_handle from_address(void *addr) noexcept;  
+};
 }
 }
 
 struct suspend_always {
   bool await_ready() { return false; }
-  void await_suspend() {}
+  template <typename F>
+  void await_suspend(F) {}
   void await_resume() {}
 };
 

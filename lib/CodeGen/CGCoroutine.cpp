@@ -426,12 +426,18 @@ struct GetReturnObjectManager {
         GroEmission(CodeGenFunction::AutoVarEmission::invalid()) {}
 
   void EmitGroAlloca() {
+    auto *GroDeclStmt = dyn_cast<DeclStmt>(S.getResultDecl());
+    if (!GroDeclStmt) {
+      // If get_return_object returns void, no need to do an alloca.
+      return;
+    }
+
+    auto *GroVarDecl = cast<VarDecl>(GroDeclStmt->getSingleDecl());
+
+    // Set GRO flag that it is not initialized yet
     GroActiveFlag =
       CGF.CreateTempAlloca(Builder.getInt1Ty(), CharUnits::One(), "gro.active");
-    // Set GRO flag that it is not initialized yet
     Builder.CreateStore(Builder.getFalse(), GroActiveFlag);
-    auto *GroDeclStmt = cast<DeclStmt>(S.getResultDecl());
-    auto *GroVarDecl = cast<VarDecl>(GroDeclStmt->getSingleDecl());
 
     GroEmission = CGF.EmitAutoVarAlloca(*GroVarDecl);
     CGF.EmitAutoVarCleanups(GroEmission);
@@ -445,6 +451,13 @@ struct GetReturnObjectManager {
   }
 
   void EmitGroInit() {
+    if (!GroActiveFlag.isValid()) {
+      // No Gro variable was allocated. Simply emit the call to
+      // get_return_object.
+      CGF.EmitStmt(S.getResultDecl());
+      return;
+    }
+
     CGF.EmitAutoVarInit(GroEmission);
     Builder.CreateStore(Builder.getTrue(), GroActiveFlag);
   }
@@ -542,7 +555,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
   Builder.CreateCall(CoroEnd, {NullPtr, Builder.getInt1(0)});
 
-  EmitStmt(S.getReturnStmt());
+  if (auto RetStmt = S.getReturnStmt())
+    EmitStmt(RetStmt);
 
   runHorribleHackToFixupCleanupBlocks(*CurFn);
 }
