@@ -25,6 +25,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 
+// TODO: Improve diagnostic when await_suspend takes no arguments.
+
 using namespace clang;
 using namespace CodeGen;
 
@@ -410,6 +412,45 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
 };
 }
 
+namespace {
+struct GetReturnObjectManager {
+  CodeGenFunction &CGF;
+  CGBuilderTy &Builder;
+  const CoroutineBodyStmt &S;
+
+  Address GroActiveFlag;
+  CodeGenFunction::AutoVarEmission GroEmission;
+
+  GetReturnObjectManager(CodeGenFunction &CGF, const CoroutineBodyStmt &S)
+      : CGF(CGF), Builder(CGF.Builder), S(S), GroActiveFlag(Address::invalid()),
+        GroEmission(CodeGenFunction::AutoVarEmission::invalid()) {}
+
+  void EmitGroAlloca() {
+    GroActiveFlag =
+      CGF.CreateTempAlloca(Builder.getInt1Ty(), CharUnits::One(), "gro.active");
+    // Set GRO flag that it is not initialized yet
+    Builder.CreateStore(Builder.getFalse(), GroActiveFlag);
+    auto *GroDeclStmt = cast<DeclStmt>(S.getResultDecl());
+    auto *GroVarDecl = cast<VarDecl>(GroDeclStmt->getSingleDecl());
+
+    GroEmission = CGF.EmitAutoVarAlloca(*GroVarDecl);
+    CGF.EmitAutoVarCleanups(GroEmission);
+
+    if (auto *Cleanup = dyn_cast_or_null<EHCleanupScope>(&*CGF.EHStack.begin())) {
+      assert(!Cleanup->hasActiveFlag() && "cleanup already has active flag?");
+      Cleanup->setActiveFlag(GroActiveFlag);
+      Cleanup->setTestFlagInEHCleanup();
+      Cleanup->setTestFlagInNormalCleanup();
+    }
+  }
+
+  void EmitGroInit() {
+    CGF.EmitAutoVarInit(GroEmission);
+    Builder.CreateStore(Builder.getTrue(), GroActiveFlag);
+  }
+};
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
 
@@ -445,22 +486,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *CoroBegin = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_begin), {CoroId, Phi});
 
-  Address GroActiveFlag =
-      CreateTempAlloca(Builder.getInt1Ty(), CharUnits::One(), "gro.active");
-
-  // Set GRO flag that it is not initialized yet
-  Builder.CreateStore(Builder.getFalse(), GroActiveFlag);
-  auto *GroDeclStmt = cast<DeclStmt>(S.getResultDecl());
-  auto *GroVarDecl = cast<VarDecl>(GroDeclStmt->getSingleDecl());
-  AutoVarEmission GroEmission = EmitAutoVarAlloca(*GroVarDecl);
-  EmitAutoVarCleanups(GroEmission);
-
-  if (auto *Cleanup = dyn_cast_or_null<EHCleanupScope>(&*EHStack.begin())) {
-    assert(!Cleanup->hasActiveFlag() && "cleanup already has active flag?");
-    Cleanup->setActiveFlag(GroActiveFlag);
-    Cleanup->setTestFlagInEHCleanup();
-    Cleanup->setTestFlagInNormalCleanup();
-  }
+  GetReturnObjectManager GroManager(*this, S);
+  GroManager.EmitGroAlloca();
 
   CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(RetBB);
 
@@ -480,8 +507,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     CoroId->setArgOperand(1, PromiseAddrVoidPtr);
 
     // Now we have the promise, initialize the GRO
-    EmitAutoVarInit(GroEmission);
-    Builder.CreateStore(Builder.getTrue(), GroActiveFlag);
+    GroManager.EmitGroInit();
 
     for (auto PM : S.getParamMoves()) {
       EmitStmt(PM);
