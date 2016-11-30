@@ -466,11 +466,13 @@ struct GetReturnObjectManager {
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
+  auto &TI = CGM.getContext().getTargetInfo();
+  unsigned NewAlign = TI.getNewAlign() / TI.getCharWidth();
 
-  // FIXME: Instead of 0, pass an equivalent of alignas(maxalign_t).
-  auto *CoroId =
-      Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::coro_id),
-                         {Builder.getInt32(0), NullPtr, NullPtr, NullPtr});
+  auto *CoroId = Builder.CreateCall(
+      CGM.getIntrinsic(llvm::Intrinsic::coro_id),
+      {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
+
   auto *CoroAlloc = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_alloc), {CoroId});
 
