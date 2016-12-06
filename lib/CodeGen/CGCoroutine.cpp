@@ -66,6 +66,8 @@ struct CGCoroData {
   // Note: llvm.coro.id returns a token that cannot be directly expressed in a
   // builtin.
   llvm::CallInst *CoroId = nullptr;
+  llvm::CallInst *CoroBegin = nullptr;
+  llvm::CallInst *LastCoroFree = nullptr;
   // If coro.id came from the builtin, remember the expression to give better
   // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
   // EmitCoroutineBody.
@@ -392,20 +394,32 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
 
   // Emit "if (coro.free(CoroId, CoroBegin)) Deallocate;"
   void Emit(CodeGenFunction &CGF, Flags flags) override {
-    auto &CGM = CGF.CGM;
-    auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
-    llvm::Function *CoroFreeFn = CGM.getIntrinsic(llvm::Intrinsic::coro_free);
-    auto *CoroFree = CGF.Builder.CreateCall(CoroFreeFn, {CoroId, CoroBegin});
-    auto *Cond = CGF.Builder.CreateICmpNE(CoroFree, NullPtr);
+    // Remember the current point, as we are going to emit deallocation code
+    // first to get to coro.free instruction that is an argument to a delete
+    // call.
+    BasicBlock *SaveInsertBlock = CGF.Builder.GetInsertBlock();
 
     auto *AfterFreeBB = CGF.createBasicBlock("after.coro.free");
     auto *FreeBB = CGF.createBasicBlock("coro.free");
-    CGF.Builder.CreateCondBr(Cond, FreeBB, AfterFreeBB);
 
     CGF.EmitBlock(FreeBB);
     CGF.EmitStmt(Deallocate);
-
     CGF.EmitBlock(AfterFreeBB);
+
+    auto *CoroFree = CGF.CurCoro.Data->LastCoroFree;
+    if (!CoroFree)
+      return;
+
+    auto *InsertPt = SaveInsertBlock->getTerminator();
+    CoroFree->moveBefore(InsertPt);
+    CGF.Builder.SetInsertPoint(InsertPt);
+
+    auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
+    auto *Cond = CGF.Builder.CreateICmpNE(CoroFree, NullPtr);
+    CGF.Builder.CreateCondBr(Cond, FreeBB, AfterFreeBB);
+
+    InsertPt->eraseFromParent();
+    CGF.Builder.SetInsertPoint(AfterFreeBB);
   }
   CallCoroDelete(llvm::Value *CoroId, llvm::Value *CoroBegin, Stmt *S)
       : CoroId(CoroId), CoroBegin(CoroBegin), Deallocate(S) {}
@@ -500,6 +514,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   auto *CoroBegin = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_begin), {CoroId, Phi});
+  CurCoro.Data->CoroBegin = CoroBegin;
 
   GetReturnObjectManager GroManager(*this, S);
   GroManager.EmitGroAlloca();
@@ -570,6 +585,17 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   switch (IID) {
   default:
     break;
+  // The coro.frame builtin is replaced with a SSA value of the coro.begin
+  // intrinsic.
+  case llvm::Intrinsic::coro_frame: {
+    if (CurCoro.Data && CurCoro.Data->CoroBegin) {
+      return RValue::get(CurCoro.Data->CoroBegin);
+    }
+    CGM.Error(E->getLocStart(), "this builtin expect that __builtin_coro_begin "
+      "has been used earlier in this function");
+    auto NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
+    return RValue::get(NullPtr);
+  }
   // The following three intrinsics take a token parameter referring to a token
   // returned by earlier call to @llvm.coro.id. Since we cannot represent it in
   // builtins, we patch it up here.
@@ -600,6 +626,12 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   // coro.alloc, coro.begin and coro.free intrinsics to refer to it.
   if (IID == llvm::Intrinsic::coro_id) {
     createCoroData(*this, CurCoro, Call, E);
+  }
+  else if (IID == llvm::Intrinsic::coro_free) {
+    // Remember the last coro_free as we need it to build the conditional
+    // deletion of the coroutine frame.
+    if (CurCoro.Data)
+      CurCoro.Data->LastCoroFree = Call;
   }
   return RValue::get(Call);
 }
