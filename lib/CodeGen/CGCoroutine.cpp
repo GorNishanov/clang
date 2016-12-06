@@ -627,6 +627,10 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   if (IID == llvm::Intrinsic::coro_id) {
     createCoroData(*this, CurCoro, Call, E);
   }
+  else if (IID == llvm::Intrinsic::coro_begin) {
+    if (CurCoro.Data)
+      CurCoro.Data->CoroBegin = Call;
+  }
   else if (IID == llvm::Intrinsic::coro_free) {
     // Remember the last coro_free as we need it to build the conditional
     // deletion of the coroutine frame.

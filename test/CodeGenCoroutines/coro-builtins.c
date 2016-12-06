@@ -22,28 +22,22 @@ void f(int n) {
   // CHECK-NEXT: %[[BEG:.+]] = call i8* @llvm.coro.begin(token %[[COROID]], i8* %[[MEM]])
   __builtin_coro_begin(myAlloc(__builtin_coro_size()));
 
-  // CHECK-NEXT: %[[FRAME1:.+]] = call i8* @llvm.coro.frame() 
-  // CHECK-NEXT: call void @llvm.coro.resume(i8* %[[FRAME1]])
+  // CHECK-NEXT: call void @llvm.coro.resume(i8* %[[BEG]])
   __builtin_coro_resume(__builtin_coro_frame());
 
-  // CHECK-NEXT: %[[FRAME2:.+]] = call i8* @llvm.coro.frame() 
-  // CHECK-NEXT: call void @llvm.coro.destroy(i8* %[[FRAME2]])
+  // CHECK-NEXT: call void @llvm.coro.destroy(i8* %[[BEG]])
   __builtin_coro_destroy(__builtin_coro_frame());
 
-  // CHECK-NEXT: %[[FRAME3:.+]] = call i8* @llvm.coro.frame() 
-  // CHECK-NEXT: call i1 @llvm.coro.done(i8* %[[FRAME3]])
+  // CHECK-NEXT: call i1 @llvm.coro.done(i8* %[[BEG]])
   __builtin_coro_done(__builtin_coro_frame());
 
-  // CHECK-NEXT: %[[FRAME4:.+]] = call i8* @llvm.coro.frame() 
-  // CHECK-NEXT: call i8* @llvm.coro.promise(i8* %[[FRAME4]], i32 48, i1 false)
+  // CHECK-NEXT: call i8* @llvm.coro.promise(i8* %[[BEG]], i32 48, i1 false)
   __builtin_coro_promise(__builtin_coro_frame(), 48, 0);
 
-  // CHECK-NEXT: %[[FRAME5:.+]] = call i8* @llvm.coro.frame() 
-  // CHECK-NEXT: call i8* @llvm.coro.free(token %[[COROID]], i8* %[[FRAME5]])
+  // CHECK-NEXT: call i8* @llvm.coro.free(token %[[COROID]], i8* %[[BEG]])
   __builtin_coro_free(__builtin_coro_frame());
 
-  // CHECK-NEXT: %[[FRAME6:.+]] = call i8* @llvm.coro.frame() 
-  // CHECK-NEXT: call i1 @llvm.coro.end(i8* %[[FRAME6]], i1 false)
+  // CHECK-NEXT: call i1 @llvm.coro.end(i8* %[[BEG]], i1 false)
   __builtin_coro_end(__builtin_coro_frame(), 0);
 
   // CHECK-NEXT: call i8 @llvm.coro.suspend(token none, i1 true)
