@@ -284,6 +284,7 @@ static ExprResult buildOperatorCoawaitCall(Sema &SemaRef, Scope *S,
 
 struct ReadySuspendResumeResult {
   bool IsInvalid;
+  OpaqueValueExpr *OpaqueValue;
   Expr *Results[3];
 };
 
@@ -313,11 +314,12 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
   ReadySuspendResumeResult Calls = {true, {}};
   const size_t AwaitSuspendIndex = 1;
 
+  OpaqueValueExpr *Operand = new (S.Context)
+      OpaqueValueExpr(Loc, E->getType(), VK_LValue, E->getObjectKind(), E);
+  Calls.OpaqueValue = Operand;
+
   const StringRef Funcs[] = {"await_ready", "await_suspend", "await_resume"};
   for (size_t I = 0, N = llvm::array_lengthof(Funcs); I != N; ++I) {
-    Expr *Operand = new (S.Context) OpaqueValueExpr(Loc, E->getType(),
-                                                    VK_LValue,
-                                                    E->getObjectKind(), E);
     ExprResult Result;
     if (I == AwaitSuspendIndex) {
       QualType PromiseType = CoroutinePromise->getType();
@@ -353,6 +355,8 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
 
         if (Result.isInvalid())
           return Calls;
+
+        Result = ExprResult(S.MakeFullExpr(Result.get()).get());
       }
     } else {
       Result = buildMemberCall(S, Operand, Loc, Funcs[I], {});
@@ -401,10 +405,12 @@ ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
     return Res;
   }
 
+#if 0
   // If the expression is a temporary, materialize it as an lvalue so that we
   // can use it multiple times.
   if (E->getValueKind() == VK_RValue)
     E = CreateMaterializeTemporaryExpr(E->getType(), E, true);
+#endif
 
   // Build the await_ready, await_suspend, await_resume calls.
   ReadySuspendResumeResult RSS =
@@ -412,8 +418,8 @@ ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
   if (RSS.IsInvalid)
     return ExprError();
 
-  Expr *Res = new (Context) CoawaitExpr(Loc, E, RSS.Results[0], RSS.Results[1],
-                                        RSS.Results[2]);
+  Expr *Res = new (Context) CoawaitExpr(Loc, E, RSS.OpaqueValue, RSS.Results[0],
+                                        RSS.Results[1], RSS.Results[2]);
   Coroutine->CoroutineStmts.push_back(Res);
   return Res;
 }
@@ -486,8 +492,8 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   if (RSS.IsInvalid)
     return ExprError();
 
-  Expr *Res = new (Context) CoyieldExpr(Loc, E, RSS.Results[0], RSS.Results[1],
-                                        RSS.Results[2]);
+  Expr *Res = new (Context) CoyieldExpr(Loc, E, RSS.OpaqueValue, RSS.Results[0],
+                                        RSS.Results[1], RSS.Results[2]);
   Coroutine->CoroutineStmts.push_back(Res);
   return Res;
 }

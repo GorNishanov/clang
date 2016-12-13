@@ -13,6 +13,7 @@
 
 #include "CGCleanup.h"
 #include "CodeGenFunction.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
 #include "llvm/IR/Dominators.h"
@@ -103,6 +104,7 @@ static void createCoroData(CodeGenFunction &CGF,
 
 bool CodeGenFunction::isCoroutine() const { return CurCoro.Data != nullptr; }
 
+#if 0
 namespace {
 struct OpaqueValueMappings {
   LValue common;
@@ -139,6 +141,7 @@ struct OpaqueValueMappings {
         o3(CGF, opaque(S.getResumeExpr()), common) {}
 };
 }
+#endif
 
 static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
   unsigned No = 0;
@@ -167,7 +170,16 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   const bool IsFinalSuspend = Kind == AwaitKind::Final;
   auto Suffix = buildSuspendSuffixStr(Coro, Kind);
 
-  OpaqueValueMappings ovm(CGF, S);
+  auto *E = S.getCommonExpr();
+  if (auto *UO = dyn_cast<UnaryOperator>(E))
+    if (UO->getOpcode() == UO_Coawait)
+      E = UO->getSubExpr();
+
+  auto Binder = CodeGenFunction::OpaqueValueMappingData::bind(
+      CGF, S.getOpaqueValue(), E);
+  auto UnbindOnExit = llvm::make_scope_exit([&] { Binder.unbind(CGF); });
+
+  //OpaqueValueMappings ovm(CGF, S);
 
   BasicBlock *ReadyBlock = CGF.createBasicBlock(Suffix + Twine(".ready"));
   BasicBlock *SuspendBlock = CGF.createBasicBlock(Suffix + Twine(".suspend"));
@@ -575,7 +587,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   if (auto RetStmt = S.getReturnStmt())
     EmitStmt(RetStmt);
 
-  runHorribleHackToFixupCleanupBlocks(*CurFn);
+//  runHorribleHackToFixupCleanupBlocks(*CurFn);
 }
 
 // Emit coroutine intrinsic and patch up arguments of the token type.

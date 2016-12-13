@@ -4162,16 +4162,18 @@ class CoroutineSuspendExpr : public Expr {
 
   enum SubExpr { Common, Ready, Suspend, Resume, Count };
   Stmt *SubExprs[SubExpr::Count];
+  OpaqueValueExpr *OpaqueValue = nullptr;
 
   friend class ASTStmtReader;
 public:
   CoroutineSuspendExpr(StmtClass SC, SourceLocation KeywordLoc, Expr *Common,
-                       Expr *Ready, Expr *Suspend, Expr *Resume)
+                       OpaqueValueExpr *OpaqueValue, Expr *Ready, Expr *Suspend,
+                       Expr *Resume)
       : Expr(SC, Resume->getType(), Resume->getValueKind(),
              Resume->getObjectKind(), Resume->isTypeDependent(),
              Resume->isValueDependent(), Common->isInstantiationDependent(),
              Common->containsUnexpandedParameterPack()),
-        KeywordLoc(KeywordLoc) {
+        KeywordLoc(KeywordLoc), OpaqueValue(OpaqueValue) {
     SubExprs[SubExpr::Common] = Common;
     SubExprs[SubExpr::Ready] = Ready;
     SubExprs[SubExpr::Suspend] = Suspend;
@@ -4200,6 +4202,9 @@ public:
   Expr *getCommonExpr() const {
     return static_cast<Expr*>(SubExprs[SubExpr::Common]);
   }
+
+  /// \brief getOpaqueValue - Return the opaque value placeholder.
+  OpaqueValueExpr *getOpaqueValue() const { return OpaqueValue; }
 
   Expr *getReadyExpr() const {
     return static_cast<Expr*>(SubExprs[SubExpr::Ready]);
@@ -4232,10 +4237,11 @@ public:
 class CoawaitExpr : public CoroutineSuspendExpr {
   friend class ASTStmtReader;
 public:
-  CoawaitExpr(SourceLocation CoawaitLoc, Expr *Operand, Expr *Ready,
-              Expr *Suspend, Expr *Resume)
-      : CoroutineSuspendExpr(CoawaitExprClass, CoawaitLoc, Operand, Ready,
-                             Suspend, Resume) {}
+  CoawaitExpr(SourceLocation CoawaitLoc, Expr *Operand,
+              OpaqueValueExpr *OpaqueValue, Expr *Ready, Expr *Suspend,
+              Expr *Resume)
+      : CoroutineSuspendExpr(CoawaitExprClass, CoawaitLoc, Operand, OpaqueValue,
+                             Ready, Suspend, Resume) {}
   CoawaitExpr(SourceLocation CoawaitLoc, QualType Ty, Expr *Operand)
       : CoroutineSuspendExpr(CoawaitExprClass, CoawaitLoc, Ty, Operand) {}
   CoawaitExpr(EmptyShell Empty)
@@ -4255,10 +4261,11 @@ public:
 class CoyieldExpr : public CoroutineSuspendExpr {
   friend class ASTStmtReader;
 public:
-  CoyieldExpr(SourceLocation CoyieldLoc, Expr *Operand, Expr *Ready,
-              Expr *Suspend, Expr *Resume)
-      : CoroutineSuspendExpr(CoyieldExprClass, CoyieldLoc, Operand, Ready,
-                             Suspend, Resume) {}
+  CoyieldExpr(SourceLocation CoyieldLoc, Expr *Operand,
+              OpaqueValueExpr *OpaqueValue, Expr *Ready, Expr *Suspend,
+              Expr *Resume)
+      : CoroutineSuspendExpr(CoyieldExprClass, CoyieldLoc, Operand, OpaqueValue,
+                             Ready, Suspend, Resume) {}
   CoyieldExpr(SourceLocation CoyieldLoc, QualType Ty, Expr *Operand)
       : CoroutineSuspendExpr(CoyieldExprClass, CoyieldLoc, Ty, Operand) {}
   CoyieldExpr(EmptyShell Empty)
