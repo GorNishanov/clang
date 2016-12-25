@@ -2155,12 +2155,6 @@ bool Sema::CheckX86BuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
   case X86::BI__builtin_ia32_palignr128:
   case X86::BI__builtin_ia32_palignr256:
   case X86::BI__builtin_ia32_palignr512_mask:
-  case X86::BI__builtin_ia32_alignq512_mask:
-  case X86::BI__builtin_ia32_alignd512_mask:
-  case X86::BI__builtin_ia32_alignd128_mask:
-  case X86::BI__builtin_ia32_alignd256_mask:
-  case X86::BI__builtin_ia32_alignq128_mask:
-  case X86::BI__builtin_ia32_alignq256_mask:
   case X86::BI__builtin_ia32_vcomisd:
   case X86::BI__builtin_ia32_vcomiss:
   case X86::BI__builtin_ia32_shuf_f32x4_mask:
@@ -2454,7 +2448,9 @@ void Sema::checkCall(NamedDecl *FDecl, const FunctionProtoType *Proto,
 
   // Refuse POD arguments that weren't caught by the format string
   // checks above.
-  if (CallType != VariadicDoesNotApply) {
+  auto *FD = dyn_cast_or_null<FunctionDecl>(FDecl);
+  if (CallType != VariadicDoesNotApply &&
+      (!FD || FD->getBuiltinID() != Builtin::BI__noop)) {
     unsigned NumParams = Proto ? Proto->getNumParams()
                        : FDecl && isa<FunctionDecl>(FDecl)
                            ? cast<FunctionDecl>(FDecl)->getNumParams()
@@ -2523,7 +2519,9 @@ bool Sema::CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall,
   if (!FnInfo)
     return false;
 
-  CheckAbsoluteValueFunction(TheCall, FDecl, FnInfo);
+  CheckAbsoluteValueFunction(TheCall, FDecl);
+  CheckMaxUnsignedZero(TheCall, FDecl);
+
   if (getLangOpts().ObjC1)
     DiagnoseCStringFormatDirectiveInCFAPI(*this, FDecl, Args, NumArgs);
 
@@ -2874,6 +2872,9 @@ ExprResult Sema::SemaAtomicOpsOverloaded(ExprResult TheCallResult,
           Ty = Context.getPointerDiffType();
         else {
           Expr *ValArg = TheCall->getArg(i);
+          // Treat this argument as _Nonnull as we want to show a warning if
+          // NULL is passed into it.
+          CheckNonNullArgument(*this, ValArg, DRE->getLocStart());
           unsigned AS = 0;
           // Keep address space of non-atomic pointer type.
           if (const PointerType *PtrTy =
@@ -3749,14 +3750,18 @@ bool Sema::SemaBuiltinFPClassification(CallExpr *TheCall, unsigned NumArgs) {
                 diag::err_typecheck_call_invalid_unary_fp)
       << OrigArg->getType() << OrigArg->getSourceRange();
 
-  // If this is an implicit conversion from float -> double, remove it.
+  // If this is an implicit conversion from float -> float or double, remove it.
   if (ImplicitCastExpr *Cast = dyn_cast<ImplicitCastExpr>(OrigArg)) {
-    Expr *CastArg = Cast->getSubExpr();
-    if (CastArg->getType()->isSpecificBuiltinType(BuiltinType::Float)) {
-      assert(Cast->getType()->isSpecificBuiltinType(BuiltinType::Double) &&
-             "promotion from float to double is the only expected cast here");
-      Cast->setSubExpr(nullptr);
-      TheCall->setArg(NumArgs-1, CastArg);
+    // Only remove standard FloatCasts, leaving other casts inplace
+    if (Cast->getCastKind() == CK_FloatingCast) {
+      Expr *CastArg = Cast->getSubExpr();
+      if (CastArg->getType()->isSpecificBuiltinType(BuiltinType::Float)) {
+          assert((Cast->getType()->isSpecificBuiltinType(BuiltinType::Double) ||
+                  Cast->getType()->isSpecificBuiltinType(BuiltinType::Float)) &&
+               "promotion from float to either float or double is the only expected cast here");
+        Cast->setSubExpr(nullptr);
+        TheCall->setArg(NumArgs-1, CastArg);
+      }
     }
   }
   
@@ -4194,7 +4199,7 @@ bool Sema::SemaBuiltinARMSpecialReg(unsigned BuiltinID, CallExpr *TheCall,
 
     SmallVector<int, 5> Ranges;
     if (FiveFields)
-      Ranges.append({IsAArch64Builtin ? 1 : 15, 7, 7, 15, 15});
+      Ranges.append({IsAArch64Builtin ? 1 : 15, 7, 15, 15, 7});
     else
       Ranges.append({15, 7, 15});
 
@@ -6667,23 +6672,14 @@ static void emitReplacement(Sema &S, SourceLocation Loc, SourceRange Range,
                                                     << FunctionName;
 }
 
-static bool IsFunctionStdAbs(const FunctionDecl *FDecl) {
+template <std::size_t StrLen>
+static bool IsStdFunction(const FunctionDecl *FDecl,
+                          const char (&Str)[StrLen]) {
   if (!FDecl)
     return false;
-
-  if (!FDecl->getIdentifier() || !FDecl->getIdentifier()->isStr("abs"))
+  if (!FDecl->getIdentifier() || !FDecl->getIdentifier()->isStr(Str))
     return false;
-
-  const NamespaceDecl *ND = dyn_cast<NamespaceDecl>(FDecl->getDeclContext());
-
-  while (ND && ND->isInlineNamespace()) {
-    ND = dyn_cast<NamespaceDecl>(ND->getDeclContext());
-  }
-
-  if (!ND || !ND->getIdentifier() || !ND->getIdentifier()->isStr("std"))
-    return false;
-
-  if (!isa<TranslationUnitDecl>(ND->getDeclContext()))
+  if (!FDecl->isInStdNamespace())
     return false;
 
   return true;
@@ -6691,13 +6687,12 @@ static bool IsFunctionStdAbs(const FunctionDecl *FDecl) {
 
 // Warn when using the wrong abs() function.
 void Sema::CheckAbsoluteValueFunction(const CallExpr *Call,
-                                      const FunctionDecl *FDecl,
-                                      IdentifierInfo *FnInfo) {
+                                      const FunctionDecl *FDecl) {
   if (Call->getNumArgs() != 1)
     return;
 
   unsigned AbsKind = getAbsoluteValueFunctionKind(FDecl);
-  bool IsStdAbs = IsFunctionStdAbs(FDecl);
+  bool IsStdAbs = IsStdFunction(FDecl, "abs");
   if (AbsKind == 0 && !IsStdAbs)
     return;
 
@@ -6768,6 +6763,69 @@ void Sema::CheckAbsoluteValueFunction(const CallExpr *Call,
 
   emitReplacement(*this, Call->getExprLoc(),
                   Call->getCallee()->getSourceRange(), NewAbsKind, ArgType);
+}
+
+//===--- CHECK: Warn on use of std::max and unsigned zero. r---------------===//
+void Sema::CheckMaxUnsignedZero(const CallExpr *Call,
+                                const FunctionDecl *FDecl) {
+  if (!Call || !FDecl) return;
+
+  // Ignore template specializations and macros.
+  if (!ActiveTemplateInstantiations.empty()) return;
+  if (Call->getExprLoc().isMacroID()) return;
+
+  // Only care about the one template argument, two function parameter std::max
+  if (Call->getNumArgs() != 2) return;
+  if (!IsStdFunction(FDecl, "max")) return;
+  const auto * ArgList = FDecl->getTemplateSpecializationArgs();
+  if (!ArgList) return;
+  if (ArgList->size() != 1) return;
+
+  // Check that template type argument is unsigned integer.
+  const auto& TA = ArgList->get(0);
+  if (TA.getKind() != TemplateArgument::Type) return;
+  QualType ArgType = TA.getAsType();
+  if (!ArgType->isUnsignedIntegerType()) return;
+
+  // See if either argument is a literal zero.
+  auto IsLiteralZeroArg = [](const Expr* E) -> bool {
+    const auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E);
+    if (!MTE) return false;
+    const auto *Num = dyn_cast<IntegerLiteral>(MTE->GetTemporaryExpr());
+    if (!Num) return false;
+    if (Num->getValue() != 0) return false;
+    return true;
+  };
+
+  const Expr *FirstArg = Call->getArg(0);
+  const Expr *SecondArg = Call->getArg(1);
+  const bool IsFirstArgZero = IsLiteralZeroArg(FirstArg);
+  const bool IsSecondArgZero = IsLiteralZeroArg(SecondArg);
+
+  // Only warn when exactly one argument is zero.
+  if (IsFirstArgZero == IsSecondArgZero) return;
+
+  SourceRange FirstRange = FirstArg->getSourceRange();
+  SourceRange SecondRange = SecondArg->getSourceRange();
+
+  SourceRange ZeroRange = IsFirstArgZero ? FirstRange : SecondRange;
+
+  Diag(Call->getExprLoc(), diag::warn_max_unsigned_zero)
+      << IsFirstArgZero << Call->getCallee()->getSourceRange() << ZeroRange;
+
+  // Deduce what parts to remove so that "std::max(0u, foo)" becomes "(foo)".
+  SourceRange RemovalRange;
+  if (IsFirstArgZero) {
+    RemovalRange = SourceRange(FirstRange.getBegin(),
+                               SecondRange.getBegin().getLocWithOffset(-1));
+  } else {
+    RemovalRange = SourceRange(getLocForEndOfToken(FirstRange.getEnd()),
+                               SecondRange.getEnd());
+  }
+
+  Diag(Call->getExprLoc(), diag::note_remove_max_call)
+        << FixItHint::CreateRemoval(Call->getCallee()->getSourceRange())
+        << FixItHint::CreateRemoval(RemovalRange);
 }
 
 //===--- CHECK: Standard memory functions ---------------------------------===//
@@ -8518,6 +8576,24 @@ bool AnalyzeBitFieldAssignment(Sema &S, FieldDecl *Bitfield, Expr *Init,
     return false;
 
   // White-list bool bitfields.
+  QualType BitfieldType = Bitfield->getType();
+  if (BitfieldType->isBooleanType())
+     return false;
+
+  if (BitfieldType->isEnumeralType()) {
+    EnumDecl *BitfieldEnumDecl = BitfieldType->getAs<EnumType>()->getDecl();
+    // If the underlying enum type was not explicitly specified as an unsigned
+    // type and the enum contain only positive values, MSVC++ will cause an
+    // inconsistency by storing this as a signed type.
+    if (S.getLangOpts().CPlusPlus11 &&
+        !BitfieldEnumDecl->getIntegerTypeSourceInfo() &&
+        BitfieldEnumDecl->getNumPositiveBits() > 0 &&
+        BitfieldEnumDecl->getNumNegativeBits() == 0) {
+      S.Diag(InitLoc, diag::warn_no_underlying_type_specified_for_enum_bitfield)
+        << BitfieldEnumDecl->getNameAsString();
+    }
+  }
+
   if (Bitfield->getType()->isBooleanType())
     return false;
 
@@ -8547,7 +8623,7 @@ bool AnalyzeBitFieldAssignment(Sema &S, FieldDecl *Bitfield, Expr *Init,
 
   // Compute the value which the bitfield will contain.
   llvm::APSInt TruncatedValue = Value.trunc(FieldWidth);
-  TruncatedValue.setIsSigned(Bitfield->getType()->isSignedIntegerType());
+  TruncatedValue.setIsSigned(BitfieldType->isSignedIntegerType());
 
   // Check whether the stored value is equal to the original value.
   TruncatedValue = TruncatedValue.extend(OriginalWidth);
@@ -10249,6 +10325,19 @@ bool Sema::CheckParmsForFunctionDef(ArrayRef<ParmVarDecl *> Parameters,
   return HasInvalidParm;
 }
 
+/// A helper function to get the alignment of a Decl referred to by DeclRefExpr
+/// or MemberExpr.
+static CharUnits getDeclAlign(Expr *E, CharUnits TypeAlign,
+                              ASTContext &Context) {
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
+    return Context.getDeclAlign(DRE->getDecl());
+
+  if (const auto *ME = dyn_cast<MemberExpr>(E))
+    return Context.getDeclAlign(ME->getMemberDecl());
+
+  return TypeAlign;
+}
+
 /// CheckCastAlign - Implements -Wcast-align, which warns when a
 /// pointer cast increases the alignment requirements.
 void Sema::CheckCastAlign(Expr *Op, QualType T, SourceRange TRange) {
@@ -10283,6 +10372,15 @@ void Sema::CheckCastAlign(Expr *Op, QualType T, SourceRange TRange) {
   if (SrcPointee->isIncompleteType()) return;
 
   CharUnits SrcAlign = Context.getTypeAlignInChars(SrcPointee);
+
+  if (auto *CE = dyn_cast<CastExpr>(Op)) {
+    if (CE->getCastKind() == CK_ArrayToPointerDecay)
+      SrcAlign = getDeclAlign(CE->getSubExpr(), SrcAlign, Context);
+  } else if (auto *UO = dyn_cast<UnaryOperator>(Op)) {
+    if (UO->getOpcode() == UO_AddrOf)
+      SrcAlign = getDeclAlign(UO->getSubExpr(), SrcAlign, Context);
+  }
+
   if (SrcAlign >= DestAlign) return;
 
   Diag(TRange.getBegin(), diag::warn_cast_align)
@@ -11724,7 +11822,8 @@ void Sema::DiscardMisalignedMemberAddress(const Type *T, Expr *E) {
 
 void Sema::RefersToMemberWithReducedAlignment(
     Expr *E,
-    std::function<void(Expr *, RecordDecl *, FieldDecl *, CharUnits)> Action) {
+    llvm::function_ref<void(Expr *, RecordDecl *, FieldDecl *, CharUnits)>
+        Action) {
   const auto *ME = dyn_cast<MemberExpr>(E);
   if (!ME)
     return;

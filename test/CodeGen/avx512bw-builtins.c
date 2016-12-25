@@ -820,17 +820,19 @@ __m512i test_mm512_mask_min_epu16(__m512i __W, __mmask32 __M, __m512i __A, __m51
 }
 __m512i test_mm512_shuffle_epi8(__m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_shuffle_epi8
-  // CHECK: @llvm.x86.avx512.mask.pshuf.b.512
+  // CHECK: @llvm.x86.avx512.pshuf.b.512
   return _mm512_shuffle_epi8(__A,__B); 
 }
 __m512i test_mm512_mask_shuffle_epi8(__m512i __W, __mmask64 __U, __m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_mask_shuffle_epi8
-  // CHECK: @llvm.x86.avx512.mask.pshuf.b.512
+  // CHECK: @llvm.x86.avx512.pshuf.b.512
+  // CHECK: select <64 x i1> %{{.*}}, <64 x i8> %{{.*}}, <64 x i8> %{{.*}}
   return _mm512_mask_shuffle_epi8(__W,__U,__A,__B); 
 }
 __m512i test_mm512_maskz_shuffle_epi8(__mmask64 __U, __m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_maskz_shuffle_epi8
-  // CHECK: @llvm.x86.avx512.mask.pshuf.b.512
+  // CHECK: @llvm.x86.avx512.pshuf.b.512
+  // CHECK: select <64 x i1> %{{.*}}, <64 x i8> %{{.*}}, <64 x i8> %{{.*}}
   return _mm512_maskz_shuffle_epi8(__U,__A,__B); 
 }
 __m512i test_mm512_subs_epi8(__m512i __A, __m512i __B) {
@@ -1207,19 +1209,21 @@ __m512i test_mm512_maskz_shufflelo_epi16(__mmask32 __U, __m512i __A) {
 
 __m512i test_mm512_sllv_epi16(__m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_sllv_epi16
-  // CHECK: @llvm.x86.avx512.mask.psllv
+  // CHECK: @llvm.x86.avx512.psllv.w.512(
   return _mm512_sllv_epi16(__A, __B); 
 }
 
 __m512i test_mm512_mask_sllv_epi16(__m512i __W, __mmask32 __U, __m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_mask_sllv_epi16
-  // CHECK: @llvm.x86.avx512.mask.psllv
+  // CHECK: @llvm.x86.avx512.psllv.w.512(
+  // CHECK: select <32 x i1> %{{.*}}, <32 x i16> %{{.*}}, <32 x i16> %{{.*}}
   return _mm512_mask_sllv_epi16(__W, __U, __A, __B); 
 }
 
 __m512i test_mm512_maskz_sllv_epi16(__mmask32 __U, __m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_maskz_sllv_epi16
-  // CHECK: @llvm.x86.avx512.mask.psllv
+  // CHECK: @llvm.x86.avx512.psllv.w.512(
+  // CHECK: select <32 x i1> %{{.*}}, <32 x i16> %{{.*}}, <32 x i16> %{{.*}}
   return _mm512_maskz_sllv_epi16(__U, __A, __B); 
 }
 
@@ -1271,37 +1275,41 @@ __m512i test_mm512_bslli_epi128(__m512i __A) {
 
 __m512i test_mm512_srlv_epi16(__m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_srlv_epi16
-  // CHECK: @llvm.x86.avx512.mask.psrlv
+  // CHECK: @llvm.x86.avx512.psrlv.w.512(
   return _mm512_srlv_epi16(__A, __B); 
 }
 
 __m512i test_mm512_mask_srlv_epi16(__m512i __W, __mmask32 __U, __m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_mask_srlv_epi16
-  // CHECK: @llvm.x86.avx512.mask.psrlv
+  // CHECK: @llvm.x86.avx512.psrlv.w.512(
+  // CHECK: select <32 x i1> %{{.*}}, <32 x i16> %{{.*}}, <32 x i16> %{{.*}}
   return _mm512_mask_srlv_epi16(__W, __U, __A, __B); 
 }
 
 __m512i test_mm512_maskz_srlv_epi16(__mmask32 __U, __m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_maskz_srlv_epi16
-  // CHECK: @llvm.x86.avx512.mask.psrlv
+  // CHECK: @llvm.x86.avx512.psrlv.w.512(
+  // CHECK: select <32 x i1> %{{.*}}, <32 x i16> %{{.*}}, <32 x i16> %{{.*}}
   return _mm512_maskz_srlv_epi16(__U, __A, __B); 
 }
 
 __m512i test_mm512_srav_epi16(__m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_srav_epi16
-  // CHECK: @llvm.x86.avx512.mask.psrav
+  // CHECK: @llvm.x86.avx512.psrav.w.512(
   return _mm512_srav_epi16(__A, __B); 
 }
 
 __m512i test_mm512_mask_srav_epi16(__m512i __W, __mmask32 __U, __m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_mask_srav_epi16
-  // CHECK: @llvm.x86.avx512.mask.psrav
+  // CHECK: @llvm.x86.avx512.psrav.w.512(
+  // CHECK: select <32 x i1> %{{.*}}, <32 x i16> %{{.*}}, <32 x i16> %{{.*}}
   return _mm512_mask_srav_epi16(__W, __U, __A, __B); 
 }
 
 __m512i test_mm512_maskz_srav_epi16(__mmask32 __U, __m512i __A, __m512i __B) {
   // CHECK-LABEL: @test_mm512_maskz_srav_epi16
-  // CHECK: @llvm.x86.avx512.mask.psrav
+  // CHECK: @llvm.x86.avx512.psrav.w.512(
+  // CHECK: select <32 x i1> %{{.*}}, <32 x i16> %{{.*}}, <32 x i16> %{{.*}}
   return _mm512_maskz_srav_epi16(__U, __A, __B); 
 }
 

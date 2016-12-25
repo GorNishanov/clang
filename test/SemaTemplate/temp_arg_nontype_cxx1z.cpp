@@ -122,13 +122,13 @@ namespace DeduceDifferentType {
   int a_exp = a<3>(A<3>());
 
   template<decltype(nullptr)> struct B {};
-  template<int *P> int b(B<P>); // expected-note {{does not have the same type}} expected-note {{not implicitly convertible}}
+  template<int *P> int b(B<P>); // expected-error {{value of type 'int *' is not implicitly convertible to 'decltype(nullptr)'}}
   int b_imp = b(B<nullptr>()); // expected-error {{no matching function}}
   int b_exp = b<nullptr>(B<nullptr>()); // expected-error {{no matching function}}
 
   struct X { constexpr operator int() { return 0; } } x;
   template<X &> struct C {};
-  template<int N> int c(C<N>); // expected-note {{does not have the same type}} expected-note {{not implicitly convertible}}
+  template<int N> int c(C<N>); // expected-error {{value of type 'int' is not implicitly convertible to 'DeduceDifferentType::X &'}}
   int c_imp = c(C<x>()); // expected-error {{no matching function}}
   int c_exp = c<x>(C<x>()); // expected-error {{no matching function}}
 
@@ -175,14 +175,33 @@ namespace Auto {
 
     // pointers
     template<auto v>    class B { };
-    template<auto* p>   class B<p> { };
+    template<auto* p>   class B<p> { }; // expected-note {{matches}}
     template<auto** pp> class B<pp> { };
-    template<auto* p0>   int &f(B<p0> b);
-    template<auto** pp0> float &f(B<pp0> b);
+    template<auto* p0>   int &f(B<p0> b); // expected-note {{candidate}}
+    template<auto** pp0> float &f(B<pp0> b); // expected-note {{candidate}}
 
     int a, *b = &a;
     int &r = f(B<&a>());
     float &s = f(B<&b>());
+
+    // pointers to members
+    template<typename T, auto *T::*p> struct B<p> {};
+    template<typename T, auto **T::*p> struct B<p> {};
+    template<typename T, auto *T::*p0>   char &f(B<p0> b); // expected-note {{candidate}}
+    template<typename T, auto **T::*pp0> short &f(B<pp0> b); // expected-note {{candidate}}
+
+    struct X { int n; int *p; int **pp; typedef int a, b; };
+    auto t = f(B<&X::n>()); // expected-error {{no match}}
+    char &u = f(B<&X::p>());
+    short &v = f(B<&X::pp>());
+
+    // A case where we need to do auto-deduction, and check whether the
+    // resulting dependent types match during partial ordering. These
+    // templates are not ordered due to the mismatching function parameter.
+    template<typename T, auto *(*f)(T, typename T::a)> struct B<f> {}; // expected-note {{matches}}
+    template<typename T, auto **(*f)(T, typename T::b)> struct B<f> {}; // expected-note {{matches}}
+    int **g(X, int);
+    B<&g> bg; // expected-error {{ambiguous}}
   }
 
   namespace Chained {

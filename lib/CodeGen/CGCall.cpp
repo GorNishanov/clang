@@ -1683,6 +1683,14 @@ void CodeGenModule::ConstructAttributeList(
 
     HasAnyX86InterruptAttr = TargetDecl->hasAttr<AnyX86InterruptAttr>();
     HasOptnone = TargetDecl->hasAttr<OptimizeNoneAttr>();
+    if (auto *AllocSize = TargetDecl->getAttr<AllocSizeAttr>()) {
+      Optional<unsigned> NumElemsParam;
+      // alloc_size args are base-1, 0 means not present.
+      if (unsigned N = AllocSize->getNumElemsParam())
+        NumElemsParam = N - 1;
+      FuncAttrs.addAllocSizeAttr(AllocSize->getElemSizeParam() - 1,
+                                 NumElemsParam);
+    }
   }
 
   // OptimizeNoneAttr takes precedence over -Os or -Oz. No warning needed.
@@ -2862,7 +2870,7 @@ void CodeGenFunction::EmitFunctionEpilog(const CGFunctionInfo &FI,
             EmitCheckSourceLocation(RetNNAttr->getLocation()),
         };
         EmitCheck(std::make_pair(Cond, SanitizerKind::ReturnsNonnullAttribute),
-                  "nonnull_return", StaticData, None);
+                  SanitizerHandler::NonnullReturn, StaticData, None);
       }
     }
     Ret = Builder.CreateRet(RV);
@@ -2884,13 +2892,13 @@ static AggValueSlot createPlaceholderSlot(CodeGenFunction &CGF,
   // FIXME: Generate IR in one pass, rather than going back and fixing up these
   // placeholders.
   llvm::Type *IRTy = CGF.ConvertTypeForMem(Ty);
-  llvm::Value *Placeholder =
-    llvm::UndefValue::get(IRTy->getPointerTo()->getPointerTo());
-  Placeholder = CGF.Builder.CreateDefaultAlignedLoad(Placeholder);
+  llvm::Type *IRPtrTy = IRTy->getPointerTo();
+  llvm::Value *Placeholder = llvm::UndefValue::get(IRPtrTy->getPointerTo());
 
   // FIXME: When we generate this IR in one pass, we shouldn't need
   // this win32-specific alignment hack.
   CharUnits Align = CharUnits::fromQuantity(4);
+  Placeholder = CGF.Builder.CreateAlignedLoad(IRPtrTy, Placeholder, Align);
 
   return AggValueSlot::forAddr(Address(Placeholder, Align),
                                Ty.getQualifiers(),
@@ -2912,12 +2920,30 @@ void CodeGenFunction::EmitDelegateCallArg(CallArgList &args,
   assert(!isInAllocaArgument(CGM.getCXXABI(), type) &&
          "cannot emit delegate call arguments for inalloca arguments!");
 
+  // GetAddrOfLocalVar returns a pointer-to-pointer for references,
+  // but the argument needs to be the original pointer.
+  if (type->isReferenceType()) {
+    args.add(RValue::get(Builder.CreateLoad(local)), type);
+
+  // In ARC, move out of consumed arguments so that the release cleanup
+  // entered by StartFunction doesn't cause an over-release.  This isn't
+  // optimal -O0 code generation, but it should get cleaned up when
+  // optimization is enabled.  This also assumes that delegate calls are
+  // performed exactly once for a set of arguments, but that should be safe.
+  } else if (getLangOpts().ObjCAutoRefCount &&
+             param->hasAttr<NSConsumedAttr>() &&
+             type->isObjCRetainableType()) {
+    llvm::Value *ptr = Builder.CreateLoad(local);
+    auto null =
+      llvm::ConstantPointerNull::get(cast<llvm::PointerType>(ptr->getType()));
+    Builder.CreateStore(null, local);
+    args.add(RValue::get(ptr), type);
+
   // For the most part, we just need to load the alloca, except that
   // aggregate r-values are actually pointers to temporaries.
-  if (type->isReferenceType())
-    args.add(RValue::get(Builder.CreateLoad(local)), type);
-  else
+  } else {
     args.add(convertTempToRValue(local, type, loc), type);
+  }
 }
 
 static bool isProvablyNull(llvm::Value *addr) {
@@ -3184,7 +3210,7 @@ void CodeGenFunction::EmitNonNullArgCheck(RValue RV, QualType ArgType,
       llvm::ConstantInt::get(Int32Ty, ArgNo + 1),
   };
   EmitCheck(std::make_pair(Cond, SanitizerKind::NonnullAttribute),
-                "nonnull_arg", StaticData, None);
+            SanitizerHandler::NonnullArg, StaticData, None);
 }
 
 void CodeGenFunction::EmitCallArgs(

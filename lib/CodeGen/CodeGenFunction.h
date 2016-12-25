@@ -103,6 +103,32 @@ enum TypeEvaluationKind {
   TEK_Aggregate
 };
 
+#define LIST_SANITIZER_CHECKS                                                  \
+  SANITIZER_CHECK(AddOverflow, add_overflow, 0)                                \
+  SANITIZER_CHECK(BuiltinUnreachable, builtin_unreachable, 0)                  \
+  SANITIZER_CHECK(CFICheckFail, cfi_check_fail, 0)                             \
+  SANITIZER_CHECK(DivremOverflow, divrem_overflow, 0)                          \
+  SANITIZER_CHECK(DynamicTypeCacheMiss, dynamic_type_cache_miss, 0)            \
+  SANITIZER_CHECK(FloatCastOverflow, float_cast_overflow, 0)                   \
+  SANITIZER_CHECK(FunctionTypeMismatch, function_type_mismatch, 0)             \
+  SANITIZER_CHECK(LoadInvalidValue, load_invalid_value, 0)                     \
+  SANITIZER_CHECK(MissingReturn, missing_return, 0)                            \
+  SANITIZER_CHECK(MulOverflow, mul_overflow, 0)                                \
+  SANITIZER_CHECK(NegateOverflow, negate_overflow, 0)                          \
+  SANITIZER_CHECK(NonnullArg, nonnull_arg, 0)                                  \
+  SANITIZER_CHECK(NonnullReturn, nonnull_return, 0)                            \
+  SANITIZER_CHECK(OutOfBounds, out_of_bounds, 0)                               \
+  SANITIZER_CHECK(ShiftOutOfBounds, shift_out_of_bounds, 0)                    \
+  SANITIZER_CHECK(SubOverflow, sub_overflow, 0)                                \
+  SANITIZER_CHECK(TypeMismatch, type_mismatch, 0)                              \
+  SANITIZER_CHECK(VLABoundNotPositive, vla_bound_not_positive, 0)
+
+enum SanitizerHandler {
+#define SANITIZER_CHECK(Enum, Name, Version) Enum,
+  LIST_SANITIZER_CHECKS
+#undef SANITIZER_CHECK
+};
+
 /// CodeGenFunction - This class organizes the per-function state that is used
 /// while generating LLVM code.
 class CodeGenFunction : public CodeGenTypeCache {
@@ -921,6 +947,17 @@ public:
                                           e->getCommon());
     }
 
+    /// Build the opaque value mapping for an OpaqueValueExpr whose source
+    /// expression is set to the expression the OVE represents.
+    OpaqueValueMapping(CodeGenFunction &CGF, const OpaqueValueExpr *OV)
+        : CGF(CGF) {
+      if (OV) {
+        assert(OV->getSourceExpr() && "wrong form of OpaqueValueMapping used "
+                                      "for OVE with no source expression");
+        Data = OpaqueValueMappingData::bind(CGF, OV, OV->getSourceExpr());
+      }
+    }
+
     OpaqueValueMapping(CodeGenFunction &CGF,
                        const OpaqueValueExpr *opaqueValue,
                        LValue lvalue)
@@ -984,6 +1021,94 @@ private:
     JumpDest ContinueBlock;
   };
   SmallVector<BreakContinue, 8> BreakContinueStack;
+
+  /// Handles cancellation exit points in OpenMP-related constructs.
+  class OpenMPCancelExitStack {
+    /// Tracks cancellation exit point and join point for cancel-related exit
+    /// and normal exit.
+    struct CancelExit {
+      CancelExit() = default;
+      CancelExit(OpenMPDirectiveKind Kind, JumpDest ExitBlock,
+                 JumpDest ContBlock)
+          : Kind(Kind), ExitBlock(ExitBlock), ContBlock(ContBlock) {}
+      OpenMPDirectiveKind Kind = OMPD_unknown;
+      /// true if the exit block has been emitted already by the special
+      /// emitExit() call, false if the default codegen is used.
+      bool HasBeenEmitted = false;
+      JumpDest ExitBlock;
+      JumpDest ContBlock;
+    };
+
+    SmallVector<CancelExit, 8> Stack;
+
+  public:
+    OpenMPCancelExitStack() : Stack(1) {}
+    ~OpenMPCancelExitStack() = default;
+    /// Fetches the exit block for the current OpenMP construct.
+    JumpDest getExitBlock() const { return Stack.back().ExitBlock; }
+    /// Emits exit block with special codegen procedure specific for the related
+    /// OpenMP construct + emits code for normal construct cleanup.
+    void emitExit(CodeGenFunction &CGF, OpenMPDirectiveKind Kind,
+                  const llvm::function_ref<void(CodeGenFunction &)> &CodeGen) {
+      if (Stack.back().Kind == Kind && getExitBlock().isValid()) {
+        assert(CGF.getOMPCancelDestination(Kind).isValid());
+        assert(CGF.HaveInsertPoint());
+        assert(!Stack.back().HasBeenEmitted);
+        auto IP = CGF.Builder.saveAndClearIP();
+        CGF.EmitBlock(Stack.back().ExitBlock.getBlock());
+        CodeGen(CGF);
+        CGF.EmitBranchThroughCleanup(Stack.back().ContBlock);
+        CGF.Builder.restoreIP(IP);
+        Stack.back().HasBeenEmitted = true;
+      }
+      CodeGen(CGF);
+    }
+    /// Enter the cancel supporting \a Kind construct.
+    /// \param Kind OpenMP directive that supports cancel constructs.
+    /// \param HasCancel true, if the construct has inner cancel directive,
+    /// false otherwise.
+    void enter(CodeGenFunction &CGF, OpenMPDirectiveKind Kind, bool HasCancel) {
+      Stack.push_back({Kind,
+                       HasCancel ? CGF.getJumpDestInCurrentScope("cancel.exit")
+                                 : JumpDest(),
+                       HasCancel ? CGF.getJumpDestInCurrentScope("cancel.cont")
+                                 : JumpDest()});
+    }
+    /// Emits default exit point for the cancel construct (if the special one
+    /// has not be used) + join point for cancel/normal exits.
+    void exit(CodeGenFunction &CGF) {
+      if (getExitBlock().isValid()) {
+        assert(CGF.getOMPCancelDestination(Stack.back().Kind).isValid());
+        bool HaveIP = CGF.HaveInsertPoint();
+        if (!Stack.back().HasBeenEmitted) {
+          if (HaveIP)
+            CGF.EmitBranchThroughCleanup(Stack.back().ContBlock);
+          CGF.EmitBlock(Stack.back().ExitBlock.getBlock());
+          CGF.EmitBranchThroughCleanup(Stack.back().ContBlock);
+        }
+        CGF.EmitBlock(Stack.back().ContBlock.getBlock());
+        if (!HaveIP) {
+          CGF.Builder.CreateUnreachable();
+          CGF.Builder.ClearInsertionPoint();
+        }
+      }
+      Stack.pop_back();
+    }
+  };
+  OpenMPCancelExitStack OMPCancelStack;
+
+  /// Controls insertion of cancellation exit blocks in worksharing constructs.
+  class OMPCancelStackRAII {
+    CodeGenFunction &CGF;
+
+  public:
+    OMPCancelStackRAII(CodeGenFunction &CGF, OpenMPDirectiveKind Kind,
+                       bool HasCancel)
+        : CGF(CGF) {
+      CGF.OMPCancelStack.enter(CGF, Kind, HasCancel);
+    }
+    ~OMPCancelStackRAII() { CGF.OMPCancelStack.exit(CGF); }
+  };
 
   CodeGenPGO PGO;
 
@@ -1098,6 +1223,23 @@ public:
     CharUnits OldCXXThisAlignment;
   };
 
+  /// The scope of an ArrayInitLoopExpr. Within this scope, the value of the
+  /// current loop index is overridden.
+  class ArrayInitLoopExprScope {
+  public:
+    ArrayInitLoopExprScope(CodeGenFunction &CGF, llvm::Value *Index)
+      : CGF(CGF), OldArrayInitIndex(CGF.ArrayInitIndex) {
+      CGF.ArrayInitIndex = Index;
+    }
+    ~ArrayInitLoopExprScope() {
+      CGF.ArrayInitIndex = OldArrayInitIndex;
+    }
+
+  private:
+    CodeGenFunction &CGF;
+    llvm::Value *OldArrayInitIndex;
+  };
+
   class InlinedInheritingConstructorScope {
   public:
     InlinedInheritingConstructorScope(CodeGenFunction &CGF, GlobalDecl GD)
@@ -1165,6 +1307,10 @@ private:
   /// The value of 'this' to use when evaluating CXXDefaultInitExprs within
   /// this expression.
   Address CXXDefaultInitExprThis = Address::invalid();
+
+  /// The current array initialization index when evaluating an
+  /// ArrayInitIndexExpr within an ArrayInitLoopExpr.
+  llvm::Value *ArrayInitIndex = nullptr;
 
   /// The values of function arguments to use when evaluating
   /// CXXInheritedCtorInitExprs within this context.
@@ -1356,7 +1502,6 @@ public:
   //===--------------------------------------------------------------------===//
 
   llvm::Value *EmitBlockLiteral(const BlockExpr *);
-  llvm::Value *EmitBlockLiteral(const CGBlockInfo &Info);
   static void destroyBlockInfos(CGBlockInfo *info);
 
   llvm::Function *GenerateBlockFunction(GlobalDecl GD,
@@ -1458,8 +1603,7 @@ public:
   void EmitCtorPrologue(const CXXConstructorDecl *CD, CXXCtorType Type,
                         FunctionArgList &Args);
 
-  void EmitInitializerForField(FieldDecl *Field, LValue LHS, Expr *Init,
-                               ArrayRef<VarDecl *> ArrayIndexes);
+  void EmitInitializerForField(FieldDecl *Field, LValue LHS, Expr *Init);
 
   /// Struct with all informations about dynamic [sub]class needed to set vptr.
   struct VPtr {
@@ -1867,6 +2011,9 @@ public:
     assert(it != OpaqueRValues.end() && "no mapping for opaque value!");
     return it->second;
   }
+
+  /// Get the index of the current ArrayInitLoopExpr, if any.
+  llvm::Value *getArrayInitIndex() { return ArrayInitIndex; }
 
   /// getAccessedFieldNo - Given an encoded value and a result number, return
   /// the input field number being accessed.
@@ -2551,6 +2698,13 @@ public:
   void EmitOMPTeamsDistributeDirective(const OMPTeamsDistributeDirective &S);
   void
   EmitOMPTeamsDistributeSimdDirective(const OMPTeamsDistributeSimdDirective &S);
+  void EmitOMPTeamsDistributeParallelForSimdDirective(
+      const OMPTeamsDistributeParallelForSimdDirective &S);
+  void EmitOMPTeamsDistributeParallelForDirective(
+      const OMPTeamsDistributeParallelForDirective &S);
+  void EmitOMPTargetTeamsDirective(const OMPTargetTeamsDirective &S);
+  void EmitOMPTargetTeamsDistributeDirective(
+      const OMPTargetTeamsDistributeDirective &S);
 
   /// Emit outlined function for the target directive.
   static std::pair<llvm::Function * /*OutlinedFn*/,
@@ -2581,6 +2735,9 @@ public:
                                   OMPPrivateScope &LoopScope);
 
 private:
+  /// Helpers for blocks
+  llvm::Value *EmitBlockLiteral(const CGBlockInfo &Info);
+
   /// Helpers for the OpenMP loop directives.
   void EmitOMPLoopBody(const OMPLoopDirective &D, JumpDest LoopExit);
   void EmitOMPSimdInit(const OMPLoopDirective &D, bool IsMonotonic = false);
@@ -3257,7 +3414,7 @@ public:
   /// sanitizer runtime with the provided arguments, and create a conditional
   /// branch to it.
   void EmitCheck(ArrayRef<std::pair<llvm::Value *, SanitizerMask>> Checked,
-                 StringRef CheckName, ArrayRef<llvm::Constant *> StaticArgs,
+                 SanitizerHandler Check, ArrayRef<llvm::Constant *> StaticArgs,
                  ArrayRef<llvm::Value *> DynamicArgs);
 
   /// \brief Emit a slow path cross-DSO CFI check which calls __cfi_slowpath

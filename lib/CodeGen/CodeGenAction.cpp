@@ -53,6 +53,11 @@ namespace clang {
     Timer LLVMIRGeneration;
     unsigned LLVMIRGenerationRefCount;
 
+    /// True if we've finished generating IR. This prevents us from generating
+    /// additional LLVM IR after emitting output in HandleTranslationUnit. This
+    /// can happen when Clang plugins trigger additional AST deserialization.
+    bool IRGenFinished = false;
+
     std::unique_ptr<CodeGenerator> Gen;
 
     SmallVector<std::pair<unsigned, std::unique_ptr<llvm::Module>>, 4>
@@ -75,7 +80,7 @@ namespace clang {
         : Diags(Diags), Action(Action), CodeGenOpts(CodeGenOpts),
           TargetOpts(TargetOpts), LangOpts(LangOpts),
           AsmOutStream(std::move(OS)), Context(nullptr),
-          LLVMIRGeneration("LLVM IR Generation Time"),
+          LLVMIRGeneration("irgen", "LLVM IR Generation Time"),
           LLVMIRGenerationRefCount(0),
           Gen(CreateLLVMCodeGen(Diags, InFile, HeaderSearchOpts, PPOpts,
                                 CodeGenOpts, C, CoverageInfo)) {
@@ -147,6 +152,12 @@ namespace clang {
         LLVMIRGeneration.stopTimer();
     }
 
+    void HandleInterestingDecl(DeclGroupRef D) override {
+      // Ignore interesting decls from the AST reader after IRGen is finished.
+      if (!IRGenFinished)
+        HandleTopLevelDecl(D);
+    }
+
     void HandleTranslationUnit(ASTContext &C) override {
       {
         PrettyStackTraceString CrashInfo("Per-file LLVM IR generation");
@@ -163,6 +174,8 @@ namespace clang {
           if (LLVMIRGenerationRefCount == 0)
             LLVMIRGeneration.stopTimer();
         }
+
+	IRGenFinished = true;
       }
 
       // Silently ignore if we weren't initialized for some reason.
@@ -195,7 +208,8 @@ namespace clang {
           return;
         }
 
-        Ctx.setDiagnosticsOutputFile(new yaml::Output(OptRecordFile->os()));
+        Ctx.setDiagnosticsOutputFile(
+            llvm::make_unique<yaml::Output>(OptRecordFile->os()));
 
         if (CodeGenOpts.getProfileUse() != CodeGenOptions::ProfileNone)
           Ctx.setDiagnosticHotnessRequested(true);
