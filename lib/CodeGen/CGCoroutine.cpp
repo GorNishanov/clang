@@ -235,6 +235,7 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   return nullptr;
 }
 
+#if 0
 // If await expression result is used we end up with broken IR with
 // definition of result of the await expression not dominating its uses.
 // It results from the way how cleanup blocks are threaded. Here is an
@@ -309,6 +310,7 @@ static void runHorribleHackToFixupCleanupBlocks(Function &F) {
   for (Use *U : BrokenUses)
     fixBrokenUse(*U);
 }
+#endif
 
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   ++CurCoro.Data->CoreturnCount;

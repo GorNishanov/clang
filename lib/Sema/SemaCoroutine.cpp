@@ -311,7 +311,7 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
                                                   VarDecl *CoroutinePromise,
                                                   SourceLocation Loc, Expr *E) {
   // Assume invalid until we see otherwise.
-  ReadySuspendResumeResult Calls = {true, {}};
+  ReadySuspendResumeResult Calls = {true, nullptr, {}};
   const size_t AwaitSuspendIndex = 1;
 
   OpaqueValueExpr *Operand = new (S.Context)
@@ -597,7 +597,7 @@ static FunctionDecl *findDeleteForPromise(Sema &S, SourceLocation Loc,
 static bool buildAllocationAndDeallocation(Sema &S, SourceLocation Loc,
                                            FunctionScopeInfo *Fn,
                                            Expr *&Allocation,
-                                           Stmt *&Deallocation) {
+                                           Expr *&Deallocation) {
   TypeSourceInfo *TInfo = Fn->CoroutinePromise->getTypeSourceInfo();
   QualType PromiseType = TInfo->getType();
   if (PromiseType->isDependentType())
@@ -883,71 +883,8 @@ public:
   }
 
   bool makeNewAndDeleteExpr() {
-    TypeSourceInfo *TInfo = Fn.CoroutinePromise->getTypeSourceInfo();
-    QualType PromiseType = TInfo->getType();
-
-    FunctionDecl *OperatorNew = nullptr;
-    FunctionDecl *OperatorDelete = nullptr;
-    bool PassAlignment = false;
-
-    S.FindAllocationFunctions(Loc, SourceRange(),
-                              /*UseGlobal*/ false, PromiseType,
-                              /*isArray*/ false, PassAlignment,
-                              /*PlacementArgs*/ None, OperatorNew,
-                              OperatorDelete);
-
-    assert(OperatorNew && "we need to find at least global operator new");
-    assert(OperatorDelete && "we need to find at least global operator new");
-
-    Expr *FramePtr =
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
-
-    Expr *FrameSize =
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_size, {});
-
-    ///////////////////// Make new Call ///////////////////////
-
-    ExprResult NewRef =
-        S.BuildDeclRefExpr(OperatorNew, OperatorNew->getType(), VK_LValue, Loc);
-    if (NewRef.isInvalid())
-      return false;
-
-    ExprResult NewExpr = S.ActOnCallExpr(S.getCurScope(), NewRef.get(), Loc,
-                                         FrameSize, Loc, nullptr);
-    if (NewExpr.isInvalid())
-      return false;
-
-    this->Allocate = NewExpr.get();
-
-    ///////////////////// Make delete Call ///////////////////////
-
-    QualType opDeleteQualType = OperatorDelete->getType();
-
-    ExprResult DeleteRef =
-        S.BuildDeclRefExpr(OperatorDelete, opDeleteQualType, VK_LValue, Loc);
-    if (DeleteRef.isInvalid())
-      return false;
-
-    Expr *CoroFree =
-        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_free, {FramePtr});
-
-    SmallVector<Expr *, 2> DeleteArgs{CoroFree};
-
-    // Check if we need to pass the size.
-    const FunctionProtoType *opDeleteType =
-        opDeleteQualType.getTypePtr()->getAs<FunctionProtoType>();
-    if (opDeleteType->getNumParams() > 1) {
-      DeleteArgs.push_back(FrameSize);
-    }
-
-    ExprResult DeleteExpr = S.ActOnCallExpr(S.getCurScope(), DeleteRef.get(),
-                                            Loc, DeleteArgs, Loc, nullptr);
-    if (DeleteExpr.isInvalid())
-      return false;
-
-    this->Deallocate = DeleteExpr.get();
-
-    return true;
+    return buildAllocationAndDeallocation(S, Loc, &Fn, this->Allocate,
+                                          this->Deallocate);
   }
 
   bool makeResultDecl() {
