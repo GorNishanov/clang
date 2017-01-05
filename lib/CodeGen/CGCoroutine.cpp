@@ -338,6 +338,12 @@ public:
     assert(Expr == nullptr && "multilple declref in param move");
     Expr = E;
   }
+  void VisitStmt(Stmt *S) {
+    for (auto *C : S->children()) {
+      if (C)
+        Visit(C);
+    }
+  }
 };
 }
 
@@ -492,6 +498,47 @@ struct GetReturnObjectManager {
 };
 }
 
+// This class replaces references to parameters to their copies by changing
+// the addresses in CGF.LocalDeclMap and restoring back the original values in
+// its destructor.
+
+namespace {
+  struct ParamReferenceReplacerRAII {
+    CodeGenFunction::DeclMapTy SavedLocals;
+    CodeGenFunction::DeclMapTy& LocalDeclMap;
+
+    ParamReferenceReplacerRAII(CodeGenFunction::DeclMapTy &LocalDeclMap)
+        : LocalDeclMap(LocalDeclMap) {}
+
+    void addCopy(DeclStmt const *PM) {
+      // Figure out what param it refers to.
+
+      assert(PM->isSingleDecl());
+      VarDecl const*VD = static_cast<VarDecl const*>(PM->getSingleDecl());
+      Expr const *InitExpr = VD->getInit();
+      GetParamRef Visitor;
+      Visitor.Visit(const_cast<Expr*>(InitExpr));
+      assert(Visitor.Expr);
+      auto *DREOrig = cast<DeclRefExpr>(Visitor.Expr);
+      auto *PD = DREOrig->getDecl();
+
+      auto it = LocalDeclMap.find(PD);
+      assert(it != LocalDeclMap.end() && "parameter is not found");
+      SavedLocals.insert({ PD, it->second });
+
+      auto copyIt = LocalDeclMap.find(VD);
+      assert(copyIt != LocalDeclMap.end() && "parameter copy is not found");
+      it->second = copyIt->getSecond();
+    }
+
+    ~ParamReferenceReplacerRAII() {
+      for (auto&& SavedLocal : SavedLocals) {
+        LocalDeclMap.insert({SavedLocal.first, SavedLocal.second});
+      }
+    }
+  };
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
   auto &TI = CGM.getContext().getTargetInfo();
@@ -536,6 +583,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(RetBB);
 
   {
+    ParamReferenceReplacerRAII ParamReplacer(LocalDeclMap);
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
 
     EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, CoroId, CoroBegin,
@@ -553,8 +601,9 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // Now we have the promise, initialize the GRO
     GroManager.EmitGroInit();
 
-    for (auto PM : S.getParamMoves()) {
+    for (auto *PM : S.getParamMoves()) {
       EmitStmt(PM);
+      ParamReplacer.addCopy(cast<DeclStmt>(PM));
       // TODO: if(CoroParam(...)) need to surround ctor and dtor
       // for the copy, so that llvm can elide it if the copy is
       // not needed.
@@ -588,8 +637,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   if (auto RetStmt = S.getReturnStmt())
     EmitStmt(RetStmt);
-
-//  runHorribleHackToFixupCleanupBlocks(*CurFn);
 }
 
 // Emit coroutine intrinsic and patch up arguments of the token type.

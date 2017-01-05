@@ -675,32 +675,6 @@ static bool buildAllocationAndDeallocation(Sema &S, SourceLocation Loc,
 }
 
 namespace {
-struct RewriteParams : TreeTransform<RewriteParams> {
-  typedef TreeTransform<RewriteParams> BaseTransform;
-
-  ArrayRef<ParmVarDecl *> Params;
-  ArrayRef<Stmt *> ParamsMove;
-  RewriteParams(Sema &SemaRef, ArrayRef<ParmVarDecl *> P, ArrayRef<Stmt *> PM)
-      : BaseTransform(SemaRef), Params(P), ParamsMove(PM) {}
-
-  ExprResult TransformDeclRefExpr(DeclRefExpr *E) {
-    ValueDecl *D = E->getDecl();
-    if (auto *PD = dyn_cast<ParmVarDecl>(D)) {
-      auto it = std::find(Params.begin(), Params.end(), PD);
-      if (it != Params.end()) {
-        size_t N = it - Params.begin();
-        auto *Copy = cast<DeclStmt>(ParamsMove[N]);
-        auto *VD = cast<VarDecl>(Copy->getSingleDecl());
-        return SemaRef.BuildDeclRefExpr(
-            VD, VD->getType(), ExprValueKind::VK_LValue, SourceLocation{});
-      }
-    }
-    return BaseTransform::TransformDeclRefExpr(E);
-  }
-};
-}
-
-namespace {
 struct SubStmtBuilder {
   Stmt *Body = nullptr;
   Stmt *Promise = nullptr;
@@ -722,7 +696,6 @@ private:
   QualType RetType;
   VarDecl *RetDecl = nullptr;
   SmallVector<Stmt *, 4> ParamMoves;
-  SmallVector<ParmVarDecl *, 4> Params;
 
 public:
   SubStmtBuilder(Sema &S, FunctionDecl &FD, FunctionScopeInfo &Fn, Stmt *Body)
@@ -733,21 +706,6 @@ public:
                     makeOnFallthrough() && makeNewAndDeleteExpr() &&
                     makeResultDecl() && makeReturnStmt() && makeParamMoves() &&
                     makeBody();
-    if (IsValid) {
-#if 0
-      // FIXME: parameter handling needs more work.
-      //   Disabled the following code since
-      //   buildCoyield/rebuildCoyield/actOnCoyield are not exactly right and
-      //   cause multishot_func.cpp test to fail.
-      RewriteParams RP(S, getParams(), getParamMoves());
-      auto NewBody = RP.TransformStmt(Body);
-      if (NewBody.isInvalid()) {
-        IsValid = false;
-        return;
-      }
-      this->Body = NewBody.get();
-#endif
-    }
   }
 
   bool makeBody() {
@@ -770,7 +728,6 @@ public:
   bool isInvalid() const { return !this->IsValid; }
 
   ArrayRef<Stmt *> getParamMoves() { return ParamMoves; }
-  ArrayRef<ParmVarDecl *> getParams() { return Params; }
 
   bool makePromiseStmt() {
     // Form a declaration statement for the promise declaration, so that AST
@@ -1013,7 +970,6 @@ public:
         if (Stmt.isInvalid())
           return false;
 
-        Params.push_back(paramDecl);
         ParamMoves.push_back(Stmt.get());
       }
     }
