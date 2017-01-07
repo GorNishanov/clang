@@ -2249,9 +2249,16 @@ bool Sema::FindAllocationFunctions(SourceLocation StartLoc, SourceRange Range,
 
   // We don't need an operator delete if we're running under -fno-exceptions.
   if (!getLangOpts().Exceptions) {
+    // unless we are compiling a coroutine
+    if (getLangOpts().CoroutinesTS) {
+      FunctionScopeInfo *Fn = getEnclosingFunction();
+      if (Fn && Fn->CoroutinePromise)
+        goto need_delete;
+    }
     OperatorDelete = nullptr;
     return false;
   }
+need_delete:;
 
   // Note, the name of OperatorNew might have been changed from array to
   // non-array by resolveAllocationOverload.

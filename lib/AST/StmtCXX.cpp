@@ -49,6 +49,42 @@ CXXTryStmt::CXXTryStmt(SourceLocation tryLoc, Stmt *tryBlock,
   std::copy(handlers.begin(), handlers.end(), Stmts + 1);
 }
 
+CoroutineBodyStmt *CoroutineBodyStmt::Create(
+    const ASTContext &C, Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
+    Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough, Expr *Allocate,
+    Stmt *Deallocate, Stmt *ResultDecl, Stmt *ReturnStmt,
+    ArrayRef<Stmt *> ParamMoves) {
+  std::size_t Size = sizeof(CoroutineBodyStmt) + sizeof(SubStmt);
+  Size += (ParamMoves.size() * sizeof(Stmt *));
+
+  void *Mem = C.Allocate(Size, alignof(CoroutineBodyStmt));
+  return new (Mem) CoroutineBodyStmt(
+      Body, Promise, InitialSuspend, FinalSuspend, OnException, OnFallthrough,
+      Allocate, Deallocate, ResultDecl, ReturnStmt, ParamMoves);
+}
+
+CoroutineBodyStmt::CoroutineBodyStmt(Stmt *Body, Stmt *Promise,
+                                     Expr *InitialSuspend,
+                                     Expr *FinalSuspend, Stmt *OnException,
+                                     Stmt *OnFallthrough, Expr *Allocate,
+                                     Stmt *Deallocate, Stmt *ResultDecl,
+                                     Stmt *ReturnStmt,
+                                     ArrayRef<Stmt *> ParamMoves)
+    : Stmt(CoroutineBodyStmtClass), NumParams(ParamMoves.size()) {
+  SubStmts[CoroutineBodyStmt::Body] = Body;
+  SubStmts[CoroutineBodyStmt::Promise] = Promise;
+  SubStmts[CoroutineBodyStmt::InitSuspend] = InitialSuspend;
+  SubStmts[CoroutineBodyStmt::FinalSuspend] = FinalSuspend;
+  SubStmts[CoroutineBodyStmt::OnException] = OnException;
+  SubStmts[CoroutineBodyStmt::OnFallthrough] = OnFallthrough;
+  SubStmts[CoroutineBodyStmt::Allocate] = Allocate;
+  SubStmts[CoroutineBodyStmt::Deallocate] = Deallocate;
+  SubStmts[CoroutineBodyStmt::ResultDecl] = ResultDecl;
+  SubStmts[CoroutineBodyStmt::ReturnStmt] = ReturnStmt;
+  std::copy(ParamMoves.begin(), ParamMoves.end(),
+            const_cast<Stmt **>(getParamMoves().data()));
+}
+
 CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range,
                                  DeclStmt *BeginStmt, DeclStmt *EndStmt,
                                  Expr *Cond, Expr *Inc, DeclStmt *LoopVar,

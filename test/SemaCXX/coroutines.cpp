@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -verify %s
+// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -fcxx-exceptions -fexceptions -verify %s
 
 void no_coroutine_traits_bad_arg_await() {
   co_await a; // expected-error {{include <experimental/coroutine>}}
@@ -19,19 +19,19 @@ void no_coroutine_traits_bad_arg_return() {
 
 struct awaitable {
   bool await_ready();
-  void await_suspend(); // FIXME: coroutine_handle
+  template <typename F> void await_suspend(F);
   void await_resume();
 } a;
 
 struct suspend_always {
   bool await_ready() { return false; }
-  void await_suspend() {}
+  template <typename F> void await_suspend(F){}
   void await_resume() {}
 };
 
 struct suspend_never {
   bool await_ready() { return true; }
-  void await_suspend() {}
+  template <typename F> void await_suspend(F){}
   void await_resume() {}
 };
 
@@ -92,6 +92,14 @@ template <typename Promise = void>
 struct coroutine_handle;
 }
 }
+
+template <>
+struct std::experimental::coroutine_handle<void> {
+  static coroutine_handle from_address(void *addr) noexcept;
+};
+
+template <typename Promise>
+struct std::experimental::coroutine_handle : std::experimental::coroutine_handle<> {};
 
 // FIXME: This diagnostic is terrible.
 void undefined_promise() { // expected-error {{variable has incomplete type 'promise_type'}}
@@ -154,12 +162,11 @@ void mixed_await() {
 }
 
 void only_coreturn(void_tag) {
-  co_return; // expected-warning {{'co_return' used in a function that uses neither 'co_await' nor 'co_yield'}}
+  co_return; // all good
 }
 
 void mixed_coreturn(void_tag, bool b) {
   if (b)
-    // expected-warning@+1 {{'co_return' used in a function that uses neither}}
     co_return; // expected-note {{use of 'co_return'}}
   else
     return; // expected-error {{not allowed in coroutine}}

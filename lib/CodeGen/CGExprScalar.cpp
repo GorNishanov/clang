@@ -221,6 +221,12 @@ public:
   Value *VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     return Visit(GE->getResultExpr());
   }
+  Value *VisitCoawaitExpr(CoawaitExpr* S) {
+    return CGF.EmitCoawaitExpr(*S);
+  }
+  Value *VisitCoyieldExpr(CoyieldExpr* S) {
+    return CGF.EmitCoyieldExpr(*S);
+  }
 
   // Leaves.
   Value *VisitIntegerLiteral(const IntegerLiteral *E) {
@@ -385,6 +391,9 @@ public:
   Value *VisitUnaryLNot     (const UnaryOperator *E);
   Value *VisitUnaryReal     (const UnaryOperator *E);
   Value *VisitUnaryImag     (const UnaryOperator *E);
+  Value *VisitUnaryCoawait  (const UnaryOperator *E) {
+    return Visit(E->getSubExpr());
+  }
   Value *VisitUnaryExtension(const UnaryOperator *E) {
     return Visit(E->getSubExpr());
   }

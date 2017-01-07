@@ -437,6 +437,9 @@ public:
   /// Returns true inside SEH __try blocks.
   bool isSEHTryScope() const { return !SEHTryEpilogueStack.empty(); }
 
+  /// Returns true if the current function is a coroutine.
+  bool isCoroutine() const;
+
   /// Returns true while emitting a cleanuppad.
   bool isCleanupPadScope() const {
     return CurrentFuncletPad && isa<llvm::CleanupPadInst>(CurrentFuncletPad);
@@ -2461,8 +2464,13 @@ public:
   void EmitObjCAtThrowStmt(const ObjCAtThrowStmt &S);
   void EmitObjCAtSynchronizedStmt(const ObjCAtSynchronizedStmt &S);
   void EmitObjCAutoreleasePoolStmt(const ObjCAutoreleasePoolStmt &S);
-
+  
   void EmitCoroutineBody(const CoroutineBodyStmt &S);
+  void EmitCoreturnStmt(const CoreturnStmt &S);
+  llvm::Value *EmitCoawaitExpr(const CoawaitExpr &E,
+                               ReturnValueSlot ReturnValue = ReturnValueSlot());
+  llvm::Value *EmitCoyieldExpr(const CoyieldExpr &E,
+                               ReturnValueSlot ReturnValue = ReturnValueSlot());
   RValue EmitCoroutineIntrinsic(const CallExpr *E, unsigned int IID);
 
   void EnterCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);

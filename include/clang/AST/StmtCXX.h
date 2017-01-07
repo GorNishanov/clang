@@ -306,56 +306,56 @@ class CoroutineBodyStmt : public Stmt {
     OnFallthrough, ///< Handler for control flow falling off the body.
     Allocate,      ///< Coroutine frame memory allocation.
     Deallocate,    ///< Coroutine frame memory deallocation.
-    ReturnValue,   ///< Return value for thunk function.
+    ResultDecl,    ///< Declaration holding the result of get_return_object.
+    ReturnStmt,    ///< Return statement for the thunk function.
     FirstParamMove ///< First offset for move construction of parameter copies.
   };
+
+  unsigned NumParams;
   Stmt *SubStmts[SubStmt::FirstParamMove];
 
   friend class ASTStmtReader;
+
+  Stmt const *const *getStoredParams() const {
+    return SubStmts + SubStmt::FirstParamMove;
+  }
+
+  CoroutineBodyStmt(Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
+                    Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
+                    Expr *Allocate, Stmt *Deallocate, Stmt *ResultDecl,
+                    Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
+
 public:
-  CoroutineBodyStmt(Stmt *Body, Stmt *Promise, Stmt *InitSuspend,
-                    Stmt *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
-                    Expr *Allocate, Stmt *Deallocate,
-                    Expr *ReturnValue, ArrayRef<Expr *> ParamMoves)
-      : Stmt(CoroutineBodyStmtClass) {
-    SubStmts[CoroutineBodyStmt::Body] = Body;
-    SubStmts[CoroutineBodyStmt::Promise] = Promise;
-    SubStmts[CoroutineBodyStmt::InitSuspend] = InitSuspend;
-    SubStmts[CoroutineBodyStmt::FinalSuspend] = FinalSuspend;
-    SubStmts[CoroutineBodyStmt::OnException] = OnException;
-    SubStmts[CoroutineBodyStmt::OnFallthrough] = OnFallthrough;
-    SubStmts[CoroutineBodyStmt::Allocate] = Allocate;
-    SubStmts[CoroutineBodyStmt::Deallocate] = Deallocate;
-    SubStmts[CoroutineBodyStmt::ReturnValue] = ReturnValue;
-    // FIXME: Tail-allocate space for parameter move expressions and store them.
-    assert(ParamMoves.empty() && "not implemented yet");
+  static CoroutineBodyStmt *
+  Create(const ASTContext &C, Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
+         Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
+         Expr *Allocate, Stmt *Deallocate, Stmt *ResultDecl, Stmt *ReturnStmt,
+         ArrayRef<Stmt *> ParamMoves);
+
+  ArrayRef<Stmt const *> getParamMoves() const {
+    return {getStoredParams(), NumParams};
   }
 
   /// \brief Retrieve the body of the coroutine as written. This will be either
   /// a CompoundStmt or a TryStmt.
-  Stmt *getBody() const {
-    return SubStmts[SubStmt::Body];
+  Stmt *getBody() const { return SubStmts[SubStmt::Body]; }
+  DeclStmt *getPromiseDeclStmt() const {
+    return cast<DeclStmt>(SubStmts[SubStmt::Promise]);
   }
-
-  Stmt *getPromiseDeclStmt() const { return SubStmts[SubStmt::Promise]; }
   VarDecl *getPromiseDecl() const {
-    return cast<VarDecl>(cast<DeclStmt>(getPromiseDeclStmt())->getSingleDecl());
+    return cast<VarDecl>(getPromiseDeclStmt()->getSingleDecl());
   }
-
   Stmt *getInitSuspendStmt() const { return SubStmts[SubStmt::InitSuspend]; }
   Stmt *getFinalSuspendStmt() const { return SubStmts[SubStmt::FinalSuspend]; }
-
   Stmt *getExceptionHandler() const { return SubStmts[SubStmt::OnException]; }
   Stmt *getFallthroughHandler() const {
     return SubStmts[SubStmt::OnFallthrough];
   }
-
+  Stmt *getResultDecl() const { return SubStmts[SubStmt::ResultDecl]; }
+  Stmt *getReturnStmt() const { return SubStmts[SubStmt::ReturnStmt]; }
   Expr *getAllocate() const { return cast<Expr>(SubStmts[SubStmt::Allocate]); }
   Stmt *getDeallocate() const { return SubStmts[SubStmt::Deallocate]; }
 
-  Expr *getReturnValueInit() const {
-    return cast<Expr>(SubStmts[SubStmt::ReturnValue]);
-  }
 
   SourceLocation getLocStart() const LLVM_READONLY {
     return getBody()->getLocStart();
@@ -363,11 +363,10 @@ public:
   SourceLocation getLocEnd() const LLVM_READONLY {
     return getBody()->getLocEnd();
   }
-
   child_range children() {
-    return child_range(SubStmts, SubStmts + SubStmt::FirstParamMove);
+    return child_range(SubStmts,
+                       SubStmts + SubStmt::FirstParamMove + NumParams);
   }
-
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == CoroutineBodyStmtClass;
   }
