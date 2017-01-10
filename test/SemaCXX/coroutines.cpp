@@ -162,7 +162,7 @@ void mixed_await() {
 }
 
 void only_coreturn(void_tag) {
-  co_return; // all good
+  co_return; // OK
 }
 
 void mixed_coreturn(void_tag, bool b) {
