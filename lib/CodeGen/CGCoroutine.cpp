@@ -194,9 +194,16 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
 
   auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
   if (SuspendRet != nullptr) {
-    // FIXME: Handle bool returning suspendExpr.
-    CGF.ErrorUnsupported(S.getSuspendExpr(), "non void await_suspend");
-    return nullptr;
+    // FIXME: Add proper error if the result of the expression is not bool.
+    if (!SuspendRet->getType()->isIntegerTy(1)) {
+      CGF.ErrorUnsupported(S.getSuspendExpr(), "non void and non bool await_suspend");
+      return nullptr;
+    }
+    BasicBlock *RealSuspendBlock =
+        CGF.createBasicBlock(Suffix + Twine(".suspend.bool"));
+    CGF.Builder.CreateCondBr(SuspendRet, RealSuspendBlock, ReadyBlock);
+    SuspendBlock = RealSuspendBlock;
+    CGF.EmitBlock(RealSuspendBlock);
   }
 
   llvm::Function *CoroSuspend =
