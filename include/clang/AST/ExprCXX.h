@@ -4144,8 +4144,10 @@ public:
       : Expr(SC, Ty, VK_RValue, OK_Ordinary, true, true, true,
              Common->containsUnexpandedParameterPack()),
         KeywordLoc(KeywordLoc) {
-    assert(Common->isTypeDependent() && Ty->isDependentType() &&
-           "wrong constructor for non-dependent co_await/co_yield expression");
+    // TODO: store coroutine_handle somewhere here, so that we can check
+    // that it is coroutine_handle that is dependent.
+    //assert(Common->isTypeDependent() && Ty->isDependentType() &&
+    //       "wrong constructor for non-dependent co_await/co_yield expression");
     SubExprs[SubExpr::Common] = Common;
     SubExprs[SubExpr::Ready] = nullptr;
     SubExprs[SubExpr::Suspend] = nullptr;

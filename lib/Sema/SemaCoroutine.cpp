@@ -399,7 +399,8 @@ ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
     E = R.get();
   }
 
-  if (E->getType()->isDependentType()) {
+  if (E->getType()->isDependentType() ||
+      Coroutine->CoroutinePromise->getType()->isDependentType()) {
     Expr *Res = new (Context) CoawaitExpr(Loc, Context.DependentTy, E);
     Coroutine->CoroutineStmts.push_back(Res);
     return Res;
@@ -461,7 +462,8 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
     E = R.get();
   }
 
-  if (E->getType()->isDependentType()) {
+  if (E->getType()->isDependentType() ||
+    Coroutine->CoroutinePromise->getType()->isDependentType()) {
     Expr *Res = new (Context) CoyieldExpr(Loc, Context.DependentTy, E);
     Coroutine->CoroutineStmts.push_back(Res);
     return Res;
@@ -711,7 +713,7 @@ public:
   bool makeBody() {
     if (!OnException)
       return true;
-
+#if 0 // HACKHACK
     StmtResult CatchBlock = S.ActOnCXXCatchBlock(Loc, nullptr, OnException);
     if (CatchBlock.isInvalid())
       return false;
@@ -721,7 +723,7 @@ public:
       return false;
 
     Body = TryBlock.get();
-
+#endif
     return true;
   }
 
