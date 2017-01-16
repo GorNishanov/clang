@@ -599,7 +599,7 @@ static FunctionDecl *findDeleteForPromise(Sema &S, SourceLocation Loc,
 static bool buildAllocationAndDeallocation(Sema &S, SourceLocation Loc,
                                            FunctionScopeInfo *Fn,
                                            Expr *&Allocation,
-                                           Expr *&Deallocation) {
+                                           Stmt *&Deallocation) {
   TypeSourceInfo *TInfo = Fn->CoroutinePromise->getTypeSourceInfo();
   QualType PromiseType = TInfo->getType();
   if (PromiseType->isDependentType())
@@ -677,19 +677,7 @@ static bool buildAllocationAndDeallocation(Sema &S, SourceLocation Loc,
 }
 
 namespace {
-struct SubStmtBuilder {
-  Stmt *Body = nullptr;
-  Stmt *Promise = nullptr;
-  Expr *InitialSuspend = nullptr;
-  Expr *FinalSuspend = nullptr;
-  Stmt *OnException = nullptr;
-  Stmt *OnFallthrough = nullptr;
-  Expr *Allocate = nullptr;
-  Expr *Deallocate = nullptr;
-  Stmt *ResultDecl = nullptr;
-  Stmt *ReturnStmt = nullptr;
-
-private:
+class SubStmtBuilder : public CoroutineBodyStmt::CtorArgs {
   Sema &S;
   FunctionDecl &FD;
   FunctionScopeInfo &Fn;
@@ -697,7 +685,7 @@ private:
   SourceLocation Loc;
   QualType RetType;
   VarDecl *RetDecl = nullptr;
-  SmallVector<Stmt *, 4> ParamMoves;
+  SmallVector<Stmt *, 4> ParamMovesVector;
 
 public:
   SubStmtBuilder(Sema &S, FunctionDecl &FD, FunctionScopeInfo &Fn, Stmt *Body)
@@ -713,7 +701,7 @@ public:
   bool makeBody() {
     if (!OnException)
       return true;
-#if 0 // HACKHACK
+
     StmtResult CatchBlock = S.ActOnCXXCatchBlock(Loc, nullptr, OnException);
     if (CatchBlock.isInvalid())
       return false;
@@ -722,14 +710,12 @@ public:
     if (TryBlock.isInvalid())
       return false;
 
-    Body = TryBlock.get();
-#endif
+    BodyInTryCatch = TryBlock.get();
+
     return true;
   }
 
   bool isInvalid() const { return !this->IsValid; }
-
-  ArrayRef<Stmt *> getParamMoves() { return ParamMoves; }
 
   bool makePromiseStmt() {
     // Form a declaration statement for the promise declaration, so that AST
@@ -972,9 +958,12 @@ public:
         if (Stmt.isInvalid())
           return false;
 
-        ParamMoves.push_back(Stmt.get());
+        ParamMovesVector.push_back(Stmt.get());
       }
     }
+
+    // Convert to ArrayRef in CtorArgs structure that builder inherits from.
+    ParamMoves = ParamMovesVector;
     return true;
   }
 };
@@ -998,9 +987,5 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
     return FD->setInvalidDecl();
 
   // Build body for the coroutine wrapper statement.
-  Body = CoroutineBodyStmt::Create(
-      Context, Builder.Body, Builder.Promise, Builder.InitialSuspend,
-      Builder.FinalSuspend, Builder.OnException, Builder.OnFallthrough,
-      Builder.Allocate, Builder.Deallocate, Builder.ResultDecl,
-      Builder.ReturnStmt, Builder.getParamMoves());
+  Body = CoroutineBodyStmt::Create(Context, Builder);
 }

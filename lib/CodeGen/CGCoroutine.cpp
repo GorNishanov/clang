@@ -623,7 +623,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     CurCoro.Data->FinalJD = getJumpDestInCurrentScope(FinalBB);
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
-    EmitStmt(S.getBody());
+    auto* Body = S.getBodyInTryCatch();
+    EmitStmt(Body ? Body : S.getBody());
 
     // See if we need to generate final suspend.
     const bool CanFallthrough = Builder.GetInsertBlock();

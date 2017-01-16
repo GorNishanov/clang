@@ -312,6 +312,7 @@ class CoroutineBodyStmt : public Stmt {
   };
 
   unsigned NumParams;
+  Stmt *BodyInTryCatch;
   Stmt *SubStmts[SubStmt::FirstParamMove];
 
   friend class ASTStmtReader;
@@ -319,18 +320,27 @@ class CoroutineBodyStmt : public Stmt {
   Stmt const *const *getStoredParams() const {
     return SubStmts + SubStmt::FirstParamMove;
   }
+public:
+  struct CtorArgs {
+    Stmt *Body = nullptr;
+    Stmt *BodyInTryCatch = nullptr;
+    Stmt *Promise = nullptr;
+    Expr *InitialSuspend = nullptr;
+    Expr *FinalSuspend = nullptr;
+    Stmt *OnException = nullptr;
+    Stmt *OnFallthrough = nullptr;
+    Expr *Allocate = nullptr;
+    Stmt *Deallocate = nullptr;
+    Stmt *ResultDecl = nullptr;
+    Stmt *ReturnStmt = nullptr;
+    ArrayRef<Stmt *> ParamMoves;
+  };
+private:
 
-  CoroutineBodyStmt(Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-                    Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
-                    Expr *Allocate, Stmt *Deallocate, Stmt *ResultDecl,
-                    Stmt *ReturnStmt, ArrayRef<Stmt *> ParamMoves);
+  CoroutineBodyStmt(CtorArgs const& Args);
 
 public:
-  static CoroutineBodyStmt *
-  Create(const ASTContext &C, Stmt *Body, Stmt *Promise, Expr *InitialSuspend,
-         Expr *FinalSuspend, Stmt *OnException, Stmt *OnFallthrough,
-         Expr *Allocate, Stmt *Deallocate, Stmt *ResultDecl, Stmt *ReturnStmt,
-         ArrayRef<Stmt *> ParamMoves);
+  static CoroutineBodyStmt *Create(const ASTContext &C, CtorArgs const&Args);
 
   ArrayRef<Stmt const *> getParamMoves() const {
     return {getStoredParams(), NumParams};
@@ -339,6 +349,7 @@ public:
   /// \brief Retrieve the body of the coroutine as written. This will be either
   /// a CompoundStmt or a TryStmt.
   Stmt *getBody() const { return SubStmts[SubStmt::Body]; }
+  Stmt *getBodyInTryCatch() const { return BodyInTryCatch; }
   DeclStmt *getPromiseDeclStmt() const {
     return cast<DeclStmt>(SubStmts[SubStmt::Promise]);
   }
