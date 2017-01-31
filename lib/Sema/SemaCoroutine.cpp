@@ -706,6 +706,18 @@ public:
     if (CatchBlock.isInvalid())
       return false;
 
+    if (OnFallthrough) {
+      StmtResult BodyWithFallthrough;
+      {
+        Sema::CompoundScopeRAII CompoundScope(S);
+        BodyWithFallthrough = S.ActOnCompoundStmt(Loc, Loc, {Body, OnFallthrough},
+          /*isStmtExpr=*/false);
+        assert(!BodyWithFallthrough.isInvalid() &&
+               "Compound statement creation cannot fail");
+      }
+      Body = BodyWithFallthrough.get();
+    }
+
     StmtResult TryBlock = S.ActOnCXXTryBlock(Loc, Body, {CatchBlock.get()});
     if (TryBlock.isInvalid())
       return false;

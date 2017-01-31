@@ -630,7 +630,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     const bool CanFallthrough = Builder.GetInsertBlock();
     const bool HasCoreturns = CurCoro.Data->CoreturnCount > 0;
     if (auto *OnFallthrough = S.getFallthroughHandler())
-      if (CanFallthrough)
+      if (CanFallthrough && !S.getBodyInTryCatch())
         EmitStmt(OnFallthrough);
     if (CanFallthrough || HasCoreturns) {
       EmitBlock(FinalBB);
