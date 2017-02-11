@@ -422,7 +422,7 @@ ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
   Expr *Res = new (Context) CoawaitExpr(Loc, E, RSS.OpaqueValue, RSS.Results[0],
                                         RSS.Results[1], RSS.Results[2]);
   Coroutine->CoroutineStmts.push_back(Res);
-  return Res;
+  return MaybeBindToTemporary(Res);
 }
 
 static ExprResult buildPromiseCall(Sema &S, FunctionScopeInfo *Coroutine,
@@ -497,7 +497,7 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   Expr *Res = new (Context) CoyieldExpr(Loc, E, RSS.OpaqueValue, RSS.Results[0],
                                         RSS.Results[1], RSS.Results[2]);
   Coroutine->CoroutineStmts.push_back(Res);
-  return Res;
+  return MaybeBindToTemporary(Res);
 }
 
 StmtResult Sema::ActOnCoreturnStmt(SourceLocation Loc, Expr *E) {
