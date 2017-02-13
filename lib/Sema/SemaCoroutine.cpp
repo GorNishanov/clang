@@ -729,17 +729,7 @@ public:
 
   bool isInvalid() const { return !this->IsValid; }
 
-  bool makePromiseStmt() {
-    // Form a declaration statement for the promise declaration, so that AST
-    // visitors can more easily find it.
-    StmtResult PromiseStmt = S.ActOnDeclStmt(
-        S.ConvertDeclToDeclGroup(Fn.CoroutinePromise), Loc, Loc);
-    if (PromiseStmt.isInvalid())
-      return false;
-
-    this->Promise = PromiseStmt.get();
-    return true;
-  }
+  bool makePromiseStmt();
 
   bool makeInitialSuspend() {
     // Form and check implicit 'co_await p.initial_suspend();' statement.
@@ -1000,4 +990,16 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
 
   // Build body for the coroutine wrapper statement.
   Body = CoroutineBodyStmt::Create(Context, Builder);
+}
+
+bool SubStmtBuilder::makePromiseStmt() {
+  // Form a declaration statement for the promise declaration, so that AST
+  // visitors can more easily find it.
+  StmtResult PromiseStmt = S.ActOnDeclStmt(
+    S.ConvertDeclToDeclGroup(Fn.CoroutinePromise), Loc, Loc);
+  if (PromiseStmt.isInvalid())
+    return false;
+
+  this->Promise = PromiseStmt.get();
+  return true;
 }
