@@ -333,7 +333,7 @@ public:
     Stmt *OnException = nullptr;
     Stmt *OnFallthrough = nullptr;
     Expr *Allocate = nullptr;
-    Stmt *Deallocate = nullptr;
+    Expr *Deallocate = nullptr;
     Stmt *ResultDecl = nullptr;
     Stmt *ReturnStmt = nullptr;
     ArrayRef<Stmt *> ParamMoves;

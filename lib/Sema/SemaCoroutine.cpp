@@ -599,7 +599,7 @@ static FunctionDecl *findDeleteForPromise(Sema &S, SourceLocation Loc,
 static bool buildAllocationAndDeallocation(Sema &S, SourceLocation Loc,
                                            FunctionScopeInfo *Fn,
                                            Expr *&Allocation,
-                                           Stmt *&Deallocation) {
+                                           Expr *&Deallocation) {
   TypeSourceInfo *TInfo = Fn->CoroutinePromise->getTypeSourceInfo();
   QualType PromiseType = TInfo->getType();
   if (PromiseType->isDependentType())
