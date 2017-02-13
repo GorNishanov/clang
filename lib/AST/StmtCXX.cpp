@@ -51,8 +51,8 @@ CXXTryStmt::CXXTryStmt(SourceLocation tryLoc, Stmt *tryBlock,
 
 CoroutineBodyStmt *CoroutineBodyStmt::Create(
     const ASTContext &C, CoroutineBodyStmt::CtorArgs const& Args) {
-  std::size_t Size = sizeof(CoroutineBodyStmt) + sizeof(SubStmt);
-  Size += (Args.ParamMoves.size() * sizeof(Stmt *));
+  std::size_t Size = totalSizeToAlloc<Stmt *>(
+    CoroutineBodyStmt::FirstParamMove + Args.ParamMoves.size());
 
   void *Mem = C.Allocate(Size, alignof(CoroutineBodyStmt));
   return new (Mem) CoroutineBodyStmt(Args);
@@ -61,6 +61,7 @@ CoroutineBodyStmt *CoroutineBodyStmt::Create(
 CoroutineBodyStmt::CoroutineBodyStmt(CoroutineBodyStmt::CtorArgs const &Args)
     : Stmt(CoroutineBodyStmtClass), NumParams(Args.ParamMoves.size()),
       BodyInTryCatch(Args.BodyInTryCatch) {
+  Stmt **SubStmts = getStoredStmts();
   SubStmts[CoroutineBodyStmt::Body] = Args.Body;
   SubStmts[CoroutineBodyStmt::Promise] = Args.Promise;
   SubStmts[CoroutineBodyStmt::InitSuspend] = Args.InitialSuspend;

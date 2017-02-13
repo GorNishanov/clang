@@ -296,7 +296,9 @@ public:
 /// \brief Represents the body of a coroutine. This wraps the normal function
 /// body and holds the additional semantic context required to set up and tear
 /// down the coroutine frame.
-class CoroutineBodyStmt : public Stmt {
+class CoroutineBodyStmt final
+    : public Stmt,
+      private llvm::TrailingObjects<CoroutineBodyStmt, Stmt *> {
   enum SubStmt {
     Body,          ///< The body of the coroutine.
     Promise,       ///< The promise statement.
@@ -313,14 +315,15 @@ class CoroutineBodyStmt : public Stmt {
 
   unsigned NumParams;
   Stmt *BodyInTryCatch;
-  Stmt *SubStmts[SubStmt::FirstParamMove];
 
   friend class ASTStmtReader;
+  friend TrailingObjects;
 
-  Stmt const *const *getStoredParams() const {
-    return SubStmts + SubStmt::FirstParamMove;
-  }
+  Stmt **getStoredStmts() { return getTrailingObjects<Stmt *>(); }
+  Stmt *const *getStoredStmts() const { return getTrailingObjects<Stmt *>(); }
+
 public:
+
   struct CtorArgs {
     Stmt *Body = nullptr;
     Stmt *BodyInTryCatch = nullptr;
@@ -335,38 +338,47 @@ public:
     Stmt *ReturnStmt = nullptr;
     ArrayRef<Stmt *> ParamMoves;
   };
+
 private:
 
   CoroutineBodyStmt(CtorArgs const& Args);
 
 public:
-  static CoroutineBodyStmt *Create(const ASTContext &C, CtorArgs const&Args);
-
-  ArrayRef<Stmt const *> getParamMoves() const {
-    return {getStoredParams(), NumParams};
-  }
+  static CoroutineBodyStmt *Create(const ASTContext &C, CtorArgs const &Args);
 
   /// \brief Retrieve the body of the coroutine as written. This will be either
   /// a CompoundStmt or a TryStmt.
-  Stmt *getBody() const { return SubStmts[SubStmt::Body]; }
+  Stmt *getBody() const { return getStoredStmts()[SubStmt::Body]; }
   Stmt *getBodyInTryCatch() const { return BodyInTryCatch; }
   DeclStmt *getPromiseDeclStmt() const {
-    return cast<DeclStmt>(SubStmts[SubStmt::Promise]);
+    return cast<DeclStmt>(getStoredStmts()[SubStmt::Promise]);
   }
   VarDecl *getPromiseDecl() const {
     return cast<VarDecl>(getPromiseDeclStmt()->getSingleDecl());
   }
-  Stmt *getInitSuspendStmt() const { return SubStmts[SubStmt::InitSuspend]; }
-  Stmt *getFinalSuspendStmt() const { return SubStmts[SubStmt::FinalSuspend]; }
-  Stmt *getExceptionHandler() const { return SubStmts[SubStmt::OnException]; }
-  Stmt *getFallthroughHandler() const {
-    return SubStmts[SubStmt::OnFallthrough];
+  Stmt *getInitSuspendStmt() const {
+    return getStoredStmts()[SubStmt::InitSuspend];
   }
-  Stmt *getResultDecl() const { return SubStmts[SubStmt::ResultDecl]; }
-  Stmt *getReturnStmt() const { return SubStmts[SubStmt::ReturnStmt]; }
-  Expr *getAllocate() const { return cast<Expr>(SubStmts[SubStmt::Allocate]); }
-  Stmt *getDeallocate() const { return SubStmts[SubStmt::Deallocate]; }
-
+  Stmt *getFinalSuspendStmt() const {
+    return getStoredStmts()[SubStmt::FinalSuspend];
+  }
+  Stmt *getExceptionHandler() const {
+    return getStoredStmts()[SubStmt::OnException];
+  }
+  Stmt *getFallthroughHandler() const {
+    return getStoredStmts()[SubStmt::OnFallthrough];
+  }
+  Stmt *getResultDecl() const { return getStoredStmts()[SubStmt::ResultDecl]; }
+  Stmt *getReturnStmt() const { return getStoredStmts()[SubStmt::ReturnStmt]; }
+  Expr *getAllocate() const {
+    return cast<Expr>(getStoredStmts()[SubStmt::Allocate]);
+  }
+  Stmt *getDeallocate() const {
+    return cast<Expr>(getStoredStmts()[SubStmt::Deallocate]);
+  }
+  ArrayRef<Stmt const *> getParamMoves() const {
+    return{ getStoredStmts() + SubStmt::FirstParamMove, NumParams };
+  }
 
   SourceLocation getLocStart() const LLVM_READONLY {
     return getBody()->getLocStart();
@@ -375,8 +387,8 @@ public:
     return getBody()->getLocEnd();
   }
   child_range children() {
-    return child_range(SubStmts,
-                       SubStmts + SubStmt::FirstParamMove + NumParams);
+    return child_range(getStoredStmts(),
+      getStoredStmts() + SubStmt::FirstParamMove + NumParams);
   }
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == CoroutineBodyStmtClass;
