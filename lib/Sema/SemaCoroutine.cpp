@@ -730,36 +730,8 @@ public:
   bool isInvalid() const { return !this->IsValid; }
 
   bool makePromiseStmt();
-
-  bool makeInitialSuspend() {
-    // Form and check implicit 'co_await p.initial_suspend();' statement.
-    ExprResult InitialSuspend =
-        buildPromiseCall(S, &Fn, Loc, "initial_suspend", None);
-    // FIXME: Support operator co_await here.
-    if (!InitialSuspend.isInvalid())
-      InitialSuspend = S.BuildCoawaitExpr(Loc, InitialSuspend.get());
-    InitialSuspend = S.ActOnFinishFullExpr(InitialSuspend.get());
-    if (InitialSuspend.isInvalid())
-      return false;
-
-    this->InitialSuspend = InitialSuspend.get();
-    return true;
-  }
-
-  bool makeFinalSuspend() {
-    // Form and check implicit 'co_await p.final_suspend();' statement.
-    ExprResult FinalSuspend =
-        buildPromiseCall(S, &Fn, Loc, "final_suspend", None);
-    // FIXME: Support operator co_await here.
-    if (!FinalSuspend.isInvalid())
-      FinalSuspend = S.BuildCoawaitExpr(Loc, FinalSuspend.get());
-    FinalSuspend = S.ActOnFinishFullExpr(FinalSuspend.get());
-    if (FinalSuspend.isInvalid())
-      return false;
-
-    this->FinalSuspend = FinalSuspend.get();
-    return true;
-  }
+  bool makeInitialSuspend();
+  bool makeFinalSuspend();
 
   bool makeOnException() {
     // If exceptions are disabled, don't try to build OnException.
@@ -995,11 +967,43 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
 bool SubStmtBuilder::makePromiseStmt() {
   // Form a declaration statement for the promise declaration, so that AST
   // visitors can more easily find it.
-  StmtResult PromiseStmt = S.ActOnDeclStmt(
-    S.ConvertDeclToDeclGroup(Fn.CoroutinePromise), Loc, Loc);
+  StmtResult PromiseStmt =
+      S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(Fn.CoroutinePromise), Loc, Loc);
   if (PromiseStmt.isInvalid())
     return false;
 
   this->Promise = PromiseStmt.get();
   return true;
 }
+
+bool SubStmtBuilder::makeInitialSuspend() {
+  // Form and check implicit 'co_await p.initial_suspend();' statement.
+  ExprResult InitialSuspend =
+      buildPromiseCall(S, &Fn, Loc, "initial_suspend", None);
+  // FIXME: Support operator co_await here.
+  if (!InitialSuspend.isInvalid())
+    InitialSuspend = S.BuildCoawaitExpr(Loc, InitialSuspend.get());
+  InitialSuspend = S.ActOnFinishFullExpr(InitialSuspend.get());
+  if (InitialSuspend.isInvalid())
+    return false;
+
+  this->InitialSuspend = InitialSuspend.get();
+  return true;
+}
+
+bool SubStmtBuilder::makeFinalSuspend() {
+  // Form and check implicit 'co_await p.final_suspend();' statement.
+  ExprResult FinalSuspend =
+      buildPromiseCall(S, &Fn, Loc, "final_suspend", None);
+  // FIXME: Support operator co_await here.
+  if (!FinalSuspend.isInvalid())
+    FinalSuspend = S.BuildCoawaitExpr(Loc, FinalSuspend.get());
+  FinalSuspend = S.ActOnFinishFullExpr(FinalSuspend.get());
+  if (FinalSuspend.isInvalid())
+    return false;
+
+  this->FinalSuspend = FinalSuspend.get();
+  return true;
+}
+
+// SubStmtBuilder::
