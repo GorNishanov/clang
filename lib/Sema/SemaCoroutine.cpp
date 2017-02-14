@@ -246,7 +246,7 @@ static FunctionScopeInfo *checkCoroutineContext(Sema &S, SourceLocation Loc,
                         S.Context.getTrivialTypeSourceInfo(T, Loc), SC_None);
     S.CheckVariableDeclarationType(ScopeInfo->CoroutinePromise);
     if (!ScopeInfo->CoroutinePromise->isInvalidDecl())
-      S.ActOnUninitializedDecl(ScopeInfo->CoroutinePromise, false);
+      S.ActOnUninitializedDecl(ScopeInfo->CoroutinePromise);
   }
 
   return ScopeInfo;
@@ -686,11 +686,20 @@ class SubStmtBuilder : public CoroutineBodyStmt::CtorArgs {
   QualType RetType;
   VarDecl *RetDecl = nullptr;
   SmallVector<Stmt *, 4> ParamMovesVector;
+  const bool IsPromiseDependentType;
+  CXXRecordDecl *PromiseRecordDecl = nullptr;
 
 public:
   SubStmtBuilder(Sema &S, FunctionDecl &FD, FunctionScopeInfo &Fn, Stmt *Body)
-      : S(S), FD(FD), Fn(Fn), Loc(FD.getLocation()) {
+      : S(S), FD(FD), Fn(Fn), Loc(FD.getLocation()),
+        IsPromiseDependentType(
+            !Fn.CoroutinePromise ||
+            Fn.CoroutinePromise->getType()->isDependentType()) {
     this->Body = Body;
+    if (!IsPromiseDependentType) {
+      PromiseRecordDecl = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
+      assert(PromiseRecordDecl && "Type should have already been checked");
+    }    this->Body = Body;
     this->IsValid = makePromiseStmt() && makeInitialSuspend() &&
                     makeFinalSuspend() && makeOnException() &&
                     makeOnFallthrough() && makeNewAndDeleteExpr() &&
@@ -848,28 +857,65 @@ bool SubStmtBuilder::makeOnFallthrough() {
   // the scope of class P. If both are found, the program is ill-formed.
   DeclarationName RVoidDN = S.PP.getIdentifierInfo("return_void");
   LookupResult RVoidResult(S, RVoidDN, Loc, Sema::LookupMemberName);
-  CXXRecordDecl *RD = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
-  const bool HasRVoid = S.LookupQualifiedName(RVoidResult, RD);
+  const bool HasRVoid = S.LookupQualifiedName(RVoidResult, PromiseRecordDecl);
 
   DeclarationName RValueDN = S.PP.getIdentifierInfo("return_value");
   LookupResult RValueResult(S, RValueDN, Loc, Sema::LookupMemberName);
-  const bool HasRValue = S.LookupQualifiedName(RValueResult, RD);
+  const bool HasRValue = S.LookupQualifiedName(RValueResult, PromiseRecordDecl);
 
+  StmtResult Fallthrough;
   if (HasRVoid && HasRValue) {
     // FIXME Improve this diagnostic
     S.Diag(FD.getLocation(), diag::err_coroutine_promise_return_ill_formed)
-        << RD;
+        << PromiseRecordDecl;
     return false;
   } else if (HasRVoid) {
     // If the unqualified-id return_void is found, flowing off the end of a
     // coroutine is equivalent to a co_return with no operand. Otherwise,
     // flowing off the end of a coroutine results in undefined behavior.
-    StmtResult Fallthrough = S.BuildCoreturnStmt(FD.getLocation(), nullptr);
+    Fallthrough = S.BuildCoreturnStmt(FD.getLocation(), nullptr);
     Fallthrough = S.ActOnFinishFullStmt(Fallthrough.get());
     if (Fallthrough.isInvalid())
       return false;
-    this->OnFallthrough = Fallthrough.get();
   }
+
+  this->OnFallthrough = Fallthrough.get();
+  return true;
+}
+
+bool SubStmtBuilder::makeOnException() {
+  // Try to form 'p.set_exception(std::current_exception());' to handle
+  // uncaught exceptions.
+  // TODO: Post WG21 Issaquah 2016 renamed set_exception to unhandled_exception
+  // TODO: and dropped exception_ptr parameter. Make it so.
+
+  if (!PromiseRecordDecl)
+    return true;
+
+  // If exceptions are disabled, don't try to build OnException.
+  if (!S.getLangOpts().CXXExceptions)
+    return true;
+
+  ExprResult SetException;
+
+  // [dcl.fct.def.coroutine]/3
+  // The unqualified-id set_exception is found in the scope of P by class
+  // member access lookup (3.4.5).
+  DeclarationName SetExDN = S.PP.getIdentifierInfo("set_exception");
+  LookupResult SetExResult(S, SetExDN, Loc, Sema::LookupMemberName);
+  if (S.LookupQualifiedName(SetExResult, PromiseRecordDecl)) {
+    // Form the call 'p.set_exception(std::current_exception())'
+    SetException = buildStdCurrentExceptionCall(S, Loc);
+    if (SetException.isInvalid())
+      return false;
+    Expr *E = SetException.get();
+    SetException = buildPromiseCall(S, &Fn, Loc, "set_exception", E);
+    SetException = S.ActOnFinishFullExpr(SetException.get(), Loc);
+    if (SetException.isInvalid())
+      return false;
+  }
+
+  this->OnException = SetException.get();
   return true;
 }
 

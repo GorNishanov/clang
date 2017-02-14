@@ -298,11 +298,17 @@ ClassTemplateDecl *ClassTemplateDecl::Create(ASTContext &C,
                                              DeclarationName Name,
                                              TemplateParameterList *Params,
                                              NamedDecl *Decl,
-                                             ClassTemplateDecl *PrevDecl) {
+                                             Expr *AssociatedConstraints) {
   AdoptTemplateParameterList(Params, cast<DeclContext>(Decl));
-  ClassTemplateDecl *New = new (C, DC) ClassTemplateDecl(C, DC, L, Name,
-                                                         Params, Decl);
-  New->setPreviousDecl(PrevDecl);
+
+  if (!AssociatedConstraints) {
+    return new (C, DC) ClassTemplateDecl(C, DC, L, Name, Params, Decl);
+  }
+
+  ConstrainedTemplateDeclInfo *const CTDI = new (C) ConstrainedTemplateDeclInfo;
+  ClassTemplateDecl *const New =
+      new (C, DC) ClassTemplateDecl(CTDI, C, DC, L, Name, Params, Decl);
+  New->setAssociatedConstraints(AssociatedConstraints);
   return New;
 }
 

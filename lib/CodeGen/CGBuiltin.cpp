@@ -482,10 +482,11 @@ enum class CodeGenFunction::MSVCIntrin {
   _InterlockedIncrement,
   _InterlockedOr,
   _InterlockedXor,
+  __fastfail,
 };
 
 Value *CodeGenFunction::EmitMSVCBuiltinExpr(MSVCIntrin BuiltinID,
-  const CallExpr *E) {
+                                            const CallExpr *E) {
   switch (BuiltinID) {
   case MSVCIntrin::_BitScanForward:
   case MSVCIntrin::_BitScanReverse: {
@@ -565,6 +566,37 @@ Value *CodeGenFunction::EmitMSVCBuiltinExpr(MSVCIntrin BuiltinID,
       ConstantInt::get(IntTy, 1),
       llvm::AtomicOrdering::SequentiallyConsistent);
     return Builder.CreateAdd(RMWI, ConstantInt::get(IntTy, 1));
+  }
+
+  case MSVCIntrin::__fastfail: {
+    // Request immediate process termination from the kernel. The instruction
+    // sequences to do this are documented on MSDN:
+    // https://msdn.microsoft.com/en-us/library/dn774154.aspx
+    llvm::Triple::ArchType ISA = getTarget().getTriple().getArch();
+    StringRef Asm, Constraints;
+    switch (ISA) {
+    default:
+      ErrorUnsupported(E, "__fastfail call for this architecture");
+      break;
+    case llvm::Triple::x86:
+    case llvm::Triple::x86_64:
+      Asm = "int $$0x29";
+      Constraints = "{cx}";
+      break;
+    case llvm::Triple::thumb:
+      Asm = "udf #251";
+      Constraints = "{r0}";
+      break;
+    }
+    llvm::FunctionType *FTy = llvm::FunctionType::get(VoidTy, {Int32Ty}, false);
+    llvm::InlineAsm *IA =
+        llvm::InlineAsm::get(FTy, Asm, Constraints, /*SideEffects=*/true);
+    llvm::AttributeSet NoReturnAttr =
+        AttributeSet::get(getLLVMContext(), llvm::AttributeSet::FunctionIndex,
+                          llvm::Attribute::NoReturn);
+    CallSite CS = Builder.CreateCall(IA, EmitScalarExpr(E->getArg(0)));
+    CS.setAttributes(NoReturnAttr);
+    return CS.getInstruction();
   }
   }
   llvm_unreachable("Incorrect MSVC intrinsic!");
@@ -1188,6 +1220,10 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Builder.CreateMemCpy(Dest, Src, SizeVal, false);
     return RValue::get(Dest.getPointer());
   }
+
+  case Builtin::BI__builtin_char_memchr:
+    BuiltinID = Builtin::BI__builtin_memchr;
+    break;
 
   case Builtin::BI__builtin___memcpy_chk: {
     // fold __builtin_memcpy_chk(x, y, cst1, cst2) to memcpy iff cst1<=cst2.
@@ -2272,6 +2308,11 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     break;
   }
 
+  case Builtin::BI__fastfail: {
+    return RValue::get(EmitMSVCBuiltinExpr(MSVCIntrin::__fastfail, E));
+    break;
+  }
+
   case Builtin::BI__builtin_coro_size: {
     auto & Context = getContext();
     auto SizeTy = Context.getSizeType();
@@ -2489,6 +2530,8 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
 
     llvm::Type *QueueTy = ConvertType(getContext().OCLQueueTy);
     llvm::Type *RangeTy = ConvertType(getContext().OCLNDRangeTy);
+    llvm::Type *GenericVoidPtrTy = Builder.getInt8PtrTy(
+        getContext().getTargetAddressSpace(LangAS::opencl_generic));
 
     llvm::Value *Queue = EmitScalarExpr(E->getArg(0));
     llvm::Value *Flags = EmitScalarExpr(E->getArg(1));
@@ -2498,12 +2541,12 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
       // The most basic form of the call with parameters:
       // queue_t, kernel_enqueue_flags_t, ndrange_t, block(void)
       Name = "__enqueue_kernel_basic";
-      llvm::Type *ArgTys[] = {QueueTy, Int32Ty, RangeTy, Int8PtrTy};
+      llvm::Type *ArgTys[] = {QueueTy, Int32Ty, RangeTy, GenericVoidPtrTy};
       llvm::FunctionType *FTy = llvm::FunctionType::get(
           Int32Ty, llvm::ArrayRef<llvm::Type *>(ArgTys, 4), false);
 
-      llvm::Value *Block =
-          Builder.CreateBitCast(EmitScalarExpr(E->getArg(3)), Int8PtrTy);
+      llvm::Value *Block = Builder.CreatePointerCast(
+          EmitScalarExpr(E->getArg(3)), GenericVoidPtrTy);
 
       return RValue::get(Builder.CreateCall(
           CGM.CreateRuntimeFunction(FTy, Name), {Queue, Flags, Range, Block}));
@@ -2514,14 +2557,14 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     if (E->getArg(3)->getType()->isBlockPointerType()) {
       // No events passed, but has variadic arguments.
       Name = "__enqueue_kernel_vaargs";
-      llvm::Value *Block =
-          Builder.CreateBitCast(EmitScalarExpr(E->getArg(3)), Int8PtrTy);
+      llvm::Value *Block = Builder.CreatePointerCast(
+          EmitScalarExpr(E->getArg(3)), GenericVoidPtrTy);
       // Create a vector of the arguments, as well as a constant value to
       // express to the runtime the number of variadic arguments.
       std::vector<llvm::Value *> Args = {Queue, Flags, Range, Block,
                                          ConstantInt::get(IntTy, NumArgs - 4)};
-      std::vector<llvm::Type *> ArgTys = {QueueTy, IntTy, RangeTy, Int8PtrTy,
-                                          IntTy};
+      std::vector<llvm::Type *> ArgTys = {QueueTy, IntTy, RangeTy,
+                                          GenericVoidPtrTy, IntTy};
 
       // Each of the following arguments specifies the size of the corresponding
       // argument passed to the enqueued block.
@@ -2551,12 +2594,12 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
       // Convert to generic address space.
       EventList = Builder.CreatePointerCast(EventList, EventPtrTy);
       ClkEvent = Builder.CreatePointerCast(ClkEvent, EventPtrTy);
-      llvm::Value *Block =
-          Builder.CreateBitCast(EmitScalarExpr(E->getArg(6)), Int8PtrTy);
+      llvm::Value *Block = Builder.CreatePointerCast(
+          EmitScalarExpr(E->getArg(6)), GenericVoidPtrTy);
 
-      std::vector<llvm::Type *> ArgTys = {QueueTy,  Int32Ty,    RangeTy,
-                                          Int32Ty,  EventPtrTy, EventPtrTy,
-                                          Int8PtrTy};
+      std::vector<llvm::Type *> ArgTys = {
+          QueueTy,    Int32Ty,    RangeTy,         Int32Ty,
+          EventPtrTy, EventPtrTy, GenericVoidPtrTy};
 
       std::vector<llvm::Value *> Args = {Queue,     Flags,    Range, NumEvents,
                                          EventList, ClkEvent, Block};
@@ -2592,26 +2635,30 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   // OpenCL v2.0 s6.13.17.6 - Kernel query functions need bitcast of block
   // parameter.
   case Builtin::BIget_kernel_work_group_size: {
+    llvm::Type *GenericVoidPtrTy = Builder.getInt8PtrTy(
+        getContext().getTargetAddressSpace(LangAS::opencl_generic));
     Value *Arg = EmitScalarExpr(E->getArg(0));
-    Arg = Builder.CreateBitCast(Arg, Int8PtrTy);
-    return RValue::get(
-        Builder.CreateCall(CGM.CreateRuntimeFunction(
-                               llvm::FunctionType::get(IntTy, Int8PtrTy, false),
-                               "__get_kernel_work_group_size_impl"),
-                           Arg));
-  }
-  case Builtin::BIget_kernel_preferred_work_group_size_multiple: {
-    Value *Arg = EmitScalarExpr(E->getArg(0));
-    Arg = Builder.CreateBitCast(Arg, Int8PtrTy);
+    Arg = Builder.CreatePointerCast(Arg, GenericVoidPtrTy);
     return RValue::get(Builder.CreateCall(
         CGM.CreateRuntimeFunction(
-            llvm::FunctionType::get(IntTy, Int8PtrTy, false),
+            llvm::FunctionType::get(IntTy, GenericVoidPtrTy, false),
+            "__get_kernel_work_group_size_impl"),
+        Arg));
+  }
+  case Builtin::BIget_kernel_preferred_work_group_size_multiple: {
+    llvm::Type *GenericVoidPtrTy = Builder.getInt8PtrTy(
+        getContext().getTargetAddressSpace(LangAS::opencl_generic));
+    Value *Arg = EmitScalarExpr(E->getArg(0));
+    Arg = Builder.CreatePointerCast(Arg, GenericVoidPtrTy);
+    return RValue::get(Builder.CreateCall(
+        CGM.CreateRuntimeFunction(
+            llvm::FunctionType::get(IntTy, GenericVoidPtrTy, false),
             "__get_kernel_preferred_work_group_multiple_impl"),
         Arg));
   }
   case Builtin::BIprintf:
-    if (getLangOpts().CUDA && getLangOpts().CUDAIsDevice)
-      return EmitCUDADevicePrintfCallExpr(E, ReturnValue);
+    if (getTarget().getTriple().isNVPTX())
+      return EmitNVPTXDevicePrintfCallExpr(E, ReturnValue);
     break;
   case Builtin::BI__builtin_canonicalize:
   case Builtin::BI__builtin_canonicalizef:
@@ -4318,9 +4365,9 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
   }
 
   if (BuiltinID == ARM::BI__builtin_arm_rbit) {
-    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_rbit),
-                                               EmitScalarExpr(E->getArg(0)),
-                              "rbit");
+    llvm::Value *Arg = EmitScalarExpr(E->getArg(0));
+    return Builder.CreateCall(
+        CGM.getIntrinsic(Intrinsic::bitreverse, Arg->getType()), Arg, "rbit");
   }
 
   if (BuiltinID == ARM::BI__clear_cache) {
@@ -8387,7 +8434,8 @@ Value *CodeGenFunction::EmitAMDGPUBuiltinExpr(unsigned BuiltinID,
   case AMDGPU::BI__builtin_amdgcn_classf:
   case AMDGPU::BI__builtin_amdgcn_classh:
     return emitFPIntBuiltin(*this, E, Intrinsic::amdgcn_class);
-
+  case AMDGPU::BI__builtin_amdgcn_fmed3f:
+    return emitTernaryBuiltin(*this, E, Intrinsic::amdgcn_fmed3);
   case AMDGPU::BI__builtin_amdgcn_read_exec: {
     CallInst *CI = cast<CallInst>(
       EmitSpecialRegisterBuiltin(*this, E, Int64Ty, Int64Ty, true, "exec"));

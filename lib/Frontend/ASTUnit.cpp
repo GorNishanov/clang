@@ -619,6 +619,10 @@ void StoredDiagnosticConsumer::HandleDiagnostic(DiagnosticsEngine::Level Level,
     StoredDiags.emplace_back(Level, Info);
 }
 
+IntrusiveRefCntPtr<ASTReader> ASTUnit::getASTReader() const {
+  return Reader;
+}
+
 ASTMutationListener *ASTUnit::getASTMutationListener() {
   if (WriterData)
     return &WriterData->Writer;
@@ -1879,6 +1883,7 @@ bool ASTUnit::LoadFromCompilerInvocation(
   // We'll manage file buffers ourselves.
   Invocation->getPreprocessorOpts().RetainRemappedFileBuffers = true;
   Invocation->getFrontendOpts().DisableFree = false;
+  getDiagnostics().Reset();
   ProcessWarningOptions(getDiagnostics(), Invocation->getDiagnosticOpts());
 
   std::unique_ptr<llvm::MemoryBuffer> OverrideMainBuffer;
@@ -1886,6 +1891,8 @@ bool ASTUnit::LoadFromCompilerInvocation(
     PreambleRebuildCounter = PrecompilePreambleAfterNParses;
     OverrideMainBuffer =
         getMainBufferWithPrecompiledPreamble(PCHContainerOps, *Invocation);
+    getDiagnostics().Reset();
+    ProcessWarningOptions(getDiagnostics(), Invocation->getDiagnosticOpts());
   }
   
   SimpleTimer ParsingTimer(WantTiming);

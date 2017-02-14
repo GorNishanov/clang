@@ -487,7 +487,8 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     break;
   }
   case Type::Auto:
-    llvm_unreachable("Unexpected undeduced auto type!");
+  case Type::DeducedTemplateSpecialization:
+    llvm_unreachable("Unexpected undeduced type!");
   case Type::Complex: {
     llvm::Type *EltTy = ConvertType(cast<ComplexType>(Ty)->getElementType());
     ResultType = llvm::StructType::get(EltTy, EltTy, nullptr);
@@ -737,7 +738,7 @@ CodeGenTypes::getCGRecordLayout(const RecordDecl *RD) {
 }
 
 bool CodeGenTypes::isPointerZeroInitializable(QualType T) {
-  assert (T->isAnyPointerType() && "Invalid type");
+  assert((T->isAnyPointerType() || T->isBlockPointerType()) && "Invalid type");
   return isZeroInitializable(T);
 }
 

@@ -657,10 +657,9 @@ Decl *TemplateDeclInstantiator::VisitVarDecl(VarDecl *D,
                                              ArrayRef<BindingDecl*> *Bindings) {
 
   // Do substitution on the type of the declaration
-  TypeSourceInfo *DI = SemaRef.SubstType(D->getTypeSourceInfo(),
-                                         TemplateArgs,
-                                         D->getTypeSpecStartLoc(),
-                                         D->getDeclName());
+  TypeSourceInfo *DI = SemaRef.SubstType(
+      D->getTypeSourceInfo(), TemplateArgs, D->getTypeSpecStartLoc(),
+      D->getDeclName(), /*AllowDeducedTST*/true);
   if (!DI)
     return nullptr;
 
@@ -1219,8 +1218,10 @@ Decl *TemplateDeclInstantiator::VisitClassTemplateDecl(ClassTemplateDecl *D) {
 
   ClassTemplateDecl *Inst
     = ClassTemplateDecl::Create(SemaRef.Context, DC, D->getLocation(),
-                                D->getIdentifier(), InstParams, RecordInst,
-                                PrevClassTemplate);
+                                D->getIdentifier(), InstParams, RecordInst);
+  assert(!(isFriend && Owner->isDependentContext()));
+  Inst->setPreviousDecl(PrevClassTemplate);
+
   RecordInst->setDescribedClassTemplate(Inst);
 
   if (isFriend) {
@@ -1609,6 +1610,10 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(FunctionDecl *D,
   if (D->isInlined())
     Function->setImplicitlyInline();
 
+  // A deduction-guide could be explicit.
+  if (D->isExplicitSpecified())
+    Function->setExplicitSpecified();
+
   if (QualifierLoc)
     Function->setQualifierInfo(QualifierLoc);
 
@@ -1654,8 +1659,6 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(FunctionDecl *D,
     FunctionTemplate->setLexicalDeclContext(LexicalDC);
 
     if (isFriend && D->isThisDeclarationADefinition()) {
-      // TODO: should we remember this connection regardless of whether
-      // the friend declaration provided a body?
       FunctionTemplate->setInstantiatedFromMemberTemplate(
                                            D->getDescribedFunctionTemplate());
     }
@@ -1666,13 +1669,10 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(FunctionDecl *D,
                             TemplateArgumentList::CreateCopy(SemaRef.Context,
                                                              Innermost),
                                                 /*InsertPos=*/nullptr);
-  } else if (isFriend) {
-    // Note, we need this connection even if the friend doesn't have a body.
-    // Its body may exist but not have been attached yet due to deferred
-    // parsing.
-    // FIXME: It might be cleaner to set this when attaching the body to the
-    // friend function declaration, however that would require finding all the
-    // instantiations and modifying them.
+  } else if (isFriend && D->isThisDeclarationADefinition()) {
+    // Do not connect the friend to the template unless it's actually a
+    // definition. We don't want non-template functions to be marked as being
+    // template instantiations.
     Function->setInstantiationOfMemberFunction(D, TSK_ImplicitInstantiation);
   }
 
@@ -4085,7 +4085,6 @@ void Sema::InstantiateVariableInitializer(
     }
 
     if (!Init.isInvalid()) {
-      bool TypeMayContainAuto = true;
       Expr *InitExpr = Init.get();
 
       if (Var->hasAttr<DLLImportAttr>() &&
@@ -4094,9 +4093,9 @@ void Sema::InstantiateVariableInitializer(
         // Do not dynamically initialize dllimport variables.
       } else if (InitExpr) {
         bool DirectInit = OldVar->isDirectInit();
-        AddInitializerToDecl(Var, InitExpr, DirectInit, TypeMayContainAuto);
+        AddInitializerToDecl(Var, InitExpr, DirectInit);
       } else
-        ActOnUninitializedDecl(Var, TypeMayContainAuto);
+        ActOnUninitializedDecl(Var);
     } else {
       // FIXME: Not too happy about invalidating the declaration
       // because of a bogus initializer.
@@ -4119,7 +4118,7 @@ void Sema::InstantiateVariableInitializer(
     if (Var->isCXXForRangeDecl())
       return;
 
-    ActOnUninitializedDecl(Var, false);
+    ActOnUninitializedDecl(Var);
   }
 }
 
@@ -4995,8 +4994,12 @@ NamedDecl *Sema::FindInstantiatedDecl(SourceLocation Loc, NamedDecl *D,
     NamedDecl *Result = nullptr;
     // FIXME: If the name is a dependent name, this lookup won't necessarily
     // find it. Does that ever matter?
-    if (D->getDeclName()) {
-      DeclContext::lookup_result Found = ParentDC->lookup(D->getDeclName());
+    if (auto Name = D->getDeclName()) {
+      DeclarationNameInfo NameInfo(Name, D->getLocation());
+      Name = SubstDeclarationNameInfo(NameInfo, TemplateArgs).getName();
+      if (!Name)
+        return nullptr;
+      DeclContext::lookup_result Found = ParentDC->lookup(Name);
       Result = findInstantiationOf(Context, D, Found.begin(), Found.end());
     } else {
       // Since we don't have a name for the entity we're looking for,
