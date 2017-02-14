@@ -698,35 +698,6 @@ public:
                     makeBody();
   }
 
-  bool makeBody() {
-    if (!OnException)
-      return true;
-
-    StmtResult CatchBlock = S.ActOnCXXCatchBlock(Loc, nullptr, OnException);
-    if (CatchBlock.isInvalid())
-      return false;
-
-    if (OnFallthrough) {
-      StmtResult BodyWithFallthrough;
-      {
-        Sema::CompoundScopeRAII CompoundScope(S);
-        BodyWithFallthrough = S.ActOnCompoundStmt(Loc, Loc, {Body, OnFallthrough},
-          /*isStmtExpr=*/false);
-        assert(!BodyWithFallthrough.isInvalid() &&
-               "Compound statement creation cannot fail");
-      }
-      Body = BodyWithFallthrough.get();
-    }
-
-    StmtResult TryBlock = S.ActOnCXXTryBlock(Loc, Body, {CatchBlock.get()});
-    if (TryBlock.isInvalid())
-      return false;
-
-    BodyInTryCatch = TryBlock.get();
-
-    return true;
-  }
-
   bool isInvalid() const { return !this->IsValid; }
 
   bool makePromiseStmt();
@@ -738,6 +709,7 @@ public:
   bool makeResultDecl();
   bool makeReturnStmt();
   bool makeParamMoves();
+  bool makeBody();
 
   // Create a static_cast\<T&&>(expr).
   Expr *CastForMoving(Expr *E, QualType T = QualType()) {
@@ -1005,5 +977,34 @@ bool SubStmtBuilder::makeParamMoves() {
 
   // Convert to ArrayRef in CtorArgs structure that builder inherits from.
   ParamMoves = ParamMovesVector;
+  return true;
+}
+
+bool SubStmtBuilder::makeBody() {
+  if (!OnException)
+    return true;
+
+  StmtResult CatchBlock = S.ActOnCXXCatchBlock(Loc, nullptr, OnException);
+  if (CatchBlock.isInvalid())
+    return false;
+
+  if (OnFallthrough) {
+    StmtResult BodyWithFallthrough;
+    {
+      Sema::CompoundScopeRAII CompoundScope(S);
+      BodyWithFallthrough = S.ActOnCompoundStmt(Loc, Loc, {Body, OnFallthrough},
+                                                /*isStmtExpr=*/false);
+      assert(!BodyWithFallthrough.isInvalid() &&
+             "Compound statement creation cannot fail");
+    }
+    Body = BodyWithFallthrough.get();
+  }
+
+  StmtResult TryBlock = S.ActOnCXXTryBlock(Loc, Body, {CatchBlock.get()});
+  if (TryBlock.isInvalid())
+    return false;
+
+  BodyInTryCatch = TryBlock.get();
+
   return true;
 }
