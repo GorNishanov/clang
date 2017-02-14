@@ -735,72 +735,9 @@ public:
   bool makeNewAndDeleteExpr();
   bool makeOnException();
   bool makeOnFallthrough();
-
-  bool makeResultDecl() {
-    ExprResult ReturnObject =
-      buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
-    if (ReturnObject.isInvalid())
-      return false;
-
-    RetType = ReturnObject.get()->getType();
-    if (RetType->isVoidType()) {
-      this->RetDecl = nullptr;
-      this->ResultDecl = ReturnObject.get();
-      return true;
-    }
-
-    if (!RetType->isDependentType()) {
-      InitializedEntity Entity =
-          InitializedEntity::InitializeResult(Loc, RetType, false);
-      ReturnObject = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
-                                                       ReturnObject.get());
-      if (ReturnObject.isInvalid())
-        return false;
-    }
-
-    RetDecl = VarDecl::Create(
-        S.Context, &FD, FD.getLocation(), FD.getLocation(),
-        &S.PP.getIdentifierTable().get("__coro_gro"), RetType,
-        S.Context.getTrivialTypeSourceInfo(RetType, Loc), SC_None);
-
-    S.CheckVariableDeclarationType(RetDecl);
-    if (RetDecl->isInvalidDecl())
-      return false;
-
-    if (RetType == FD.getReturnType()) {
-      RetDecl->setNRVOVariable(true);
-    }
-
-    S.AddInitializerToDecl(RetDecl, ReturnObject.get(),
-                           /*DirectInit=*/false, false); // TypeContainsAuto);
-
-    S.FinalizeDeclaration(RetDecl);
-
-    // Form a declaration statement for the return declaration, so that AST
-    // visitors can more easily find it.
-    StmtResult ResultStmt =
-        S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(RetDecl), Loc, Loc);
-    if (ResultStmt.isInvalid())
-      return false;
-
-    this->ResultDecl = ResultStmt.get();
-    return true;
-  }
-
-  bool makeReturnStmt() {
-    if (!RetDecl)
-      return true;
-
-    ExprResult declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
-    if (declRef.isInvalid())
-      return false;
-    StmtResult ReturnStmt =
-        S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
-    if (ReturnStmt.isInvalid())
-      return false;
-    this->ReturnStmt = ReturnStmt.get();
-    return true;
-  }
+  bool makeResultDecl();
+  bool makeReturnStmt();
+  bool makeParamMoves();
 
   // Create a static_cast\<T&&>(expr).
   Expr *CastForMoving(Expr *E, QualType T = QualType()) {
@@ -827,48 +764,6 @@ public:
         VarDecl::Create(S.Context, DC, Loc, Loc, II, Type, TInfo, SC_None);
     Decl->setImplicit();
     return Decl;
-  }
-
-  bool makeParamMoves() {
-    for (auto *paramDecl : FD.parameters()) {
-      auto Ty = paramDecl->getType();
-      if (Ty->isDependentType())
-        continue;
-
-      if (auto *RD = Ty->getAsCXXRecordDecl()) {
-        if (RD->isUnion())
-          continue;
-        if (!paramDecl->getIdentifier())
-          continue;
-        ExprResult ParamRef =
-            S.BuildDeclRefExpr(paramDecl, paramDecl->getType(),
-                               ExprValueKind::VK_LValue, Loc); // FIXME: scope?
-        if (ParamRef.isInvalid())
-          return false;
-
-        Expr *RCast = CastForMoving(ParamRef.get());
-
-        SmallString<16> str(paramDecl->getIdentifier()->getName());
-        str.append("_copy");
-        auto D = buildVarDecl(Loc, Ty, str);
-
-        S.AddInitializerToDecl(D, RCast,
-                               /*DirectInit=*/true,
-                               /*TypeMayContainAuto=*/false);
-
-        // Convert decl to a statement.
-        StmtResult Stmt =
-            S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(D), Loc, Loc);
-        if (Stmt.isInvalid())
-          return false;
-
-        ParamMovesVector.push_back(Stmt.get());
-      }
-    }
-
-    // Convert to ArrayRef in CtorArgs structure that builder inherits from.
-    ParamMoves = ParamMovesVector;
-    return true;
   }
 };
 }
@@ -1006,4 +901,109 @@ bool SubStmtBuilder::makeOnFallthrough() {
   return true;
 }
 
-// SubStmtBuilder::
+bool SubStmtBuilder::makeResultDecl() {
+  ExprResult ReturnObject =
+      buildPromiseCall(S, &Fn, Loc, "get_return_object", None);
+  if (ReturnObject.isInvalid())
+    return false;
+
+  RetType = ReturnObject.get()->getType();
+  if (RetType->isVoidType()) {
+    this->RetDecl = nullptr;
+    this->ResultDecl = ReturnObject.get();
+    return true;
+  }
+
+  if (!RetType->isDependentType()) {
+    InitializedEntity Entity =
+        InitializedEntity::InitializeResult(Loc, RetType, false);
+    ReturnObject = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
+                                                     ReturnObject.get());
+    if (ReturnObject.isInvalid())
+      return false;
+  }
+
+  RetDecl = VarDecl::Create(
+      S.Context, &FD, FD.getLocation(), FD.getLocation(),
+      &S.PP.getIdentifierTable().get("__coro_gro"), RetType,
+      S.Context.getTrivialTypeSourceInfo(RetType, Loc), SC_None);
+
+  S.CheckVariableDeclarationType(RetDecl);
+  if (RetDecl->isInvalidDecl())
+    return false;
+
+  if (RetType == FD.getReturnType()) {
+    RetDecl->setNRVOVariable(true);
+  }
+
+  S.AddInitializerToDecl(RetDecl, ReturnObject.get(),
+                         /*DirectInit=*/false, false); // TypeContainsAuto);
+
+  S.FinalizeDeclaration(RetDecl);
+
+  // Form a declaration statement for the return declaration, so that AST
+  // visitors can more easily find it.
+  StmtResult ResultStmt =
+      S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(RetDecl), Loc, Loc);
+  if (ResultStmt.isInvalid())
+    return false;
+
+  this->ResultDecl = ResultStmt.get();
+  return true;
+}
+
+bool SubStmtBuilder::makeReturnStmt() {
+  if (!RetDecl)
+    return true;
+
+  ExprResult declRef = S.BuildDeclRefExpr(RetDecl, RetType, VK_LValue, Loc);
+  if (declRef.isInvalid())
+    return false;
+  StmtResult ReturnStmt =
+      S.ActOnReturnStmt(Loc, declRef.get(), S.getCurScope());
+  if (ReturnStmt.isInvalid())
+    return false;
+  this->ReturnStmt = ReturnStmt.get();
+  return true;
+}
+
+bool SubStmtBuilder::makeParamMoves() {
+  for (auto *paramDecl : FD.parameters()) {
+    auto Ty = paramDecl->getType();
+    if (Ty->isDependentType())
+      continue;
+
+    if (auto *RD = Ty->getAsCXXRecordDecl()) {
+      if (RD->isUnion())
+        continue;
+      if (!paramDecl->getIdentifier())
+        continue;
+      ExprResult ParamRef =
+          S.BuildDeclRefExpr(paramDecl, paramDecl->getType(),
+                             ExprValueKind::VK_LValue, Loc); // FIXME: scope?
+      if (ParamRef.isInvalid())
+        return false;
+
+      Expr *RCast = CastForMoving(ParamRef.get());
+
+      SmallString<16> str(paramDecl->getIdentifier()->getName());
+      str.append("_copy");
+      auto D = buildVarDecl(Loc, Ty, str);
+
+      S.AddInitializerToDecl(D, RCast,
+                             /*DirectInit=*/true,
+                             /*TypeMayContainAuto=*/false);
+
+      // Convert decl to a statement.
+      StmtResult Stmt = S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(D), Loc, Loc);
+      if (Stmt.isInvalid())
+        return false;
+
+      ParamMovesVector.push_back(Stmt.get());
+    }
+  }
+
+  // Convert to ArrayRef in CtorArgs structure that builder inherits from.
+  ParamMoves = ParamMovesVector;
+  return true;
+}
