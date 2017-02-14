@@ -49,33 +49,6 @@ CXXTryStmt::CXXTryStmt(SourceLocation tryLoc, Stmt *tryBlock,
   std::copy(handlers.begin(), handlers.end(), Stmts + 1);
 }
 
-CoroutineBodyStmt *CoroutineBodyStmt::Create(
-    const ASTContext &C, CoroutineBodyStmt::CtorArgs const& Args) {
-  std::size_t Size = totalSizeToAlloc<Stmt *>(
-    CoroutineBodyStmt::FirstParamMove + Args.ParamMoves.size());
-
-  void *Mem = C.Allocate(Size, alignof(CoroutineBodyStmt));
-  return new (Mem) CoroutineBodyStmt(Args);
-}
-
-CoroutineBodyStmt::CoroutineBodyStmt(CoroutineBodyStmt::CtorArgs const &Args)
-    : Stmt(CoroutineBodyStmtClass), NumParams(Args.ParamMoves.size()),
-      BodyInTryCatch(Args.BodyInTryCatch) {
-  Stmt **SubStmts = getStoredStmts();
-  SubStmts[CoroutineBodyStmt::Body] = Args.Body;
-  SubStmts[CoroutineBodyStmt::Promise] = Args.Promise;
-  SubStmts[CoroutineBodyStmt::InitSuspend] = Args.InitialSuspend;
-  SubStmts[CoroutineBodyStmt::FinalSuspend] = Args.FinalSuspend;
-  SubStmts[CoroutineBodyStmt::OnException] = Args.OnException;
-  SubStmts[CoroutineBodyStmt::OnFallthrough] = Args.OnFallthrough;
-  SubStmts[CoroutineBodyStmt::Allocate] = Args.Allocate;
-  SubStmts[CoroutineBodyStmt::Deallocate] = Args.Deallocate;
-  SubStmts[CoroutineBodyStmt::ResultDecl] = Args.ResultDecl;
-  SubStmts[CoroutineBodyStmt::ReturnStmt] = Args.ReturnStmt;
-  std::copy(Args.ParamMoves.begin(), Args.ParamMoves.end(),
-            const_cast<Stmt **>(getParamMoves().data()));
-}
-
 CXXForRangeStmt::CXXForRangeStmt(DeclStmt *Range,
                                  DeclStmt *BeginStmt, DeclStmt *EndStmt,
                                  Expr *Cond, Expr *Inc, DeclStmt *LoopVar,
@@ -114,8 +87,9 @@ const VarDecl *CXXForRangeStmt::getLoopVariable() const {
   return const_cast<CXXForRangeStmt *>(this)->getLoopVariable();
 }
 
-CoroutineBodyStmt *CoroutineBodyStmt::Create(
-    const ASTContext &C, CoroutineBodyStmt::CtorArgs const& Args) {
+CoroutineBodyStmt *
+CoroutineBodyStmt::Create(const ASTContext &C,
+                          CoroutineBodyStmt::CtorArgs const &Args) {
   std::size_t Size = totalSizeToAlloc<Stmt *>(
       CoroutineBodyStmt::FirstParamMove + Args.ParamMoves.size());
 
@@ -124,7 +98,8 @@ CoroutineBodyStmt *CoroutineBodyStmt::Create(
 }
 
 CoroutineBodyStmt::CoroutineBodyStmt(CoroutineBodyStmt::CtorArgs const &Args)
-    : Stmt(CoroutineBodyStmtClass), NumParams(Args.ParamMoves.size()) {
+    : Stmt(CoroutineBodyStmtClass), NumParams(Args.ParamMoves.size()),
+      BodyInTryCatch(Args.BodyInTryCatch) {
   Stmt **SubStmts = getStoredStmts();
   SubStmts[CoroutineBodyStmt::Body] = Args.Body;
   SubStmts[CoroutineBodyStmt::Promise] = Args.Promise;
@@ -134,7 +109,8 @@ CoroutineBodyStmt::CoroutineBodyStmt(CoroutineBodyStmt::CtorArgs const &Args)
   SubStmts[CoroutineBodyStmt::OnFallthrough] = Args.OnFallthrough;
   SubStmts[CoroutineBodyStmt::Allocate] = Args.Allocate;
   SubStmts[CoroutineBodyStmt::Deallocate] = Args.Deallocate;
-  SubStmts[CoroutineBodyStmt::ReturnValue] = Args.ReturnValue;
+  SubStmts[CoroutineBodyStmt::ResultDecl] = Args.ResultDecl;
+  SubStmts[CoroutineBodyStmt::ReturnStmt] = Args.ReturnStmt;
   std::copy(Args.ParamMoves.begin(), Args.ParamMoves.end(),
             const_cast<Stmt **>(getParamMoves().data()));
 }

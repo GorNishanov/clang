@@ -818,24 +818,28 @@ bool SubStmtBuilder::makeNewAndDeleteExpr() {
 }
 
 bool SubStmtBuilder::makeOnException() {
+  // Try to form 'p.set_exception(std::current_exception());' to handle
+  // uncaught exceptions.
+  // TODO: Post WG21 Issaquah 2016 renamed set_exception to unhandled_exception
+  // TODO: and dropped exception_ptr parameter. Make it so.
+
+  if (!PromiseRecordDecl)
+    return true;
+
   // If exceptions are disabled, don't try to build OnException.
   if (!S.getLangOpts().CXXExceptions)
     return true;
 
-  if (!Fn.CoroutinePromise || Fn.CoroutinePromise->getType()->isDependentType())
-    return true;
+  ExprResult SetException;
 
   // [dcl.fct.def.coroutine]/3
   // The unqualified-id set_exception is found in the scope of P by class
   // member access lookup (3.4.5).
   DeclarationName SetExDN = S.PP.getIdentifierInfo("set_exception");
   LookupResult SetExResult(S, SetExDN, Loc, Sema::LookupMemberName);
-  CXXRecordDecl *RD = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
-  assert(RD && "Type should have already been checked");
-
-  if (S.LookupQualifiedName(SetExResult, RD)) {
+  if (S.LookupQualifiedName(SetExResult, PromiseRecordDecl)) {
     // Form the call 'p.set_exception(std::current_exception())'
-    auto SetException = buildStdCurrentExceptionCall(S, Loc);
+    SetException = buildStdCurrentExceptionCall(S, Loc);
     if (SetException.isInvalid())
       return false;
     Expr *E = SetException.get();
@@ -843,8 +847,9 @@ bool SubStmtBuilder::makeOnException() {
     SetException = S.ActOnFinishFullExpr(SetException.get(), Loc);
     if (SetException.isInvalid())
       return false;
-    this->OnException = SetException.get();
   }
+
+  this->OnException = SetException.get();
   return true;
 }
 
@@ -880,42 +885,6 @@ bool SubStmtBuilder::makeOnFallthrough() {
   }
 
   this->OnFallthrough = Fallthrough.get();
-  return true;
-}
-
-bool SubStmtBuilder::makeOnException() {
-  // Try to form 'p.set_exception(std::current_exception());' to handle
-  // uncaught exceptions.
-  // TODO: Post WG21 Issaquah 2016 renamed set_exception to unhandled_exception
-  // TODO: and dropped exception_ptr parameter. Make it so.
-
-  if (!PromiseRecordDecl)
-    return true;
-
-  // If exceptions are disabled, don't try to build OnException.
-  if (!S.getLangOpts().CXXExceptions)
-    return true;
-
-  ExprResult SetException;
-
-  // [dcl.fct.def.coroutine]/3
-  // The unqualified-id set_exception is found in the scope of P by class
-  // member access lookup (3.4.5).
-  DeclarationName SetExDN = S.PP.getIdentifierInfo("set_exception");
-  LookupResult SetExResult(S, SetExDN, Loc, Sema::LookupMemberName);
-  if (S.LookupQualifiedName(SetExResult, PromiseRecordDecl)) {
-    // Form the call 'p.set_exception(std::current_exception())'
-    SetException = buildStdCurrentExceptionCall(S, Loc);
-    if (SetException.isInvalid())
-      return false;
-    Expr *E = SetException.get();
-    SetException = buildPromiseCall(S, &Fn, Loc, "set_exception", E);
-    SetException = S.ActOnFinishFullExpr(SetException.get(), Loc);
-    if (SetException.isInvalid())
-      return false;
-  }
-
-  this->OnException = SetException.get();
   return true;
 }
 
@@ -955,7 +924,7 @@ bool SubStmtBuilder::makeResultDecl() {
   }
 
   S.AddInitializerToDecl(RetDecl, ReturnObject.get(),
-                         /*DirectInit=*/false, false); // TypeContainsAuto);
+                         /*DirectInit=*/false);
 
   S.FinalizeDeclaration(RetDecl);
 
@@ -1008,9 +977,7 @@ bool SubStmtBuilder::makeParamMoves() {
       str.append("_copy");
       auto D = buildVarDecl(Loc, Ty, str);
 
-      S.AddInitializerToDecl(D, RCast,
-                             /*DirectInit=*/true,
-                             /*TypeMayContainAuto=*/false);
+      S.AddInitializerToDecl(D, RCast, /*DirectInit=*/true);
 
       // Convert decl to a statement.
       StmtResult Stmt = S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(D), Loc, Loc);
