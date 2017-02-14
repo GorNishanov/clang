@@ -732,79 +732,9 @@ public:
   bool makePromiseStmt();
   bool makeInitialSuspend();
   bool makeFinalSuspend();
-
-  bool makeOnException() {
-    // If exceptions are disabled, don't try to build OnException.
-    if (!S.getLangOpts().CXXExceptions)
-      return true;
-
-    if (!Fn.CoroutinePromise ||
-      Fn.CoroutinePromise->getType()->isDependentType())
-      return true;
-
-    // [dcl.fct.def.coroutine]/3
-    // The unqualified-id set_exception is found in the scope of P by class
-    // member access lookup (3.4.5).
-    DeclarationName SetExDN = S.PP.getIdentifierInfo("set_exception");
-    LookupResult SetExResult(S, SetExDN, Loc, Sema::LookupMemberName);
-    CXXRecordDecl *RD = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
-    assert(RD && "Type should have already been checked");
-
-    if (S.LookupQualifiedName(SetExResult, RD)) {
-      // Form the call 'p.set_exception(std::current_exception())'
-      auto SetException = buildStdCurrentExceptionCall(S, Loc);
-      if (SetException.isInvalid())
-        return false;
-      Expr *E = SetException.get();
-      SetException = buildPromiseCall(S, &Fn, Loc, "set_exception", E);
-      SetException = S.ActOnFinishFullExpr(SetException.get(), Loc);
-      if (SetException.isInvalid())
-        return false;
-      this->OnException = SetException.get();
-    }
-    return true;
-  }
-
-  bool makeOnFallthrough() {
-    if (!Fn.CoroutinePromise ||
-        Fn.CoroutinePromise->getType()->isDependentType())
-      return true;
-
-    // [dcl.fct.def.coroutine]/4
-    // The unqualified-ids 'return_void' and 'return_value' are looked up in
-    // the scope of class P. If both are found, the program is ill-formed.
-    DeclarationName RVoidDN = S.PP.getIdentifierInfo("return_void");
-    LookupResult RVoidResult(S, RVoidDN, Loc, Sema::LookupMemberName);
-    CXXRecordDecl *RD = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
-    const bool HasRVoid = S.LookupQualifiedName(RVoidResult, RD);
-
-    DeclarationName RValueDN = S.PP.getIdentifierInfo("return_value");
-    LookupResult RValueResult(S, RValueDN, Loc, Sema::LookupMemberName);
-    const bool HasRValue = S.LookupQualifiedName(RValueResult, RD);
-
-    if (HasRVoid && HasRValue) {
-      // FIXME Improve this diagnostic
-      S.Diag(FD.getLocation(), diag::err_coroutine_promise_return_ill_formed)
-        << RD;
-      return false;
-    }
-    else if (HasRVoid) {
-      // If the unqualified-id return_void is found, flowing off the end of a
-      // coroutine is equivalent to a co_return with no operand. Otherwise,
-      // flowing off the end of a coroutine results in undefined behavior.
-      StmtResult Fallthrough = S.BuildCoreturnStmt(FD.getLocation(), nullptr);
-      Fallthrough = S.ActOnFinishFullStmt(Fallthrough.get());
-      if (Fallthrough.isInvalid())
-        return false;
-      this->OnFallthrough = Fallthrough.get();
-    }
-    return true;
-  }
-
-  bool makeNewAndDeleteExpr() {
-    return buildAllocationAndDeallocation(S, Loc, &Fn, this->Allocate,
-                                          this->Deallocate);
-  }
+  bool makeNewAndDeleteExpr();
+  bool makeOnException();
+  bool makeOnFallthrough();
 
   bool makeResultDecl() {
     ExprResult ReturnObject =
@@ -1003,6 +933,76 @@ bool SubStmtBuilder::makeFinalSuspend() {
     return false;
 
   this->FinalSuspend = FinalSuspend.get();
+  return true;
+}
+
+bool SubStmtBuilder::makeNewAndDeleteExpr() {
+  return buildAllocationAndDeallocation(S, Loc, &Fn, this->Allocate,
+                                        this->Deallocate);
+}
+
+bool SubStmtBuilder::makeOnException() {
+  // If exceptions are disabled, don't try to build OnException.
+  if (!S.getLangOpts().CXXExceptions)
+    return true;
+
+  if (!Fn.CoroutinePromise || Fn.CoroutinePromise->getType()->isDependentType())
+    return true;
+
+  // [dcl.fct.def.coroutine]/3
+  // The unqualified-id set_exception is found in the scope of P by class
+  // member access lookup (3.4.5).
+  DeclarationName SetExDN = S.PP.getIdentifierInfo("set_exception");
+  LookupResult SetExResult(S, SetExDN, Loc, Sema::LookupMemberName);
+  CXXRecordDecl *RD = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
+  assert(RD && "Type should have already been checked");
+
+  if (S.LookupQualifiedName(SetExResult, RD)) {
+    // Form the call 'p.set_exception(std::current_exception())'
+    auto SetException = buildStdCurrentExceptionCall(S, Loc);
+    if (SetException.isInvalid())
+      return false;
+    Expr *E = SetException.get();
+    SetException = buildPromiseCall(S, &Fn, Loc, "set_exception", E);
+    SetException = S.ActOnFinishFullExpr(SetException.get(), Loc);
+    if (SetException.isInvalid())
+      return false;
+    this->OnException = SetException.get();
+  }
+  return true;
+}
+
+bool SubStmtBuilder::makeOnFallthrough() {
+  if (!Fn.CoroutinePromise || Fn.CoroutinePromise->getType()->isDependentType())
+    return true;
+
+  // [dcl.fct.def.coroutine]/4
+  // The unqualified-ids 'return_void' and 'return_value' are looked up in
+  // the scope of class P. If both are found, the program is ill-formed.
+  DeclarationName RVoidDN = S.PP.getIdentifierInfo("return_void");
+  LookupResult RVoidResult(S, RVoidDN, Loc, Sema::LookupMemberName);
+  CXXRecordDecl *RD = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
+  const bool HasRVoid = S.LookupQualifiedName(RVoidResult, RD);
+
+  DeclarationName RValueDN = S.PP.getIdentifierInfo("return_value");
+  LookupResult RValueResult(S, RValueDN, Loc, Sema::LookupMemberName);
+  const bool HasRValue = S.LookupQualifiedName(RValueResult, RD);
+
+  if (HasRVoid && HasRValue) {
+    // FIXME Improve this diagnostic
+    S.Diag(FD.getLocation(), diag::err_coroutine_promise_return_ill_formed)
+        << RD;
+    return false;
+  } else if (HasRVoid) {
+    // If the unqualified-id return_void is found, flowing off the end of a
+    // coroutine is equivalent to a co_return with no operand. Otherwise,
+    // flowing off the end of a coroutine results in undefined behavior.
+    StmtResult Fallthrough = S.BuildCoreturnStmt(FD.getLocation(), nullptr);
+    Fallthrough = S.ActOnFinishFullStmt(Fallthrough.get());
+    if (Fallthrough.isInvalid())
+      return false;
+    this->OnFallthrough = Fallthrough.get();
+  }
   return true;
 }
 
