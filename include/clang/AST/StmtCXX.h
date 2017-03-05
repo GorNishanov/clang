@@ -312,7 +312,6 @@ class CoroutineBodyStmt final
     ReturnStmt,    ///< Return statement for the thunk function.
     FirstParamMove ///< First offset for move construction of parameter copies.
   };
-
   unsigned NumParams;
   Stmt *BodyInTryCatch;
 
@@ -348,13 +347,15 @@ public:
 
   /// \brief Retrieve the body of the coroutine as written. This will be either
   /// a CompoundStmt or a TryStmt.
-  Stmt *getBody() const { return getStoredStmts()[SubStmt::Body]; }
+  Stmt *getBody() const {
+    return getStoredStmts()[SubStmt::Body];
+  }
   Stmt *getBodyInTryCatch() const { return BodyInTryCatch; }
-  DeclStmt *getPromiseDeclStmt() const {
-    return cast<DeclStmt>(getStoredStmts()[SubStmt::Promise]);
+  Stmt *getPromiseDeclStmt() const {
+    return getStoredStmts()[SubStmt::Promise];
   }
   VarDecl *getPromiseDecl() const {
-    return cast<VarDecl>(getPromiseDeclStmt()->getSingleDecl());
+    return cast<VarDecl>(cast<DeclStmt>(getPromiseDeclStmt())->getSingleDecl());
   }
   Stmt *getInitSuspendStmt() const {
     return getStoredStmts()[SubStmt::InitSuspend];
@@ -373,11 +374,11 @@ public:
   Expr *getAllocate() const {
     return cast<Expr>(getStoredStmts()[SubStmt::Allocate]);
   }
-  Stmt *getDeallocate() const {
+  Expr *getDeallocate() const {
     return cast<Expr>(getStoredStmts()[SubStmt::Deallocate]);
   }
   ArrayRef<Stmt const *> getParamMoves() const {
-    return{ getStoredStmts() + SubStmt::FirstParamMove, NumParams };
+    return {getStoredStmts() + SubStmt::FirstParamMove, NumParams};
   }
 
   SourceLocation getLocStart() const LLVM_READONLY {
@@ -386,10 +387,12 @@ public:
   SourceLocation getLocEnd() const LLVM_READONLY {
     return getBody()->getLocEnd();
   }
+
   child_range children() {
     return child_range(getStoredStmts(),
       getStoredStmts() + SubStmt::FirstParamMove + NumParams);
   }
+
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == CoroutineBodyStmtClass;
   }

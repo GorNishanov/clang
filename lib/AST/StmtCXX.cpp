@@ -87,9 +87,8 @@ const VarDecl *CXXForRangeStmt::getLoopVariable() const {
   return const_cast<CXXForRangeStmt *>(this)->getLoopVariable();
 }
 
-CoroutineBodyStmt *
-CoroutineBodyStmt::Create(const ASTContext &C,
-                          CoroutineBodyStmt::CtorArgs const &Args) {
+CoroutineBodyStmt *CoroutineBodyStmt::Create(
+    const ASTContext &C, CoroutineBodyStmt::CtorArgs const &Args) {
   std::size_t Size = totalSizeToAlloc<Stmt *>(
       CoroutineBodyStmt::FirstParamMove + Args.ParamMoves.size());
 

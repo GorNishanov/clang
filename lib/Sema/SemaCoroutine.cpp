@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "TreeTransform.h"
 #include "clang/Sema/SemaInternal.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/ExprCXX.h"
@@ -110,7 +109,7 @@ static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S,
   }
 
   LookupResult Result(S, &S.PP.getIdentifierTable().get("coroutine_handle"),
-    Loc, Sema::LookupOrdinaryName);
+                      Loc, Sema::LookupOrdinaryName);
   if (!S.LookupQualifiedName(Result, Std)) {
     S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
     return nullptr;
@@ -128,7 +127,7 @@ static ClassTemplateDecl *lookupStdCoroutineHandle(Sema &S,
   // correct.
   TemplateParameterList *Params = Template->getTemplateParameters();
   if (Params->getMinRequiredArguments() > 1 ||
-    !isa<TemplateTypeParmDecl>(Params->getParam(0))) {
+      !isa<TemplateTypeParmDecl>(Params->getParam(0))) {
     S.Diag(Template->getLocation(), diag::err_malformed_std_coroutine_handle);
     return nullptr;
   }
@@ -406,12 +405,10 @@ ExprResult Sema::BuildCoawaitExpr(SourceLocation Loc, Expr *E) {
     return Res;
   }
 
-#if 0
   // If the expression is a temporary, materialize it as an lvalue so that we
   // can use it multiple times.
   if (E->getValueKind() == VK_RValue)
     E = CreateMaterializeTemporaryExpr(E->getType(), E, true);
-#endif
 
   // Build the await_ready, await_suspend, await_resume calls.
   ReadySuspendResumeResult RSS =
@@ -699,7 +696,7 @@ public:
     if (!IsPromiseDependentType) {
       PromiseRecordDecl = Fn.CoroutinePromise->getType()->getAsCXXRecordDecl();
       assert(PromiseRecordDecl && "Type should have already been checked");
-    }    this->Body = Body;
+    }
     this->IsValid = makePromiseStmt() && makeInitialSuspend() &&
                     makeFinalSuspend() && makeOnException() &&
                     makeOnFallthrough() && makeNewAndDeleteExpr() &&
@@ -757,11 +754,11 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
   //   A return statement shall not appear in a coroutine.
   if (Fn->FirstReturnLoc.isValid()) {
     Diag(Fn->FirstReturnLoc, diag::err_return_in_coroutine);
-    Stmt *First = Fn->CoroutineStmts[0];
+    auto *First = Fn->CoroutineStmts[0];
     Diag(First->getLocStart(), diag::note_declared_coroutine_here)
-        << (isa<CoawaitExpr>(First) ? 0 : isa<CoyieldExpr>(First) ? 1 : 2);
+        << (isa<CoawaitExpr>(First) ? 0 :
+            isa<CoyieldExpr>(First) ? 1 : 2);
   }
-
   SubStmtBuilder Builder(*this, *FD, *Fn, Body);
   if (Builder.isInvalid())
     return FD->setInvalidDecl();
@@ -813,8 +810,44 @@ bool SubStmtBuilder::makeFinalSuspend() {
 }
 
 bool SubStmtBuilder::makeNewAndDeleteExpr() {
+  // Form and check allocation and deallocation calls.
   return buildAllocationAndDeallocation(S, Loc, &Fn, this->Allocate,
                                         this->Deallocate);
+}
+
+bool SubStmtBuilder::makeOnFallthrough() {
+  if (!Fn.CoroutinePromise || Fn.CoroutinePromise->getType()->isDependentType())
+    return true;
+
+  // [dcl.fct.def.coroutine]/4
+  // The unqualified-ids 'return_void' and 'return_value' are looked up in
+  // the scope of class P. If both are found, the program is ill-formed.
+  DeclarationName RVoidDN = S.PP.getIdentifierInfo("return_void");
+  LookupResult RVoidResult(S, RVoidDN, Loc, Sema::LookupMemberName);
+  const bool HasRVoid = S.LookupQualifiedName(RVoidResult, PromiseRecordDecl);
+
+  DeclarationName RValueDN = S.PP.getIdentifierInfo("return_value");
+  LookupResult RValueResult(S, RValueDN, Loc, Sema::LookupMemberName);
+  const bool HasRValue = S.LookupQualifiedName(RValueResult, PromiseRecordDecl);
+
+  StmtResult Fallthrough;
+  if (HasRVoid && HasRValue) {
+    // FIXME Improve this diagnostic
+    S.Diag(FD.getLocation(), diag::err_coroutine_promise_return_ill_formed)
+        << PromiseRecordDecl;
+    return false;
+  } else if (HasRVoid) {
+    // If the unqualified-id return_void is found, flowing off the end of a
+    // coroutine is equivalent to a co_return with no operand. Otherwise,
+    // flowing off the end of a coroutine results in undefined behavior.
+    Fallthrough = S.BuildCoreturnStmt(FD.getLocation(), nullptr);
+    Fallthrough = S.ActOnFinishFullStmt(Fallthrough.get());
+    if (Fallthrough.isInvalid())
+      return false;
+  }
+
+  this->OnFallthrough = Fallthrough.get();
+  return true;
 }
 
 bool SubStmtBuilder::makeOnException() {
@@ -850,41 +883,6 @@ bool SubStmtBuilder::makeOnException() {
   }
 
   this->OnException = SetException.get();
-  return true;
-}
-
-bool SubStmtBuilder::makeOnFallthrough() {
-  if (!Fn.CoroutinePromise || Fn.CoroutinePromise->getType()->isDependentType())
-    return true;
-
-  // [dcl.fct.def.coroutine]/4
-  // The unqualified-ids 'return_void' and 'return_value' are looked up in
-  // the scope of class P. If both are found, the program is ill-formed.
-  DeclarationName RVoidDN = S.PP.getIdentifierInfo("return_void");
-  LookupResult RVoidResult(S, RVoidDN, Loc, Sema::LookupMemberName);
-  const bool HasRVoid = S.LookupQualifiedName(RVoidResult, PromiseRecordDecl);
-
-  DeclarationName RValueDN = S.PP.getIdentifierInfo("return_value");
-  LookupResult RValueResult(S, RValueDN, Loc, Sema::LookupMemberName);
-  const bool HasRValue = S.LookupQualifiedName(RValueResult, PromiseRecordDecl);
-
-  StmtResult Fallthrough;
-  if (HasRVoid && HasRValue) {
-    // FIXME Improve this diagnostic
-    S.Diag(FD.getLocation(), diag::err_coroutine_promise_return_ill_formed)
-        << PromiseRecordDecl;
-    return false;
-  } else if (HasRVoid) {
-    // If the unqualified-id return_void is found, flowing off the end of a
-    // coroutine is equivalent to a co_return with no operand. Otherwise,
-    // flowing off the end of a coroutine results in undefined behavior.
-    Fallthrough = S.BuildCoreturnStmt(FD.getLocation(), nullptr);
-    Fallthrough = S.ActOnFinishFullStmt(Fallthrough.get());
-    if (Fallthrough.isInvalid())
-      return false;
-  }
-
-  this->OnFallthrough = Fallthrough.get();
   return true;
 }
 

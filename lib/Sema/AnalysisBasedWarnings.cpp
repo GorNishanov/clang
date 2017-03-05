@@ -334,9 +334,9 @@ static ControlFlowKind CheckFallThrough(AnalysisDeclContext &AC) {
   bool HasPlainEdge = false;
   bool HasAbnormalEdge = false;
 
-  // In a coroutine, only coreturn statements count as normal returns. Remember
-  // if we a processing the coroutine or not.
-  bool IsCoroutine = isa<CoroutineBodyStmt>(AC.getBody());
+  // In a coroutine, only co_return statements count as normal returns. Remember
+  // if we are processing the coroutine or not.
+  const bool IsCoroutine = isa<CoroutineBodyStmt>(AC.getBody());
 
   // Ignore default cases that aren't likely to be reachable because all
   // enums in a switch(X) have explicit case statements.
