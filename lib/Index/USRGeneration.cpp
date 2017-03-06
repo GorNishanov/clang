@@ -310,7 +310,7 @@ void USRGenerator::VisitVarDecl(const VarDecl *D) {
   // For a template specialization, mangle the template arguments.
   if (const VarTemplateSpecializationDecl *Spec
                               = dyn_cast<VarTemplateSpecializationDecl>(D)) {
-    const TemplateArgumentList &Args = Spec->getTemplateInstantiationArgs();
+    const TemplateArgumentList &Args = Spec->getTemplateArgs();
     Out << '>';
     for (unsigned I = 0, N = Args.size(); I != N; ++I) {
       Out << '#';
@@ -521,7 +521,7 @@ void USRGenerator::VisitTagDecl(const TagDecl *D) {
   // For a class template specialization, mangle the template arguments.
   if (const ClassTemplateSpecializationDecl *Spec
                               = dyn_cast<ClassTemplateSpecializationDecl>(D)) {
-    const TemplateArgumentList &Args = Spec->getTemplateInstantiationArgs();
+    const TemplateArgumentList &Args = Spec->getTemplateArgs();
     Out << '>';
     for (unsigned I = 0, N = Args.size(); I != N; ++I) {
       Out << '#';
@@ -654,7 +654,6 @@ void USRGenerator::VisitType(QualType T) {
         case BuiltinType::OCLEvent:
         case BuiltinType::OCLClkEvent:
         case BuiltinType::OCLQueue:
-        case BuiltinType::OCLNDRange:
         case BuiltinType::OCLReserveID:
         case BuiltinType::OCLSampler:
           IgnoreResults = true;

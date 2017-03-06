@@ -623,6 +623,11 @@ InitListChecker::FillInEmptyInitializations(const InitializedEntity &Entity,
   assert((ILE->getType() != SemaRef.Context.VoidTy) &&
          "Should not have void type");
 
+  // A transparent ILE is not performing aggregate initialization and should
+  // not be filled in.
+  if (ILE->isTransparent())
+    return;
+
   if (const RecordType *RType = ILE->getType()->getAs<RecordType>()) {
     const RecordDecl *RDecl = RType->getDecl();
     if (RDecl->isUnion() && ILE->getInitializedFieldInUnion())
@@ -902,7 +907,7 @@ static void warnBracedScalarInit(Sema &S, const InitializedEntity &Entity,
   // Don't warn during template instantiation. If the initialization was
   // non-dependent, we warned during the initial parse; otherwise, the
   // type might not be scalar in some uses of the template.
-  if (!S.ActiveTemplateInstantiations.empty())
+  if (S.inTemplateInstantiation())
     return;
 
   unsigned DiagID = 0;
@@ -3981,6 +3986,8 @@ static void TryListInitialization(Sema &S,
       ImplicitConversionSequence ICS;
       ICS.setStandard();
       ICS.Standard.setAsIdentityConversion();
+      if (!E->isRValue())
+        ICS.Standard.First = ICK_Lvalue_To_Rvalue;
       // If E is of a floating-point type, then the conversion is ill-formed
       // due to narrowing, but go through the motions in order to produce the
       // right diagnostic.
@@ -6247,7 +6254,7 @@ static void CheckMoveOnConstruction(Sema &S, const Expr *InitExpr,
   if (!InitExpr)
     return;
 
-  if (!S.ActiveTemplateInstantiations.empty())
+  if (S.inTemplateInstantiation())
     return;
 
   QualType DestType = InitExpr->getType();
@@ -8242,45 +8249,27 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
     return QualType();
   }
 
+  // Can't deduce from dependent arguments.
+  if (Expr::hasAnyTypeDependentArguments(Inits))
+    return Context.DependentTy;
+
   // FIXME: Perform "exact type" matching first, per CWG discussion?
   //        Or implement this via an implied 'T(T) -> T' deduction guide?
 
   // FIXME: Do we need/want a std::initializer_list<T> special case?
 
+  // Look up deduction guides, including those synthesized from constructors.
+  //
   // C++1z [over.match.class.deduct]p1:
   //   A set of functions and function templates is formed comprising:
-  bool HasDefaultConstructor = false;
-  SmallVector<DeclAccessPair, 16> CtorsAndGuides;
-  CXXRecordDecl *Primary = Template->getTemplatedDecl();
-  bool Complete = isCompleteType(TSInfo->getTypeLoc().getEndLoc(),
-                                 Context.getTypeDeclType(Primary));
-  if (Complete) {
-    for (NamedDecl *D : LookupConstructors(Template->getTemplatedDecl())) {
-      //   - For each constructor of the class template designated by the
-      //     template-name, a function template [...]
-      auto Info = getConstructorInfo(D);
-      if (!Info.Constructor || Info.Constructor->isInvalidDecl())
-        continue;
-
-      // FIXME: Synthesize a deduction guide.
-
-      if (Info.Constructor->isDefaultConstructor())
-        HasDefaultConstructor = true;
-    }
-  }
-
+  //   - For each constructor of the class template designated by the
+  //     template-name, a function template [...]
   //  - For each deduction-guide, a function or function template [...]
   DeclarationNameInfo NameInfo(
       Context.DeclarationNames.getCXXDeductionGuideName(Template),
       TSInfo->getTypeLoc().getEndLoc());
   LookupResult Guides(*this, NameInfo, LookupOrdinaryName);
   LookupQualifiedName(Guides, Template->getDeclContext());
-  for (auto I = Guides.begin(), E = Guides.end(); I != E; ++I) {
-    auto *FD = dyn_cast<FunctionDecl>(*I);
-    if (FD && FD->getMinRequiredArguments() == 0)
-      HasDefaultConstructor = true;
-    CtorsAndGuides.push_back(I.getPair());
-  }
 
   // FIXME: Do not diagnose inaccessible deduction guides. The standard isn't
   // clear on this, but they're not found by name so access does not apply.
@@ -8307,15 +8296,15 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
   auto tryToResolveOverload =
       [&](bool OnlyListConstructors) -> OverloadingResult {
     Candidates.clear();
-    for (DeclAccessPair Pair : CtorsAndGuides) {
-      NamedDecl *D = Pair.getDecl()->getUnderlyingDecl();
+    for (auto I = Guides.begin(), E = Guides.end(); I != E; ++I) {
+      NamedDecl *D = (*I)->getUnderlyingDecl();
       if (D->isInvalidDecl())
         continue;
 
-      FunctionTemplateDecl *TD = dyn_cast<FunctionTemplateDecl>(D);
-      FunctionDecl *FD =
-          TD ? TD->getTemplatedDecl() : dyn_cast<FunctionDecl>(D);
-      if (!FD)
+      auto *TD = dyn_cast<FunctionTemplateDecl>(D);
+      auto *GD = dyn_cast_or_null<CXXDeductionGuideDecl>(
+          TD ? TD->getTemplatedDecl() : dyn_cast<FunctionDecl>(D));
+      if (!GD)
         continue;
 
       // C++ [over.match.ctor]p1: (non-list copy-initialization from non-class)
@@ -8325,21 +8314,21 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
       //   The converting constructors of T are candidate functions.
       if (Kind.isCopyInit() && !ListInit) {
         // Only consider converting constructors.
-        if (FD->isExplicit())
+        if (GD->isExplicit())
           continue;
 
         // When looking for a converting constructor, deduction guides that
         // could never be called with one argument are not interesting to
         // check or note.
-        if (FD->getMinRequiredArguments() > 1 ||
-            (FD->getNumParams() == 0 && !FD->isVariadic()))
+        if (GD->getMinRequiredArguments() > 1 ||
+            (GD->getNumParams() == 0 && !GD->isVariadic()))
           continue;
       }
 
       // C++ [over.match.list]p1.1: (first phase list initialization)
       //   Initially, the candidate functions are the initializer-list
       //   constructors of the class T
-      if (OnlyListConstructors && !isInitListConstructor(FD))
+      if (OnlyListConstructors && !isInitListConstructor(GD))
         continue;
 
       // C++ [over.match.list]p1.2: (second phase list initialization)
@@ -8357,10 +8346,11 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
       bool SuppressUserConversions = Kind.isCopyInit();
 
       if (TD)
-        AddTemplateOverloadCandidate(TD, Pair, /*ExplicitArgs*/ nullptr, Inits,
-                                     Candidates, SuppressUserConversions);
+        AddTemplateOverloadCandidate(TD, I.getPair(), /*ExplicitArgs*/ nullptr,
+                                     Inits, Candidates,
+                                     SuppressUserConversions);
       else
-        AddOverloadCandidate(FD, Pair, Inits, Candidates,
+        AddOverloadCandidate(GD, I.getPair(), Inits, Candidates,
                              SuppressUserConversions);
     }
     return Candidates.BestViableFunction(*this, Kind.getLocation(), Best);
@@ -8371,7 +8361,21 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
   // C++11 [over.match.list]p1, per DR1467: for list-initialization, first
   // try initializer-list constructors.
   if (ListInit) {
-    if (ListInit->getNumInits() || !HasDefaultConstructor)
+    bool TryListConstructors = true;
+
+    // Try list constructors unless the list is empty and the class has one or
+    // more default constructors, in which case those constructors win.
+    if (!ListInit->getNumInits()) {
+      for (NamedDecl *D : Guides) {
+        auto *FD = dyn_cast<FunctionDecl>(D->getUnderlyingDecl());
+        if (FD && FD->getMinRequiredArguments() == 0) {
+          TryListConstructors = false;
+          break;
+        }
+      }
+    }
+
+    if (TryListConstructors)
       Result = tryToResolveOverload(/*OnlyListConstructor*/true);
     // Then unwrap the initializer list and try again considering all
     // constructors.
@@ -8393,13 +8397,18 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
     Candidates.NoteCandidates(*this, OCD_ViableCandidates, Inits);
     return QualType();
 
-  case OR_No_Viable_Function:
+  case OR_No_Viable_Function: {
+    CXXRecordDecl *Primary =
+        cast<ClassTemplateDecl>(Template)->getTemplatedDecl();
+    bool Complete =
+        isCompleteType(Kind.getLocation(), Context.getTypeDeclType(Primary));
     Diag(Kind.getLocation(),
          Complete ? diag::err_deduced_class_template_ctor_no_viable
                   : diag::err_deduced_class_template_incomplete)
-      << TemplateName << !CtorsAndGuides.empty();
+      << TemplateName << !Guides.empty();
     Candidates.NoteCandidates(*this, OCD_AllCandidates, Inits);
     return QualType();
+  }
 
   case OR_Deleted: {
     Diag(Kind.getLocation(), diag::err_deduced_class_template_deleted)
@@ -8412,7 +8421,8 @@ QualType Sema::DeduceTemplateSpecializationFromInitializer(
     // C++ [over.match.list]p1:
     //   In copy-list-initialization, if an explicit constructor is chosen, the
     //   initialization is ill-formed.
-    if (Kind.isCopyInit() && ListInit && Best->Function->isExplicit()) {
+    if (Kind.isCopyInit() && ListInit &&
+        cast<CXXDeductionGuideDecl>(Best->Function)->isExplicit()) {
       bool IsDeductionGuide = !Best->Function->isImplicit();
       Diag(Kind.getLocation(), diag::err_deduced_class_template_explicit)
           << TemplateName << IsDeductionGuide;

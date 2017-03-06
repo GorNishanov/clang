@@ -133,6 +133,7 @@ def err_drv_invalid_gcc_output_type : Error<
     "invalid output type '%0' for use with gcc tool">;
 def err_drv_cc_print_options_failure : Error<
     "unable to open CC_PRINT_OPTIONS file: %0">;
+def err_drv_lto_without_lld : Error<"LTO requires -fuse-ld=lld">;
 def err_drv_preamble_format : Error<
     "incorrect format for -preamble-bytes=N,END">;
 def err_drv_conflicting_deployment_targets : Error<
@@ -230,6 +231,7 @@ def note_drv_t_option_is_global : Note<
   "The last /TC or /TP option takes precedence over earlier instances">;
 def note_drv_address_sanitizer_debug_runtime : Note<
   "AddressSanitizer doesn't support linking with debug runtime libraries yet">;
+def note_drv_use_standard : Note<"use '%0' for '%1' standard">;
 
 def err_analyzer_config_no_value : Error<
   "analyzer-config option '%0' has a key but no value">;

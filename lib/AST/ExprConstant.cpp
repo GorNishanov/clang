@@ -425,6 +425,17 @@ namespace {
     /// Index - The call index of this call.
     unsigned Index;
 
+    // FIXME: Adding this to every 'CallStackFrame' may have a nontrivial impact
+    // on the overall stack usage of deeply-recursing constexpr evaluataions.
+    // (We should cache this map rather than recomputing it repeatedly.)
+    // But let's try this and see how it goes; we can look into caching the map
+    // as a later change.
+
+    /// LambdaCaptureFields - Mapping from captured variables/this to
+    /// corresponding data members in the closure class.
+    llvm::DenseMap<const VarDecl *, FieldDecl *> LambdaCaptureFields;
+    FieldDecl *LambdaThisCaptureField;
+
     CallStackFrame(EvalInfo &Info, SourceLocation CallLoc,
                    const FunctionDecl *Callee, const LValue *This,
                    APValue *Arguments);
@@ -1426,7 +1437,8 @@ static bool EvaluateIntegerOrLValue(const Expr *E, APValue &Result,
                                     EvalInfo &Info);
 static bool EvaluateFloat(const Expr *E, APFloat &Result, EvalInfo &Info);
 static bool EvaluateComplex(const Expr *E, ComplexValue &Res, EvalInfo &Info);
-static bool EvaluateAtomic(const Expr *E, APValue &Result, EvalInfo &Info);
+static bool EvaluateAtomic(const Expr *E, const LValue *This, APValue &Result,
+                           EvalInfo &Info);
 static bool EvaluateAsRValue(EvalInfo &Info, const Expr *E, APValue &Result);
 
 //===----------------------------------------------------------------------===//
@@ -2279,6 +2291,10 @@ static bool HandleLValueComplexElement(EvalInfo &Info, const Expr *E,
   return true;
 }
 
+static bool handleLValueToRValueConversion(EvalInfo &Info, const Expr *Conv,
+                                           QualType Type, const LValue &LVal,
+                                           APValue &RVal);
+
 /// Try to evaluate the initializer for a variable declaration.
 ///
 /// \param Info   Information about the ongoing evaluation.
@@ -2290,6 +2306,7 @@ static bool HandleLValueComplexElement(EvalInfo &Info, const Expr *E,
 static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
                                 const VarDecl *VD, CallStackFrame *Frame,
                                 APValue *&Result) {
+
   // If this is a parameter to an active constexpr function call, perform
   // argument substitution.
   if (const ParmVarDecl *PVD = dyn_cast<ParmVarDecl>(VD)) {
@@ -4180,6 +4197,10 @@ static bool HandleFunctionCall(SourceLocation CallLoc,
       return false;
     This->moveInto(Result);
     return true;
+  } else if (MD && isLambdaCallOperator(MD)) {
+    // We're in a lambda; determine the lambda capture field maps.
+    MD->getParent()->getCaptureFields(Frame.LambdaCaptureFields,
+                                      Frame.LambdaThisCaptureField);
   }
 
   StmtResult Ret = {Result, ResultSlot};
@@ -4723,7 +4744,10 @@ public:
 
     case CK_AtomicToNonAtomic: {
       APValue AtomicVal;
-      if (!EvaluateAtomic(E->getSubExpr(), AtomicVal, Info))
+      // This does not need to be done in place even for class/array types:
+      // atomic-to-non-atomic conversion implies copying the object
+      // representation.
+      if (!Evaluate(AtomicVal, Info, E->getSubExpr()))
         return false;
       return DerivedSuccess(AtomicVal, E);
     }
@@ -5041,6 +5065,33 @@ bool LValueExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
 
 
 bool LValueExprEvaluator::VisitVarDecl(const Expr *E, const VarDecl *VD) {
+
+  // If we are within a lambda's call operator, check whether the 'VD' referred
+  // to within 'E' actually represents a lambda-capture that maps to a
+  // data-member/field within the closure object, and if so, evaluate to the
+  // field or what the field refers to.
+  if (Info.CurrentCall && isLambdaCallOperator(Info.CurrentCall->Callee)) {
+    if (auto *FD = Info.CurrentCall->LambdaCaptureFields.lookup(VD)) {
+      if (Info.checkingPotentialConstantExpression())
+        return false;
+      // Start with 'Result' referring to the complete closure object...
+      Result = *Info.CurrentCall->This;
+      // ... then update it to refer to the field of the closure object
+      // that represents the capture.
+      if (!HandleLValueMember(Info, E, Result, FD))
+        return false;
+      // And if the field is of reference type, update 'Result' to refer to what
+      // the field refers to.
+      if (FD->getType()->isReferenceType()) {
+        APValue RVal;
+        if (!handleLValueToRValueConversion(Info, E, FD->getType(), Result,
+                                            RVal))
+          return false;
+        Result.setFrom(Info.Ctx, RVal);
+      }
+      return true;
+    }
+  }
   CallStackFrame *Frame = nullptr;
   if (VD->hasLocalStorage() && Info.CurrentCall->Index > 1) {
     // Only if a local variable was declared in the function currently being
@@ -5440,6 +5491,27 @@ public:
       return false;
     }
     Result = *Info.CurrentCall->This;
+    // If we are inside a lambda's call operator, the 'this' expression refers
+    // to the enclosing '*this' object (either by value or reference) which is
+    // either copied into the closure object's field that represents the '*this'
+    // or refers to '*this'.
+    if (isLambdaCallOperator(Info.CurrentCall->Callee)) {
+      // Update 'Result' to refer to the data member/field of the closure object
+      // that represents the '*this' capture.
+      if (!HandleLValueMember(Info, E, Result,
+                             Info.CurrentCall->LambdaThisCaptureField)) 
+        return false;
+      // If we captured '*this' by reference, replace the field with its referent.
+      if (Info.CurrentCall->LambdaThisCaptureField->getType()
+              ->isPointerType()) {
+        APValue RVal;
+        if (!handleLValueToRValueConversion(Info, E, E->getType(), Result,
+                                            RVal))
+          return false;
+
+        Result.setFrom(Info.Ctx, RVal);
+      }
+    }
     return true;
   }
 
@@ -6269,14 +6341,40 @@ bool RecordExprEvaluator::VisitLambdaExpr(const LambdaExpr *E) {
   if (ClosureClass->isInvalidDecl()) return false;
 
   if (Info.checkingPotentialConstantExpression()) return true;
-  if (E->capture_size()) {
-    Info.FFDiag(E, diag::note_unimplemented_constexpr_lambda_feature_ast)
-        << "can not evaluate lambda expressions with captures";
-    return false;
+  
+  const size_t NumFields =
+      std::distance(ClosureClass->field_begin(), ClosureClass->field_end());
+
+  assert(NumFields == (size_t)std::distance(E->capture_init_begin(),
+                                            E->capture_init_end()) &&
+         "The number of lambda capture initializers should equal the number of "
+         "fields within the closure type");
+
+  Result = APValue(APValue::UninitStruct(), /*NumBases*/0, NumFields);
+  // Iterate through all the lambda's closure object's fields and initialize
+  // them.
+  auto *CaptureInitIt = E->capture_init_begin();
+  const LambdaCapture *CaptureIt = ClosureClass->captures_begin();
+  bool Success = true;
+  for (const auto *Field : ClosureClass->fields()) {
+    assert(CaptureInitIt != E->capture_init_end());
+    // Get the initializer for this field
+    Expr *const CurFieldInit = *CaptureInitIt++;
+    
+    // If there is no initializer, either this is a VLA or an error has
+    // occurred.
+    if (!CurFieldInit)
+      return Error(E);
+
+    APValue &FieldVal = Result.getStructField(Field->getFieldIndex());
+    if (!EvaluateInPlace(FieldVal, Info, This, CurFieldInit)) {
+      if (!Info.keepEvaluatingAfterFailure())
+        return false;
+      Success = false;
+    }
+    ++CaptureIt;
   }
-  // FIXME: Implement captures.
-  Result = APValue(APValue::UninitStruct(), /*NumBases*/0, /*NumFields*/0);
-  return true;
+  return Success;
 }
 
 static bool EvaluateRecord(const Expr *E, const LValue &This,
@@ -6995,7 +7093,6 @@ static int EvaluateBuiltinClassifyType(const CallExpr *E,
     case BuiltinType::OCLEvent:
     case BuiltinType::OCLClkEvent:
     case BuiltinType::OCLQueue:
-    case BuiltinType::OCLNDRange:
     case BuiltinType::OCLReserveID:
     case BuiltinType::Dependent:
       llvm_unreachable("CallExpr::isBuiltinClassifyType(): unimplemented type");
@@ -9596,10 +9693,11 @@ bool ComplexExprEvaluator::VisitInitListExpr(const InitListExpr *E) {
 namespace {
 class AtomicExprEvaluator :
     public ExprEvaluatorBase<AtomicExprEvaluator> {
+  const LValue *This;
   APValue &Result;
 public:
-  AtomicExprEvaluator(EvalInfo &Info, APValue &Result)
-      : ExprEvaluatorBaseTy(Info), Result(Result) {}
+  AtomicExprEvaluator(EvalInfo &Info, const LValue *This, APValue &Result)
+      : ExprEvaluatorBaseTy(Info), This(This), Result(Result) {}
 
   bool Success(const APValue &V, const Expr *E) {
     Result = V;
@@ -9609,7 +9707,10 @@ public:
   bool ZeroInitialization(const Expr *E) {
     ImplicitValueInitExpr VIE(
         E->getType()->castAs<AtomicType>()->getValueType());
-    return Evaluate(Result, Info, &VIE);
+    // For atomic-qualified class (and array) types in C++, initialize the
+    // _Atomic-wrapped subobject directly, in-place.
+    return This ? EvaluateInPlace(Result, Info, *This, &VIE)
+                : Evaluate(Result, Info, &VIE);
   }
 
   bool VisitCastExpr(const CastExpr *E) {
@@ -9617,15 +9718,17 @@ public:
     default:
       return ExprEvaluatorBaseTy::VisitCastExpr(E);
     case CK_NonAtomicToAtomic:
-      return Evaluate(Result, Info, E->getSubExpr());
+      return This ? EvaluateInPlace(Result, Info, *This, E->getSubExpr())
+                  : Evaluate(Result, Info, E->getSubExpr());
     }
   }
 };
 } // end anonymous namespace
 
-static bool EvaluateAtomic(const Expr *E, APValue &Result, EvalInfo &Info) {
+static bool EvaluateAtomic(const Expr *E, const LValue *This, APValue &Result,
+                           EvalInfo &Info) {
   assert(E->isRValue() && E->getType()->isAtomicType());
-  return AtomicExprEvaluator(Info, Result).Visit(E);
+  return AtomicExprEvaluator(Info, This, Result).Visit(E);
 }
 
 //===----------------------------------------------------------------------===//
@@ -9730,8 +9833,17 @@ static bool Evaluate(APValue &Result, EvalInfo &Info, const Expr *E) {
     if (!EvaluateVoid(E, Info))
       return false;
   } else if (T->isAtomicType()) {
-    if (!EvaluateAtomic(E, Result, Info))
-      return false;
+    QualType Unqual = T.getAtomicUnqualifiedType();
+    if (Unqual->isArrayType() || Unqual->isRecordType()) {
+      LValue LV;
+      LV.set(E, Info.CurrentCall->Index);
+      APValue &Value = Info.CurrentCall->createTemporary(E, false);
+      if (!EvaluateAtomic(E, &LV, Value, Info))
+        return false;
+    } else {
+      if (!EvaluateAtomic(E, nullptr, Result, Info))
+        return false;
+    }
   } else if (Info.getLangOpts().CPlusPlus11) {
     Info.FFDiag(E, diag::note_constexpr_nonliteral) << E->getType();
     return false;
@@ -9756,10 +9868,16 @@ static bool EvaluateInPlace(APValue &Result, EvalInfo &Info, const LValue &This,
   if (E->isRValue()) {
     // Evaluate arrays and record types in-place, so that later initializers can
     // refer to earlier-initialized members of the object.
-    if (E->getType()->isArrayType())
+    QualType T = E->getType();
+    if (T->isArrayType())
       return EvaluateArray(E, This, Result, Info);
-    else if (E->getType()->isRecordType())
+    else if (T->isRecordType())
       return EvaluateRecord(E, This, Result, Info);
+    else if (T->isAtomicType()) {
+      QualType Unqual = T.getAtomicUnqualifiedType();
+      if (Unqual->isArrayType() || Unqual->isRecordType())
+        return EvaluateAtomic(E, &This, Result, Info);
+    }
   }
 
   // For any other type, in-place evaluation is unimportant.

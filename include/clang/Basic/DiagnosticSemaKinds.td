@@ -1624,7 +1624,14 @@ def err_covariant_return_type_class_type_more_qualified : Error<
   "return type of virtual function %0 is not covariant with the return type of "
   "the function it overrides (class type %1 is more qualified than class "
   "type %2">;
-  
+
+// C++ implicit special member functions
+def note_in_declaration_of_implicit_special_member : Note<
+  "while declaring the implicit "
+  "%select{default constructor|copy constructor|move constructor|"
+  "copy assignment operator|move assignment operator|destructor}1"
+  " for %0">;
+
 // C++ constructors
 def err_constructor_cannot_be : Error<"constructor cannot be declared '%0'">;
 def err_invalid_qualified_constructor : Error<
@@ -2002,6 +2009,10 @@ def err_deduction_guide_explicit_mismatch : Error<
   "previous declaration was%select{ not|}0">;
 def err_deduction_guide_specialized : Error<"deduction guide cannot be "
   "%select{explicitly instantiated|explicitly specialized}0">;
+def err_deduction_guide_template_not_deducible : Error<
+    "deduction guide template contains "
+    "%select{a template parameter|template parameters}0 that cannot be "
+    "deduced">;
 
 // C++1y deduced return types
 def err_auto_fn_deduction_failure : Error<
@@ -2028,6 +2039,9 @@ def override_keyword_hides_virtual_member_function : Error<
   "%select{function|functions}1">;
 def err_function_marked_override_not_overriding : Error<
   "%0 marked 'override' but does not override any member functions">;
+def warn_destructor_marked_not_override_overriding : Warning <
+  "%0 overrides a destructor but is not marked 'override'">,
+  InGroup<CXX11WarnOverrideDestructor>, DefaultIgnore;
 def warn_function_marked_not_override_overriding : Warning <
   "%0 overrides a member function but is not marked 'override'">,
   InGroup<CXX11WarnOverrideMethod>;
@@ -2740,7 +2754,8 @@ def warn_attribute_wrong_decl_type : Warning<
   "|functions, methods, enums, and classes"
   "|structs, classes, variables, functions, and inline namespaces"
   "|variables, functions, methods, types, enumerations, enumerators, labels, and non-static data members"
-  "|classes and enumerations}1">,
+  "|classes and enumerations"
+  "|named declarations}1">,
   InGroup<IgnoredAttributes>;
 def err_attribute_wrong_decl_type : Error<warn_attribute_wrong_decl_type.Text>;
 def warn_type_attribute_wrong_type : Warning<
@@ -4146,7 +4161,7 @@ def ext_partial_specs_not_deducible : ExtWarn<
     "%select{a template parameter|template parameters}1 that cannot be "
     "deduced; this partial specialization will never be used">,
     DefaultError, InGroup<DiagGroup<"unusable-partial-specialization">>;
-def note_partial_spec_unused_parameter : Note<
+def note_non_deducible_parameter : Note<
     "non-deducible template parameter %0">;
 def err_partial_spec_ordering_ambiguous : Error<
     "ambiguous partial specializations of %0">;
@@ -6001,6 +6016,12 @@ def warn_objc_circular_container : Warning<
   "adding '%0' to '%1' might cause circular dependency in container">,
   InGroup<DiagGroup<"objc-circular-container">>;
 def note_objc_circular_container_declared_here : Note<"'%0' declared here">;
+def warn_objc_unsafe_perform_selector : Warning<
+  "%0 is incompatible with selectors that return a "
+  "%select{struct|union|vector}1 type">,
+  InGroup<DiagGroup<"objc-unsafe-perform-selector">>;
+def note_objc_unsafe_perform_selector_method_declared_here :  Note<
+  "method %0 that returns %1 declared here">;
 
 def warn_setter_getter_impl_required : Warning<
   "property %0 requires method %1 to be defined - "
@@ -8295,6 +8316,8 @@ def err_opencl_invalid_block_declaration : Error<
   "invalid block variable declaration - must be %select{const qualified|initialized}0">;
 def err_opencl_extern_block_declaration : Error<
   "invalid block variable declaration - using 'extern' storage class is disallowed">;
+def err_opencl_block_ref_block : Error<
+  "cannot refer to a block inside block">;
 
 // OpenCL v2.0 s6.13.9 - Address space qualifier functions. 
 def err_opencl_builtin_to_addr_arg_num : Error<

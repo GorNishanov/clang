@@ -715,8 +715,6 @@ private:
   /// the consumer eagerly.
   SmallVector<uint64_t, 16> EagerlyDeserializedDecls;
 
-  SmallVector<uint64_t, 16> ModularCodegenDecls;
-
   /// \brief The IDs of all tentative definitions stored in the chain.
   ///
   /// Sema keeps track of all tentative definitions in a TU because it has to
@@ -1188,6 +1186,7 @@ private:
       std::string &SuggestedPredefines, bool ValidateDiagnosticOptions);
   ASTReadResult ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities);
   ASTReadResult ReadExtensionBlock(ModuleFile &F);
+  void ReadModuleOffsetMap(ModuleFile &F) const;
   bool ParseLineTable(ModuleFile &F, const RecordData &Record);
   bool ReadSourceManagerBlock(ModuleFile &F);
   llvm::BitstreamCursor &SLocCursorForID(int ID);
@@ -1322,9 +1321,9 @@ private:
   ///
   /// This routine should only be used for fatal errors that have to
   /// do with non-routine failures (e.g., corrupted AST file).
-  void Error(StringRef Msg);
+  void Error(StringRef Msg) const;
   void Error(unsigned DiagID, StringRef Arg1 = StringRef(),
-             StringRef Arg2 = StringRef());
+             StringRef Arg2 = StringRef()) const;
 
   ASTReader(const ASTReader &) = delete;
   void operator=(const ASTReader &) = delete;
@@ -1905,10 +1904,10 @@ public:
                                SmallVectorImpl<Decl *> *Decls = nullptr);
 
   /// \brief Report a diagnostic.
-  DiagnosticBuilder Diag(unsigned DiagID);
+  DiagnosticBuilder Diag(unsigned DiagID) const;
 
   /// \brief Report a diagnostic.
-  DiagnosticBuilder Diag(SourceLocation Loc, unsigned DiagID);
+  DiagnosticBuilder Diag(SourceLocation Loc, unsigned DiagID) const;
 
   IdentifierInfo *DecodeIdentifierInfo(serialization::IdentifierID ID);
 
@@ -2060,6 +2059,8 @@ public:
   /// location space into ours.
   SourceLocation TranslateSourceLocation(ModuleFile &ModuleFile,
                                          SourceLocation Loc) const {
+    if (!ModuleFile.ModuleOffsetMap.empty())
+      ReadModuleOffsetMap(ModuleFile);
     assert(ModuleFile.SLocRemap.find(Loc.getOffset()) !=
                ModuleFile.SLocRemap.end() &&
            "Cannot find offset to remap.");

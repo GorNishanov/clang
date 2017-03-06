@@ -56,6 +56,9 @@ struct CGCoroData {
   llvm::BasicBlock *SuspendBB = nullptr;
 
   CodeGenFunction::JumpDest CleanupJD;
+
+  // Stores the jump destination just before the final suspend. Coreturn
+  // statements jumps to this point after calling return_xxx promise member.
   CodeGenFunction::JumpDest FinalJD;
 
   unsigned AwaitNum = 0;
@@ -550,6 +553,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
   auto &TI = CGM.getContext().getTargetInfo();
   unsigned NewAlign = TI.getNewAlign() / TI.getCharWidth();
+
+  auto *FinalBB = createBasicBlock("coro.final");
 
   auto *CoroId = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_id),

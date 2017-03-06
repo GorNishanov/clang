@@ -66,6 +66,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -975,7 +976,7 @@ public:
   CanQualType SingletonId;
 #include "clang/Basic/OpenCLImageTypes.def"
   CanQualType OCLSamplerTy, OCLEventTy, OCLClkEventTy;
-  CanQualType OCLQueueTy, OCLNDRangeTy, OCLReserveIDTy;
+  CanQualType OCLQueueTy, OCLReserveIDTy;
   CanQualType OMPArraySectionTy;
 
   // Types for deductions in C++0x [stmt.ranged]'s desugaring. Built on demand.
@@ -1356,6 +1357,8 @@ public:
   QualType getDependentTemplateSpecializationType(
       ElaboratedTypeKeyword Keyword, NestedNameSpecifier *NNS,
       const IdentifierInfo *Name, ArrayRef<TemplateArgument> Args) const;
+
+  TemplateArgument getInjectedTemplateArg(NamedDecl *ParamDecl);
 
   /// Get a template argument list with one argument per template parameter
   /// in a template parameter list, such as for the injected class name of
@@ -2484,6 +2487,16 @@ public:
   /// \param Data Pointer data that will be provided to the callback function
   /// when it is called.
   void AddDeallocation(void (*Callback)(void*), void *Data);
+
+  /// If T isn't trivially destructible, calls AddDeallocation to register it
+  /// for destruction.
+  template <typename T>
+  void addDestruction(T *Ptr) {
+    if (!std::is_trivially_destructible<T>::value) {
+      auto DestroyPtr = [](void *V) { static_cast<T *>(V)->~T(); };
+      AddDeallocation(DestroyPtr, Ptr);
+    }
+  }
 
   GVALinkage GetGVALinkageForFunction(const FunctionDecl *FD) const;
   GVALinkage GetGVALinkageForVariable(const VarDecl *VD);
