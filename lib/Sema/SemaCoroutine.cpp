@@ -977,9 +977,7 @@ bool SubStmtBuilder::makeParamMoves() {
 
       Expr *RCast = CastForMoving(ParamRef.get());
 
-      SmallString<16> str(paramDecl->getIdentifier()->getName());
-      str.append("_copy");
-      auto D = buildVarDecl(Loc, Ty, str);
+      auto D = buildVarDecl(Loc, Ty, paramDecl->getIdentifier()->getName());
 
       S.AddInitializerToDecl(D, RCast, /*DirectInit=*/true);
 
