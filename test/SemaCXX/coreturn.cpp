@@ -2,19 +2,22 @@
 
 struct awaitable {
   bool await_ready();
-  void await_suspend(); // FIXME: coroutine_handle
+  template <typename F>
+  void await_suspend(F);
   void await_resume();
 } a;
 
 struct suspend_always {
   bool await_ready() { return false; }
-  void await_suspend() {}
+  template <typename F>
+  void await_suspend(F) {}
   void await_resume() {}
 };
 
 struct suspend_never {
   bool await_ready() { return true; }
-  void await_suspend() {}
+  template <typename F>
+  void await_suspend(F) {}
   void await_resume() {}
 };
 
@@ -25,7 +28,9 @@ template <class Ret, typename... T>
 struct coroutine_traits { using promise_type = typename Ret::promise_type; };
 
 template <class Promise = void>
-struct coroutine_handle {};
+struct coroutine_handle {
+  static coroutine_handle from_address(void *addr) noexcept;  
+};
 }
 }
 

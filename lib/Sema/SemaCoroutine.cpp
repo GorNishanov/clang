@@ -337,7 +337,6 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
       LookupResult Found(S, &S.PP.getIdentifierTable().get("from_address"), Loc,
                          Sema::LookupOrdinaryName);
       if (S.LookupQualifiedName(Found, LookupCtx)) {
-
         auto *Fn = Found.getAsSingle<CXXMethodDecl>();
         DeclRefExpr *DRE = DeclRefExpr::Create(
             S.Context, Fn->getQualifierLoc(), Loc, Fn,
@@ -349,6 +348,8 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
 
         ExprResult CoroHandle =
           S.ActOnCallExpr(/*Scope=*/nullptr, DRE, Loc, { FramePtr }, Loc);
+        if (CoroHandle.isInvalid())
+          return Calls;
 
         SmallVector<Expr*, 1> Args;
         Args.push_back(CoroHandle.get());
@@ -358,6 +359,10 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
           return Calls;
 
         Result = ExprResult(S.MakeFullExpr(Result.get()).get());
+      }
+      else {
+        // TODO: replace placeholder diagnostic with real one
+        S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
       }
     } else {
       Result = buildMemberCall(S, Operand, Loc, Funcs[I], {});
