@@ -337,17 +337,16 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
       LookupResult Found(S, &S.PP.getIdentifierTable().get("from_address"), Loc,
                          Sema::LookupOrdinaryName);
       if (S.LookupQualifiedName(Found, LookupCtx)) {
-        auto *Fn = Found.getAsSingle<CXXMethodDecl>();
-        DeclRefExpr *DRE = DeclRefExpr::Create(
-            S.Context, Fn->getQualifierLoc(), Loc, Fn,
-            /*enclosing*/ false, Loc, Fn->getType(), VK_LValue);
-        S.MarkDeclRefReferenced(DRE);
+        ExprResult FromAddr =
+            S.BuildDeclarationNameExpr(SS, Found, /*NeedsADL=*/false);
+        if (FromAddr.isInvalid())
+          return Calls;
 
         Expr *FramePtr =
           buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
 
-        ExprResult CoroHandle =
-          S.ActOnCallExpr(/*Scope=*/nullptr, DRE, Loc, { FramePtr }, Loc);
+        ExprResult CoroHandle = S.ActOnCallExpr(
+            /*Scope=*/nullptr, FromAddr.get(), Loc, {FramePtr}, Loc);
         if (CoroHandle.isInvalid())
           return Calls;
 
