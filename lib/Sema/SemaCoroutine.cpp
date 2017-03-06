@@ -965,8 +965,6 @@ bool SubStmtBuilder::makeParamMoves() {
       continue;
 
     if (auto *RD = Ty->getAsCXXRecordDecl()) {
-      if (RD->isUnion())
-        continue;
       if (!paramDecl->getIdentifier())
         continue;
       ExprResult ParamRef =
