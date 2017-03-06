@@ -153,8 +153,10 @@ static QualType buildStdCoroutineHandle(Sema &S, QualType Element,
   Args.addArgument(TemplateArgumentLoc(TemplateArgument(Element),
     S.Context.getTrivialTypeSourceInfo(Element,
       Loc)));
-  return S.Context.getCanonicalType(
-    S.CheckTemplateIdType(TemplateName(StdCoroutineHandle), Loc, Args));
+  QualType Result =
+      S.CheckTemplateIdType(TemplateName(StdCoroutineHandle), Loc, Args);
+
+  return Result.isNull() ? Result : S.Context.getCanonicalType(Result);
 }
 
 static bool isValidCoroutineContext(Sema &S, SourceLocation Loc,
