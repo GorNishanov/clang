@@ -123,12 +123,12 @@ static QualType lookupCoroutineHandleType(Sema &S, QualType PromiseType,
   if (PromiseType.isNull())
     return QualType();
 
-  NamespaceDecl *Std = S.lookupStdExperimentalNamespace();
+  NamespaceDecl *StdExp = S.lookupStdExperimentalNamespace();
   assert(StdExp && "Should already be diagnosed");
 
   LookupResult Result(S, &S.PP.getIdentifierTable().get("coroutine_handle"),
                       Loc, Sema::LookupOrdinaryName);
-  if (!S.LookupQualifiedName(Result, Std)) {
+  if (!S.LookupQualifiedName(Result, StdExp)) {
     S.Diag(Loc, diag::err_implied_std_coroutine_handle_not_found);
     return QualType();
   }
@@ -805,7 +805,11 @@ public:
 void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
   FunctionScopeInfo *Fn = getCurFunction();
   assert(Fn && Fn->CoroutinePromise && "not a coroutine");
-
+  if (!Body) {
+    assert(FD->isInvalidDecl() &&
+           "a null body is only allowed for invalid declarations");
+    return;
+  }
   if (auto *CoroBody = dyn_cast<CoroutineBodyStmt>(Body)) {
     Body = CoroBody->getBody();
   }
@@ -814,10 +818,14 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
     //   A return statement shall not appear in a coroutine.
     if (Fn->FirstReturnLoc.isValid()) {
       Diag(Fn->FirstReturnLoc, diag::err_return_in_coroutine);
-      auto *First = Fn->CoroutineStmts[0];
-      Diag(First->getLocStart(), diag::note_declared_coroutine_here)
-          << (isa<CoawaitExpr>(First) ? "co_await" :
-              isa<CoyieldExpr>(First) ? "co_yield" : "co_return");
+      // FIXME: Every Coroutine statement may be invalid and therefore not added
+      // to CoroutineStmts. Find another way to provide location information.
+      if (!Fn->CoroutineStmts.empty()) {
+        auto *First = Fn->CoroutineStmts[0];
+        Diag(First->getLocStart(), diag::note_declared_coroutine_here)
+            << (isa<CoawaitExpr>(First) ? "co_await" :
+                isa<CoyieldExpr>(First) ? "co_yield" : "co_return");
+      }
     }
   }
   SubStmtBuilder Builder(*this, *FD, *Fn, Body);
