@@ -16,6 +16,33 @@ void no_coroutine_traits_bad_arg_return() {
   // expected-error@-1 {{use of undeclared identifier 'a'}}
 }
 
+void no_coroutine_traits() {
+  co_await 4; // expected-error {{need to include <experimental/coroutine>}}
+}
+
+namespace std {
+namespace experimental {
+template <typename... T>
+struct coroutine_traits; // expected-note {{declared here}}
+
+template <class PromiseType = void>
+struct coroutine_handle {
+  static coroutine_handle from_address(void *);
+};
+
+template <>
+struct coroutine_handle<void> {
+  template <class PromiseType>
+  coroutine_handle(coroutine_handle<PromiseType>);
+  static coroutine_handle from_address(void *);
+};
+}} // namespace std::experimental
+
+template<typename Promise> struct coro {};
+template <typename Promise, typename... Ps>
+struct std::experimental::coroutine_traits<coro<Promise>, Ps...> {
+  using promise_type = Promise;
+};
 
 struct awaitable {
   bool await_ready();
@@ -33,23 +60,6 @@ struct suspend_never {
   bool await_ready() { return true; }
   template <typename F> void await_suspend(F){}
   void await_resume() {}
-};
-
-void no_coroutine_traits() {
-  co_await a; // expected-error {{need to include <experimental/coroutine>}}
-}
-
-namespace std {
-namespace experimental {
-template <typename... T>
-struct coroutine_traits; // expected-note {{declared here}}
-}
-}
-
-template<typename Promise> struct coro {};
-template <typename Promise, typename... Ps>
-struct std::experimental::coroutine_traits<coro<Promise>, Ps...> {
-  using promise_type = Promise;
 };
 
 void no_specialization() {
@@ -85,21 +95,6 @@ struct std::experimental::coroutine_traits<void, T...> { using promise_type = pr
 template <typename... T>
 struct std::experimental::coroutine_traits<void, void_tag, T...>
 { using promise_type = promise_void; };
-
-namespace std {
-namespace experimental {
-template <typename Promise = void>
-struct coroutine_handle;
-}
-}
-
-template <>
-struct std::experimental::coroutine_handle<void> {
-  static coroutine_handle from_address(void *addr) noexcept;
-};
-
-template <typename Promise>
-struct std::experimental::coroutine_handle : std::experimental::coroutine_handle<> {};
 
 void undefined_promise() { // expected-error {{this function cannot be a coroutine: 'experimental::coroutine_traits<void>::promise_type' (aka 'promise') is an incomplete type}}
   co_await a;
