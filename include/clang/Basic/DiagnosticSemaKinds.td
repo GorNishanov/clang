@@ -8833,6 +8833,8 @@ def err_malformed_std_coroutine_handle : Error<
   "std::coroutine_handle must be a class template with a single type parameter">;
 def err_implied_std_coroutine_handle_not_found : Error<
   "you need to include <coroutine> before defining a coroutine">;
+def err_coroutine_handle_missing_from_promise : Error<
+  "std::coroutine_handle type has no member named 'from_promise'">;
 def err_implied_std_coroutine_traits_not_found : Error<
   "you need to include <experimental/coroutine> before defining a coroutine">;
 def err_malformed_std_coroutine_traits : Error<

@@ -100,7 +100,7 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
     return QualType();
   }
   if (S.RequireCompleteType(FuncLoc, buildElaboratedType(),
-                            diag::err_coroutine_promise_type_incomplete))
+                            diag::err_coroutine_handle_missing_from_promise))
     return QualType();
 
   return PromiseType;
@@ -334,43 +334,40 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
       QualType PromiseType = CoroutinePromise->getType();
 
       CXXScopeSpec SS;
-      QualType CoroHandle = buildStdCoroutineHandle(S, PromiseType, Loc);
-      if (CoroHandle.isNull())
+      QualType CoroHandleType = buildStdCoroutineHandle(S, PromiseType, Loc);
+      if (CoroHandleType.isNull())
         return Calls;
 
-      if (S.RequireCompleteType(Loc, CoroHandle, diag::err_incomplete_type))
+      if (S.RequireCompleteType(Loc, CoroHandleType, diag::err_incomplete_type))
         return Calls;
 
-      DeclContext *LookupCtx = S.computeDeclContext(CoroHandle);
+      DeclContext *LookupCtx = S.computeDeclContext(CoroHandleType);
       LookupResult Found(S, &S.PP.getIdentifierTable().get("from_address"), Loc,
                          Sema::LookupOrdinaryName);
-      if (S.LookupQualifiedName(Found, LookupCtx)) {
-        ExprResult FromAddr =
-            S.BuildDeclarationNameExpr(SS, Found, /*NeedsADL=*/false);
-        if (FromAddr.isInvalid())
-          return Calls;
-
-        Expr *FramePtr =
-          buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
-
-        ExprResult CoroHandle = S.ActOnCallExpr(
-            /*Scope=*/nullptr, FromAddr.get(), Loc, {FramePtr}, Loc);
-        if (CoroHandle.isInvalid())
-          return Calls;
-
-        SmallVector<Expr*, 1> Args;
-        Args.push_back(CoroHandle.get());
-        Result = buildMemberCall(S, Operand, Loc, Funcs[I], Args);
-
-        if (Result.isInvalid())
-          return Calls;
-
-        Result = ExprResult(S.MakeFullExpr(Result.get()).get());
+      if (!S.LookupQualifiedName(Found, LookupCtx)) {
+        // TODO: rename diagnostic to from_address
+        S.Diag(Loc, diag::err_coroutine_handle_missing_from_promise);
+        return Calls;
       }
-      else {
-        // TODO: replace placeholder diagnostic with real one
-        S.Diag(Loc, diag::err_implied_std_coroutine_traits_not_found);
-      }
+      ExprResult FromAddr =
+          S.BuildDeclarationNameExpr(SS, Found, /*NeedsADL=*/false);
+      if (FromAddr.isInvalid())
+        return Calls;
+
+      Expr *FramePtr =
+        buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_frame, {});
+
+      ExprResult CoroHandle = S.ActOnCallExpr(
+          /*Scope=*/nullptr, FromAddr.get(), Loc, {FramePtr}, Loc);
+      if (CoroHandle.isInvalid())
+        return Calls;
+
+      SmallVector<Expr*, 1> Args;
+      Args.push_back(CoroHandle.get());
+      Result = buildMemberCall(S, Operand, Loc, Funcs[I], Args);
+
+      if (Result.isInvalid())
+        return Calls;
     } else {
       Result = buildMemberCall(S, Operand, Loc, Funcs[I], {});
     }

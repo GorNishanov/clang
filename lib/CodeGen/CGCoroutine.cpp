@@ -554,8 +554,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &TI = CGM.getContext().getTargetInfo();
   unsigned NewAlign = TI.getNewAlign() / TI.getCharWidth();
 
-  auto *FinalBB = createBasicBlock("coro.final");
-
   auto *CoroId = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_id),
       {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
