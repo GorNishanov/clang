@@ -6923,13 +6923,18 @@ TreeTransform<Derived>::TransformCoroutineBodyStmt(CoroutineBodyStmt *S) {
     BodyArgs.Deallocate = DeallocRes.get();
   }
 
-  Expr *ReturnObject = S->getReturnValueInit();
-  if (ReturnObject) {
-    ExprResult Res = getDerived().TransformInitializer(ReturnObject,
-            /*NoCopyInit*/false);
+  if (auto *ResultDecl = S->getResultDecl()) {
+    StmtResult Res = getDerived().TransformStmt(ResultDecl);
     if (Res.isInvalid())
       return StmtError();
-    BodyArgs.ReturnValue = Res.get();
+    BodyArgs.ResultDecl = Res.get();
+  }
+
+  if (auto *ReturnStmt = S->getReturnStmt()) {
+    StmtResult Res = getDerived().TransformStmt(ReturnStmt);
+    if (Res.isInvalid())
+      return StmtError();
+    BodyArgs.ReturnStmt = Res.get();
   }
 
   // Do a partial rebuild of the coroutine body and stash it in the ScopeInfo

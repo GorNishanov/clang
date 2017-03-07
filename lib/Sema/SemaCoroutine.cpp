@@ -628,7 +628,7 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
     Coroutine->CoroutineStmts.push_back(Res);
     return Res;
   }
-
+#if 0
   // FIXME: Moved it from ActOnCoyieldExpr to BuildCoyieldExpr, otherwise,
   //   mutlishot_func.cpp breaks. There must be a better fix.
   // Build yield_value call.
@@ -637,9 +637,9 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   if (Awaitable.isInvalid())
     return ExprError();
   E = Awaitable.get();
-
+#endif
   // Build 'operator co_await' call.
-  Awaitable = buildOperatorCoawaitCall(*this, getCurScope(), Loc, E);
+  ExprResult Awaitable = buildOperatorCoawaitCall(*this, getCurScope(), Loc, E);
   if (Awaitable.isInvalid())
     return ExprError();
 
@@ -782,8 +782,8 @@ public:
     }
     this->IsValid = makePromiseStmt() && makeInitialAndFinalSuspend() &&
                     makeOnException() && makeOnFallthrough() &&
-                    makeNewAndDeleteExpr() && makeReturnObject() &&
-                    makeParamMoves() && makeBody();
+                    makeNewAndDeleteExpr() && makeResultDecl() &&
+                    makeReturnStmt() && makeParamMoves() && makeBody();
   }
 
   bool isInvalid() const { return !this->IsValid; }
@@ -828,6 +828,9 @@ public:
 }
 
 void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
+  if (isa<CoroutineBodyStmt>(Body))
+    return;
+
   FunctionScopeInfo *Fn = getCurFunction();
   assert(Fn && Fn->CoroutinePromise && "not a coroutine");
 
