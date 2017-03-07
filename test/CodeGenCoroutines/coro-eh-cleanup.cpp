@@ -29,7 +29,7 @@ coro_t f() {
 // CHECK:       to label %[[CONT:.+]] unwind label %[[EHCLEANUP:.+]]
 // CHECK: [[EHCLEANUP]]:
 // CHECK:   %[[INNERPAD:.+]] = cleanuppad within none []
-// CHECK:   call void @"\01??_DCleanup@@QEAA@XZ"(
+// CHECK:   call void @"\01??_DCleanup@@QEAAXXZ"(
 // CHECK:   cleanupret from %[[INNERPAD]] unwind label %[[COROENDBB:.+]]
 // CHECK: [[COROENDBB]]:
 // CHECK-NEXT: %[[CLPAD:.+]] = cleanuppad within none

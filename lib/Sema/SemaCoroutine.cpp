@@ -100,7 +100,7 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
     return QualType();
   }
   if (S.RequireCompleteType(FuncLoc, buildElaboratedType(),
-                            diag::err_coroutine_handle_missing_from_promise))
+                            diag::err_coroutine_promise_type_incomplete))
     return QualType();
 
   return PromiseType;
@@ -346,7 +346,8 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S,
                          Sema::LookupOrdinaryName);
       if (!S.LookupQualifiedName(Found, LookupCtx)) {
         // TODO: rename diagnostic to from_address
-        S.Diag(Loc, diag::err_coroutine_handle_missing_from_promise);
+        S.Diag(Loc, diag::err_coroutine_handle_missing_member)
+            << "from_address";
         return Calls;
       }
       ExprResult FromAddr =
