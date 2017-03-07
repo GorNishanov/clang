@@ -828,20 +828,22 @@ public:
 }
 
 void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
-  if (isa<CoroutineBodyStmt>(Body))
-    return;
-
   FunctionScopeInfo *Fn = getCurFunction();
   assert(Fn && Fn->CoroutinePromise && "not a coroutine");
 
-  // Coroutines [stmt.return]p1:
-  //   A return statement shall not appear in a coroutine.
-  if (Fn->FirstReturnLoc.isValid()) {
-    Diag(Fn->FirstReturnLoc, diag::err_return_in_coroutine);
-    auto *First = Fn->CoroutineStmts[0];
-    Diag(First->getLocStart(), diag::note_declared_coroutine_here)
-        << (isa<CoawaitExpr>(First) ? "co_await" :
-            isa<CoyieldExpr>(First) ? "co_yield" : "co_return");
+  if (auto *CoroBody = dyn_cast<CoroutineBodyStmt>(Body)) {
+    Body = CoroBody->getBody();
+  }
+  else {
+    // Coroutines [stmt.return]p1:
+    //   A return statement shall not appear in a coroutine.
+    if (Fn->FirstReturnLoc.isValid()) {
+      Diag(Fn->FirstReturnLoc, diag::err_return_in_coroutine);
+      auto *First = Fn->CoroutineStmts[0];
+      Diag(First->getLocStart(), diag::note_declared_coroutine_here)
+          << (isa<CoawaitExpr>(First) ? "co_await" :
+              isa<CoyieldExpr>(First) ? "co_yield" : "co_return");
+    }
   }
   SubStmtBuilder Builder(*this, *FD, *Fn, Body);
   if (Builder.isInvalid())
@@ -1084,9 +1086,11 @@ bool SubStmtBuilder::makeParamMoves() {
     if (Ty->isDependentType())
       continue;
 
-    if (auto *RD = Ty->getAsCXXRecordDecl()) {
+    // No need to copy scalars, llvm will take care of them.
+    if (Ty->getAsCXXRecordDecl()) {
       if (!paramDecl->getIdentifier())
         continue;
+
       ExprResult ParamRef =
           S.BuildDeclRefExpr(paramDecl, paramDecl->getType(),
                              ExprValueKind::VK_LValue, Loc); // FIXME: scope?
