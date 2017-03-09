@@ -118,8 +118,7 @@ static QualType lookupPromiseType(Sema &S, const FunctionProtoType *FnType,
   return PromiseType;
 }
 
-/// Look up the std::coroutine_traits<...>::promise_type for the given
-/// function type.
+/// Look up the std::experimental::coroutine_handle<PromiseType>.
 static QualType lookupCoroutineHandleType(Sema &S, QualType PromiseType,
                                           SourceLocation Loc) {
   if (PromiseType.isNull())
@@ -312,9 +311,9 @@ static ExprResult buildCoroutineHandle(Sema &S, QualType PromiseType,
 }
 
 struct ReadySuspendResumeResult {
-  bool IsInvalid;
-  OpaqueValueExpr *OpaqueValue;
   Expr *Results[3];
+  OpaqueValueExpr *OpaqueValue;
+  bool IsInvalid;
 };
 
 static ExprResult buildMemberCall(Sema &S, Expr *Base, SourceLocation Loc,
@@ -337,7 +336,8 @@ static ExprResult buildMemberCall(Sema &S, Expr *Base, SourceLocation Loc,
 /// expression.
 static ReadySuspendResumeResult buildCoawaitCalls(Sema &S, VarDecl *CoroPromise,
                                                   SourceLocation Loc, Expr *E) {
-  ReadySuspendResumeResult Calls = {/*IsInvalid=*/true, nullptr, {}};
+  ReadySuspendResumeResult Calls = {
+      {}, /*OpaqueVal*/ nullptr, /*IsInvalid=*/true};
 
   ExprResult CoroHandleRes = buildCoroutineHandle(S, CoroPromise->getType(), Loc);
   if (CoroHandleRes.isInvalid())
@@ -354,7 +354,6 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S, VarDecl *CoroPromise,
     ExprResult Result = buildMemberCall(S, Operand, Loc, Funcs[I], Args[I]);
     if (Result.isInvalid())
       return Calls;
-
     Calls.Results[I] = Result.get();
   }
   Calls.IsInvalid = false;
@@ -558,8 +557,9 @@ ExprResult Sema::BuildResolvedCoawaitExpr(SourceLocation Loc, Expr *E,
   if (RSS.IsInvalid)
     return ExprError();
 
-  Expr *Res = new (Context) CoawaitExpr(Loc, E, RSS.OpaqueValue, RSS.Results[0],
-                                        RSS.Results[1], RSS.Results[2], IsImplicit);
+  Expr *Res =
+      new (Context) CoawaitExpr(Loc, E, RSS.Results[0], RSS.Results[1],
+                                RSS.Results[2], RSS.OpaqueValue, IsImplicit);
   if (!IsImplicit)
     Coroutine->CoroutineStmts.push_back(Res);
   return MaybeBindToTemporary(Res);
@@ -602,16 +602,7 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
     Coroutine->CoroutineStmts.push_back(Res);
     return Res;
   }
-#if 0
-  // FIXME: Moved it from ActOnCoyieldExpr to BuildCoyieldExpr, otherwise,
-  //   mutlishot_func.cpp breaks. There must be a better fix.
-  // Build yield_value call.
-  ExprResult Awaitable =
-      buildPromiseCall(*this, Coroutine, Loc, "yield_value", E);
-  if (Awaitable.isInvalid())
-    return ExprError();
-  E = Awaitable.get();
-#endif
+
   // Build 'operator co_await' call.
   ExprResult Awaitable = buildOperatorCoawaitCall(*this, getCurScope(), Loc, E);
   if (Awaitable.isInvalid())
@@ -628,8 +619,8 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   if (RSS.IsInvalid)
     return ExprError();
 
-  Expr *Res = new (Context) CoyieldExpr(Loc, E, RSS.OpaqueValue, RSS.Results[0],
-                                        RSS.Results[1], RSS.Results[2]);
+  Expr *Res = new (Context) CoyieldExpr(Loc, E, RSS.Results[0], RSS.Results[1],
+                                        RSS.Results[2], RSS.OpaqueValue);
   Coroutine->CoroutineStmts.push_back(Res);
   return MaybeBindToTemporary(Res);
 }
