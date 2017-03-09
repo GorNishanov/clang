@@ -2,8 +2,7 @@
 #include "Inputs/coroutine.h"
 
 // This file tests, multishot, movable std::function like thing using coroutine
-// for compile-time type erasure and unerasure. At the moment asserts in 
-// frontend. Something with dependent arguments.
+// for compile-time type erasure and unerasure. 
 template <typename R> struct func {
   struct Input {R a, b;};
 
@@ -68,7 +67,8 @@ int Do(int acc, int n, func<int> f) {
 
 // CHECK: @main
 int main() {
-  int result = Do(1, 10, [](int a, int b) {return a + b;});
+  double CaptureMe;
+  int result = Do(1, 10, [CaptureMe](int a, int b) {return a + b;});
   return result;
 // CHECK:  ret i32 46
 }
