@@ -4,10 +4,21 @@ namespace std {
 namespace experimental {
 template <typename... T>
 struct coroutine_traits; // expected-note {{declared here}}
-template <typename Promise>
-struct coroutine_handle{
-  static coroutine_handle from_address(void *addr) noexcept;  
+
+template <class Promise = void>
+struct coroutine_handle {
+  coroutine_handle() = default;
+  static coroutine_handle from_address(void *) { return {}; }
 };
+
+template <>
+struct coroutine_handle<void> {
+  static coroutine_handle from_address(void *) { return {}; }
+  coroutine_handle() = default;
+  template <class PromiseType>
+  coroutine_handle(coroutine_handle<PromiseType>) {}
+};
+
 }
 }
 

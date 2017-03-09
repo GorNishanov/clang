@@ -17,26 +17,14 @@ void no_coroutine_traits_bad_arg_return() {
 }
 
 void no_coroutine_traits() {
-  co_await 4; // expected-error {{need to include <experimental/coroutine>}}
+  co_await 4; // expected-error {{std::experimental::coroutine_traits type was not found; include <experimental/coroutine>}}
 }
 
 namespace std {
 namespace experimental {
 template <typename... T>
 struct coroutine_traits; // expected-note {{declared here}}
-
-template <class PromiseType = void>
-struct coroutine_handle {
-  static coroutine_handle from_address(void *);
-};
-
-template <>
-struct coroutine_handle<void> {
-  template <class PromiseType>
-  coroutine_handle(coroutine_handle<PromiseType>);
-  static coroutine_handle from_address(void *);
-};
-}} // namespace std::experimental
+}}  // namespace std::experimental
 
 template<typename Promise> struct coro {};
 template <typename Promise, typename... Ps>
@@ -52,13 +40,13 @@ struct awaitable {
 
 struct suspend_always {
   bool await_ready() { return false; }
-  template <typename F> void await_suspend(F){}
+  template <typename F> void await_suspend(F);
   void await_resume() {}
 };
 
 struct suspend_never {
   bool await_ready() { return true; }
-  template <typename F> void await_suspend(F){}
+  template <typename F> void await_suspend(F);
   void await_resume() {}
 };
 
@@ -121,6 +109,25 @@ struct promise_void {
   suspend_always final_suspend();
   void return_void();
 };
+
+void no_coroutine_handle() { // expected-error {{std::experimental::coroutine_handle type was not found; include <experimental/coroutine> before defining a coroutine}}
+  //expected-note@-1 {{call to 'initial_suspend' implicitly required by the initial suspend point}}
+  co_return 5; //expected-note {{function is a coroutine due to use of 'co_return' here}}
+}
+
+namespace std {
+namespace experimental {
+template <class PromiseType = void>
+struct coroutine_handle {
+  static coroutine_handle from_address(void *);
+};
+template <>
+struct coroutine_handle<void> {
+  template <class PromiseType>
+  coroutine_handle(coroutine_handle<PromiseType>);
+  static coroutine_handle from_address(void *);
+};
+}} // namespace std::experimental
 
 void yield() {
   co_yield 0;
@@ -522,4 +529,20 @@ template<> struct std::experimental::coroutine_traits<int, int, const char**>
 
 int main(int, const char**) {
   co_await a; // expected-error {{'co_await' cannot be used in the 'main' function}}
+}
+
+struct good_promise_2 {
+  float get_return_object();
+  suspend_always initial_suspend();
+  suspend_always final_suspend();
+  void return_void();
+};
+template<> struct std::experimental::coroutine_handle<good_promise_2> {};
+
+template<> struct std::experimental::coroutine_traits<float>
+{ using promise_type = good_promise_2; };
+
+float badly_specialized_coro_handle() { // expected-error {{std::experimental::coroutine_handle missing a member named 'from_address'}}
+  //expected-note@-1 {{call to 'initial_suspend' implicitly required by the initial suspend point}}
+  co_return; //expected-note {{function is a coroutine due to use of 'co_return' here}}
 }
