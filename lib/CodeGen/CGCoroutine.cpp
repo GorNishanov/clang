@@ -12,20 +12,34 @@
 //===----------------------------------------------------------------------===//
 
 #include "CodeGenFunction.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "clang/AST/StmtCXX.h"
 
 using namespace clang;
 using namespace CodeGen;
 
+using llvm::Value;
+using llvm::BasicBlock;
+
+namespace {
+enum class AwaitKind { Init, Normal, Yield, Final };
+char const *AwaitKindStr[] = {"init", "await", "yield", "final"};
+}
+
 namespace clang {
 namespace CodeGen {
 
 struct CGCoroData {
+  AwaitKind CurrentAwaitKind = AwaitKind::Init;
+  llvm::BasicBlock *SuspendBB = nullptr;
 
+  CodeGenFunction::JumpDest CleanupJD;
   // Stores the jump destination just before the final suspend. Coreturn
   // statements jumps to this point after calling return_xxx promise member.
   CodeGenFunction::JumpDest FinalJD;
 
+  unsigned AwaitNum = 0;
+  unsigned YieldNum = 0;
   unsigned CoreturnCount = 0;
 
   // Stores the llvm.coro.id emitted in the function so that we can supply it
@@ -66,6 +80,114 @@ static void createCoroData(CodeGenFunction &CGF,
   CurCoro.Data->CoroIdExpr = CoroIdExpr;
 }
 
+// Synthesize a pretty name for a suspend point.
+static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
+  unsigned No = 0;
+  switch (Kind) {
+  default:
+    break;
+  case AwaitKind::Normal:
+    No = ++Coro.AwaitNum;
+    break;
+  case AwaitKind::Yield:
+    No = ++Coro.YieldNum;
+    break;
+  }
+  SmallString<32> Suffix(AwaitKindStr[static_cast<int>(Kind)]);
+  if (No > 1) {
+    Twine(No).toVector(Suffix);
+  }
+  return Suffix;
+}
+
+// TODO: comments
+static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
+                                    CoroutineSuspendExpr const &S,
+                                    AwaitKind Kind,
+                                    ReturnValueSlot ReturnValue) {
+  auto &Builder = CGF.Builder;
+  const bool IsFinalSuspend = Kind == AwaitKind::Final;
+  auto Suffix = buildSuspendSuffixStr(Coro, Kind);
+
+  auto *E = S.getCommonExpr();
+  if (auto *UO = dyn_cast<UnaryOperator>(E))
+    if (UO->getOpcode() == UO_Coawait)
+      E = UO->getSubExpr();
+
+  auto Binder =
+      CodeGenFunction::OpaqueValueMappingData::bind(CGF, S.getOpaqueValue(), E);
+  auto UnbindOnExit = llvm::make_scope_exit([&] { Binder.unbind(CGF); });
+
+  BasicBlock *ReadyBlock = CGF.createBasicBlock(Suffix + Twine(".ready"));
+  BasicBlock *SuspendBlock = CGF.createBasicBlock(Suffix + Twine(".suspend"));
+  BasicBlock *CleanupBlock = CGF.createBasicBlock(Suffix + Twine(".cleanup"));
+
+  CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
+  CGF.EmitBlock(SuspendBlock);
+
+  llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
+  auto *NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
+  auto *SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
+
+  auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
+  if (SuspendRet != nullptr) {
+    // FIXME: Add proper error if the result of the expression is not bool.
+    // That should be checked by Sema
+    if (!SuspendRet->getType()->isIntegerTy(1)) {
+      CGF.ErrorUnsupported(S.getSuspendExpr(),
+                           "non void and non bool await_suspend");
+      return nullptr;
+    }
+    BasicBlock *RealSuspendBlock =
+        CGF.createBasicBlock(Suffix + Twine(".suspend.bool"));
+    CGF.Builder.CreateCondBr(SuspendRet, RealSuspendBlock, ReadyBlock);
+    SuspendBlock = RealSuspendBlock;
+    CGF.EmitBlock(RealSuspendBlock);
+  }
+
+  llvm::Function *CoroSuspend =
+      CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
+  auto *SuspendResult = Builder.CreateCall(
+      CoroSuspend, {SaveCall, Builder.getInt1(IsFinalSuspend)});
+  auto *Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
+  Switch->addCase(Builder.getInt8(0), ReadyBlock);
+  Switch->addCase(Builder.getInt8(1), CleanupBlock);
+
+  CGF.EmitBlock(CleanupBlock);
+
+  CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
+
+  // Emit await_resume expression.
+  CGF.EmitBlock(ReadyBlock);
+  QualType Type = S.getResumeExpr()->getType();
+  switch (CGF.getEvaluationKind(Type)) {
+  case TEK_Scalar:
+    return CGF.EmitScalarExpr(S.getResumeExpr());
+  case TEK_Aggregate:
+    CGF.EmitAggExpr(S.getResumeExpr(),
+                    AggValueSlot::forAddr(ReturnValue.getValue(), Qualifiers(),
+                                          AggValueSlot::IsDestructed,
+                                          AggValueSlot::DoesNotNeedGCBarriers,
+                                          AggValueSlot::IsNotAliased));
+    break;
+  case TEK_Complex:
+    CGF.CGM.ErrorUnsupported(S.getResumeExpr(), "_Complex await expression");
+    break;
+  }
+  return nullptr;
+}
+
+llvm::Value *CodeGenFunction::EmitCoawaitExpr(const CoawaitExpr &E,
+                                              ReturnValueSlot ReturnValue) {
+  return emitSuspendExpression(*this, *CurCoro.Data, E,
+                               CurCoro.Data->CurrentAwaitKind, ReturnValue);
+}
+llvm::Value *CodeGenFunction::EmitCoyieldExpr(const CoyieldExpr &E,
+                                              ReturnValueSlot ReturnValue) {
+  return emitSuspendExpression(*this, *CurCoro.Data, E, AwaitKind::Yield,
+                               ReturnValue);
+}
+
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   ++CurCoro.Data->CoreturnCount;
   EmitStmt(S.getPromiseCall());
@@ -78,6 +200,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   unsigned NewAlign = TI.getNewAlign() / TI.getCharWidth();
 
   auto *FinalBB = createBasicBlock("coro.final");
+  auto *RetBB = createBasicBlock("coro.ret");
 
   auto *CoroId = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_id),
@@ -90,6 +213,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   EmitStmt(S.getPromiseDeclStmt());
 
+  CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(RetBB);
   CurCoro.Data->FinalJD = getJumpDestInCurrentScope(FinalBB);
 
   // FIXME: Emit initial suspend and more before the body.
@@ -104,6 +228,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // FIXME: Emit final suspend.
   }
   EmitStmt(S.getDeallocate());
+
+  EmitBlock(RetBB);
 
   // FIXME: Emit return for the coroutine return object.
 }

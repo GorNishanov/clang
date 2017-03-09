@@ -276,6 +276,15 @@ public:
   Value *VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     return Visit(GE->getResultExpr());
   }
+  Value *VisitCoawaitExpr(CoawaitExpr* S) {
+    return CGF.EmitCoawaitExpr(*S);
+  }
+  Value *VisitCoyieldExpr(CoyieldExpr* S) {
+    return CGF.EmitCoyieldExpr(*S);
+  }
+  Value *VisitUnaryCoawait  (const UnaryOperator *E) {
+    return Visit(E->getSubExpr());
+  }
 
   // Leaves.
   Value *VisitIntegerLiteral(const IntegerLiteral *E) {
