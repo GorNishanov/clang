@@ -100,7 +100,33 @@ static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
   return Suffix;
 }
 
-// TODO: comments
+// Emit suspend expression which roughly looks like:
+//
+//   auto && x = CommonExpr();
+//   if (!x.await_ready()) {
+//      llvm_coro_save();
+//      x.await_suspend(...);     (*)
+//      llvm_coro_suspend(); (**)
+//   }
+//   x.await_resume();
+//
+// where the result of the entire expression is the result of x.await_resume()
+//
+//   (*) If x.await_suspend return type is bool, it allows to veto a suspend:
+//      if (x.await_suspend(...))
+//        llvm_coro_suspend();
+//
+//  (**) llvm_coro_suspend() encodes three possible continuation passes as
+//       a switch instruction:
+//
+//  %where-to = call i8 @llvm.coro.suspend(...)
+//  switch i8 %where-to, label %coro.ret [ ; jump to epilogue to suspend
+//    i8 0, label %yield.ready   ; go here when resumed
+//    i8 1, label %yield.cleanup ; go here when destroyed
+//  ]
+//
+//  See llvm's docs/Coroutines.rst for more details.
+//
 static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     CoroutineSuspendExpr const &S,
                                     AwaitKind Kind,
@@ -131,13 +157,8 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
 
   auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
   if (SuspendRet != nullptr) {
-    // FIXME: Add proper error if the result of the expression is not bool.
-    // That should be checked by Sema
-    if (!SuspendRet->getType()->isIntegerTy(1)) {
-      CGF.ErrorUnsupported(S.getSuspendExpr(),
-                           "non void and non bool await_suspend");
-      return nullptr;
-    }
+    assert(SuspendRet->getType()->isIntegerTy(1) &&
+      "Sema should have already checked that it is void or bool");
     BasicBlock *RealSuspendBlock =
         CGF.createBasicBlock(Suffix + Twine(".suspend.bool"));
     CGF.Builder.CreateCondBr(SuspendRet, RealSuspendBlock, ReadyBlock);
@@ -206,6 +227,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       CGM.getIntrinsic(llvm::Intrinsic::coro_id),
       {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
   createCoroData(*this, CurCoro, CoroId);
+  CurCoro.Data->SuspendBB = RetBB;
 
   EmitScalarExpr(S.getAllocate());
 
