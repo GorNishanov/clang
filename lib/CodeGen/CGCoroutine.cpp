@@ -107,45 +107,6 @@ static void createCoroData(CodeGenFunction &CGF,
 
 bool CodeGenFunction::isCoroutine() const { return CurCoro.Data != nullptr; }
 
-#if 0
-namespace {
-struct OpaqueValueMappings {
-  LValue common;
-
-  CodeGenFunction::OpaqueValueMapping o1;
-  CodeGenFunction::OpaqueValueMapping o2;
-  CodeGenFunction::OpaqueValueMapping o3;
-
-  static OpaqueValueExpr *opaque(Expr *E) {
-    // FIXME: There must be a better way of getting to OpaqueValue.
-    if (auto *BTE = dyn_cast<CXXBindTemporaryExpr>(E)) {
-      E = BTE->getSubExpr();
-    }
-    return cast<OpaqueValueExpr>(
-        cast<CXXMemberCallExpr>(E)->getImplicitObjectArgument());
-  }
-
-  static LValue getCommonExpr(CodeGenFunction &CGF,
-                              CoroutineSuspendExpr const &S) {
-    auto *E = S.getCommonExpr();
-    if (auto *MTE = dyn_cast<MaterializeTemporaryExpr>(E))
-      return CGF.EmitMaterializeTemporaryExpr(MTE);
-    if (auto *UO = dyn_cast<UnaryOperator>(E))
-      if (UO->getOpcode() == UO_Coawait)
-        E = UO->getSubExpr();
-
-    return CGF.EmitLValue(E);
-  }
-
-  OpaqueValueMappings(CodeGenFunction &CGF, CoroutineSuspendExpr const &S)
-      : common(getCommonExpr(CGF, S)),
-        o1(CGF, opaque(S.getReadyExpr()), common),
-        o2(CGF, opaque(S.getSuspendExpr()), common),
-        o3(CGF, opaque(S.getResumeExpr()), common) {}
-};
-}
-#endif
-
 static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
   unsigned No = 0;
   switch (Kind) {
@@ -182,8 +143,6 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
       CGF, S.getOpaqueValue(), E);
   auto UnbindOnExit = llvm::make_scope_exit([&] { Binder.unbind(CGF); });
 
-  //OpaqueValueMappings ovm(CGF, S);
-
   BasicBlock *ReadyBlock = CGF.createBasicBlock(Suffix + Twine(".ready"));
   BasicBlock *SuspendBlock = CGF.createBasicBlock(Suffix + Twine(".suspend"));
   BasicBlock *CleanupBlock = CGF.createBasicBlock(Suffix + Twine(".cleanup"));
@@ -219,10 +178,6 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
 
   CGF.EmitBlock(CleanupBlock);
 
-  // FIXME: This does not work if co_await exp result is used
-  //   see clang/test/Coroutines/brokenIR.cpp.
-  // Current we patch SSA with runHorribleHackToFixupCleanupBlocks(*CurFn)
-  // at the end of EmitCoroutineBody.
   CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
 
   // Emit await_resume expression.
@@ -245,83 +200,6 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   return nullptr;
 }
 
-#if 0
-// If await expression result is used we end up with broken IR with
-// definition of result of the await expression not dominating its uses.
-// It results from the way how cleanup blocks are threaded. Here is an
-// example of the broken IR we are fixing up.
-//
-//    %23 = call i8 @llvm.coro.suspend(token % 21, i1 false)
-//    switch i8 %23, label %coro.ret [ i8 0, label %await.ready
-//                                     i8 1, label %await.cleanup]
-// await.cleanup:
-//    store i32 2, i32* %cleanup.dest.slot
-//    br label %cleanup10
-// await.ready:
-//    %await.resume = call await_resume(%struct.A* %ref.tmp6)
-//    store i32 0, i32* %cleanup.dest.slot
-//    br label %common.cleanup
-// common.cleanup:
-//    ...
-//    %cleanup.dest = load i32, i32* %cleanup.dest.slot
-//    switch i32 %cleanup.dest, label %unreach[i32 0, label %fallthru
-//                                             i32 2, label %more.cleanup]
-// fallthru:
-//    use of %await.resume
-//
-// We are fixing this by inserting a PHINode in the cleanup block with
-// all values undefined but the one coming out of await.ready edge.
-
-static void fixBrokenUse(Use &U) {
-  // Verify that we have the pattern above.
-  Instruction &I = *cast<Instruction>(U.getUser());
-  Instruction &D = *cast<Instruction>(U.get());
-
-  BasicBlock *DefBlock = D.getParent();
-  BasicBlock *PostDefBlock = DefBlock->getSingleSuccessor();
-  if (!PostDefBlock)
-    return;
-  if (PostDefBlock->getSinglePredecessor() != nullptr)
-    return;
-
-  // Do a few more sanity checks.
-  BasicBlock *FallthruBB = I.getParent();
-  BasicBlock *CommonCleanupBB = FallthruBB->getSinglePredecessor();
-  if (!CommonCleanupBB)
-    return;
-  SwitchInst *SI = dyn_cast<SwitchInst>(CommonCleanupBB->getTerminator());
-  if (!SI)
-    return;
-
-  // Okay, looks like it is cleanup related break that we can fix.
-  auto Phi = PHINode::Create(D.getType(), 2, "", &PostDefBlock->front());
-  auto Undef = llvm::UndefValue::get(D.getType());
-  for (BasicBlock *Pred : predecessors(PostDefBlock))
-    Phi->addIncoming(Pred == DefBlock ? (Value *)&D : Undef, Pred);
-
-  D.replaceUsesOutsideBlock(Phi, PostDefBlock);
-}
-
-static void runHorribleHackToFixupCleanupBlocks(Function &F) {
-  DominatorTree DT(F);
-  SmallVector<Use *, 8> BrokenUses;
-
-  for (Instruction &I : instructions(F)) {
-    for (Use &U : I.uses()) {
-      if (isa<llvm::PHINode>(U.getUser()))
-        break;
-      if (!DT.dominates(&I, U)) {
-        BrokenUses.push_back(&U);
-        break; // Go to the next instruction.
-      }
-    }
-  }
-
-  for (Use *U : BrokenUses)
-    fixBrokenUse(*U);
-}
-#endif
-
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   ++CurCoro.Data->CoreturnCount;
   EmitStmt(S.getPromiseCall());
@@ -339,6 +217,7 @@ llvm::Value *CodeGenFunction::EmitCoyieldExpr(const CoyieldExpr &E,
                                ReturnValue);
 }
 
+// Hunts for the parameter reference in the parameter copy/move declaration.
 namespace {
 struct GetParamRef : public StmtVisitor<GetParamRef> {
 public:
@@ -357,7 +236,48 @@ public:
 };
 }
 
-#if 0 // UNUSED for now (to squash the warning)
+// This class replaces references to parameters to their copies by changing
+// the addresses in CGF.LocalDeclMap and restoring back the original values in
+// its destructor.
+
+namespace {
+  struct ParamReferenceReplacerRAII {
+    CodeGenFunction::DeclMapTy SavedLocals;
+    CodeGenFunction::DeclMapTy& LocalDeclMap;
+
+    ParamReferenceReplacerRAII(CodeGenFunction::DeclMapTy &LocalDeclMap)
+        : LocalDeclMap(LocalDeclMap) {}
+
+    void addCopy(DeclStmt const *PM) {
+      // Figure out what param it refers to.
+
+      assert(PM->isSingleDecl());
+      VarDecl const*VD = static_cast<VarDecl const*>(PM->getSingleDecl());
+      Expr const *InitExpr = VD->getInit();
+      GetParamRef Visitor;
+      Visitor.Visit(const_cast<Expr*>(InitExpr));
+      assert(Visitor.Expr);
+      auto *DREOrig = cast<DeclRefExpr>(Visitor.Expr);
+      auto *PD = DREOrig->getDecl();
+
+      auto it = LocalDeclMap.find(PD);
+      assert(it != LocalDeclMap.end() && "parameter is not found");
+      SavedLocals.insert({ PD, it->second });
+
+      auto copyIt = LocalDeclMap.find(VD);
+      assert(copyIt != LocalDeclMap.end() && "parameter copy is not found");
+      it->second = copyIt->getSecond();
+    }
+
+    ~ParamReferenceReplacerRAII() {
+      for (auto&& SavedLocal : SavedLocals) {
+        LocalDeclMap.insert({SavedLocal.first, SavedLocal.second});
+      }
+    }
+  };
+}
+
+#if 0 // TODO: Finish me to support elision of the parameter copies.
 static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
   assert(PM->isSingleDecl());
   VarDecl *VD = static_cast<VarDecl *>(PM->getSingleDecl());
@@ -380,7 +300,6 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
   //  Surround CTOR and DTOR for parameters with
   //     if (coro.param(alloca.copy, alloca.original)) CTOR(...);
   //     if (coro.param(alloca.copy, alloca.original)) DTOR(...);
-  //  declare i1 @llvm.coro.param(i8* copy, i8* original)
 }
 #endif
 
@@ -506,47 +425,6 @@ struct GetReturnObjectManager {
     Builder.CreateStore(Builder.getTrue(), GroActiveFlag);
   }
 };
-}
-
-// This class replaces references to parameters to their copies by changing
-// the addresses in CGF.LocalDeclMap and restoring back the original values in
-// its destructor.
-
-namespace {
-  struct ParamReferenceReplacerRAII {
-    CodeGenFunction::DeclMapTy SavedLocals;
-    CodeGenFunction::DeclMapTy& LocalDeclMap;
-
-    ParamReferenceReplacerRAII(CodeGenFunction::DeclMapTy &LocalDeclMap)
-        : LocalDeclMap(LocalDeclMap) {}
-
-    void addCopy(DeclStmt const *PM) {
-      // Figure out what param it refers to.
-
-      assert(PM->isSingleDecl());
-      VarDecl const*VD = static_cast<VarDecl const*>(PM->getSingleDecl());
-      Expr const *InitExpr = VD->getInit();
-      GetParamRef Visitor;
-      Visitor.Visit(const_cast<Expr*>(InitExpr));
-      assert(Visitor.Expr);
-      auto *DREOrig = cast<DeclRefExpr>(Visitor.Expr);
-      auto *PD = DREOrig->getDecl();
-
-      auto it = LocalDeclMap.find(PD);
-      assert(it != LocalDeclMap.end() && "parameter is not found");
-      SavedLocals.insert({ PD, it->second });
-
-      auto copyIt = LocalDeclMap.find(VD);
-      assert(copyIt != LocalDeclMap.end() && "parameter copy is not found");
-      it->second = copyIt->getSecond();
-    }
-
-    ~ParamReferenceReplacerRAII() {
-      for (auto&& SavedLocal : SavedLocals) {
-        LocalDeclMap.insert({SavedLocal.first, SavedLocal.second});
-      }
-    }
-  };
 }
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
