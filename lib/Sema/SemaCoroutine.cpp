@@ -336,17 +336,16 @@ static ExprResult buildMemberCall(Sema &S, Expr *Base, SourceLocation Loc,
 /// expression.
 static ReadySuspendResumeResult buildCoawaitCalls(Sema &S, VarDecl *CoroPromise,
                                                   SourceLocation Loc, Expr *E) {
-  ReadySuspendResumeResult Calls = {
-      {}, /*OpaqueVal*/ nullptr, /*IsInvalid=*/true};
+  OpaqueValueExpr *Operand = new (S.Context)
+      OpaqueValueExpr(Loc, E->getType(), VK_LValue, E->getObjectKind(), E);
+
+  // Assume invalid until we see otherwise.
+  ReadySuspendResumeResult Calls = {{}, Operand, /*IsInvalid=*/true};
 
   ExprResult CoroHandleRes = buildCoroutineHandle(S, CoroPromise->getType(), Loc);
   if (CoroHandleRes.isInvalid())
     return Calls;
   Expr *CoroHandle = CoroHandleRes.get();
-
-  OpaqueValueExpr *Operand = new (S.Context)
-      OpaqueValueExpr(Loc, E->getType(), VK_LValue, E->getObjectKind(), E);
-  Calls.OpaqueValue = Operand;
 
   const StringRef Funcs[] = {"await_ready", "await_suspend", "await_resume"};
   MultiExprArg Args[] = {None, CoroHandle, None};
@@ -356,6 +355,7 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S, VarDecl *CoroPromise,
       return Calls;
     Calls.Results[I] = Result.get();
   }
+
   Calls.IsInvalid = false;
   return Calls;
 }

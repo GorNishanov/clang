@@ -4165,7 +4165,6 @@ public:
   Expr *getCommonExpr() const {
     return static_cast<Expr*>(SubExprs[SubExpr::Common]);
   }
-
   /// \brief getOpaqueValue - Return the opaque value placeholder.
   OpaqueValueExpr *getOpaqueValue() const { return OpaqueValue; }
 
