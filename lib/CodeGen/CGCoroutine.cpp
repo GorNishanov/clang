@@ -82,7 +82,7 @@ static void createCoroData(CodeGenFunction &CGF,
 // Synthesize a pretty name for a suspend point.
 static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
   unsigned No = 0;
-  const char* AwaitKindStr = 0;
+  StringRef AwaitKindStr = 0;
   switch (Kind) {
   case AwaitKind::Init:
     AwaitKindStr = "init";
