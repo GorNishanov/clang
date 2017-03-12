@@ -23,7 +23,6 @@ using llvm::BasicBlock;
 
 namespace {
 enum class AwaitKind { Init, Normal, Yield, Final };
-char const *AwaitKindStr[] = {"init", "await", "yield", "final"};
 }
 
 namespace clang {
@@ -83,17 +82,24 @@ static void createCoroData(CodeGenFunction &CGF,
 // Synthesize a pretty name for a suspend point.
 static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
   unsigned No = 0;
+  const char* AwaitKindStr = 0;
   switch (Kind) {
-  default:
+  case AwaitKind::Init:
+    AwaitKindStr = "init";
+    break;
+  case AwaitKind::Final:
+    AwaitKindStr = "final";
     break;
   case AwaitKind::Normal:
+    AwaitKindStr = "await";
     No = ++Coro.AwaitNum;
     break;
   case AwaitKind::Yield:
+    AwaitKindStr = "yield";
     No = ++Coro.YieldNum;
     break;
   }
-  SmallString<32> Suffix(AwaitKindStr[static_cast<int>(Kind)]);
+  SmallString<32> Suffix(AwaitKindStr);
   if (No > 1) {
     Twine(No).toVector(Suffix);
   }
@@ -116,7 +122,7 @@ static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
 //      if (x.await_suspend(...))
 //        llvm_coro_suspend();
 //
-//  (**) llvm_coro_suspend() encodes three possible continuation passes as
+//  (**) llvm_coro_suspend() encodes three possible continuations as
 //       a switch instruction:
 //
 //  %where-to = call i8 @llvm.coro.suspend(...)
