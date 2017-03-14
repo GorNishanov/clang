@@ -25,35 +25,43 @@ namespace {
 enum class AwaitKind { Init, Normal, Yield, Final };
 }
 
-namespace clang {
-namespace CodeGen {
-
-struct CGCoroData {
+struct clang::CodeGen::CGCoroData {
+  // What is the current await expression kind and how many
+  // await/yield expressions were encountered so far.
+  // These are used to generate human readable labels in LLVM IR.
   AwaitKind CurrentAwaitKind = AwaitKind::Init;
-  llvm::BasicBlock *SuspendBB = nullptr;
-
-  CodeGenFunction::JumpDest CleanupJD;
-  // Stores the jump destination just before the final suspend. Coreturn
-  // statements jumps to this point after calling return_xxx promise member.
-  CodeGenFunction::JumpDest FinalJD;
-
   unsigned AwaitNum = 0;
   unsigned YieldNum = 0;
+
+  // How many co_return statements are in the coroutine. Used to decide whether
+  // we need to add co_return; equivalent at the end of the user authored body.
   unsigned CoreturnCount = 0;
+
+  // A branch to this block is emitted when coroutine needs to suspend.
+  llvm::BasicBlock *SuspendBB = nullptr;
+
+  // Stores the jump destination just before the coroutine memory is freed.
+  // This is the destination that every suspend point jumps to for the cleanup
+  // branch.
+  CodeGenFunction::JumpDest CleanupJD;
+
+  // Stores the jump destination just before the final suspend. The co_return
+  // statements jumps to this point after calling return_xxx promise member.
+  CodeGenFunction::JumpDest FinalJD;
 
   // Stores the llvm.coro.id emitted in the function so that we can supply it
   // as the first argument to coro.begin, coro.alloc and coro.free intrinsics.
   // Note: llvm.coro.id returns a token that cannot be directly expressed in a
   // builtin.
   llvm::CallInst *CoroId = nullptr;
+
   // If coro.id came from the builtin, remember the expression to give better
   // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
   // EmitCoroutineBody.
   CallExpr const *CoroIdExpr = nullptr;
 };
-}
-}
 
+// Defining these here allows to keep CGCoroData private to this file.
 clang::CodeGen::CodeGenFunction::CGCoroInfo::CGCoroInfo() {}
 CodeGenFunction::CGCoroInfo::~CGCoroInfo() {}
 
@@ -82,7 +90,7 @@ static void createCoroData(CodeGenFunction &CGF,
 // Synthesize a pretty name for a suspend point.
 static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
   unsigned No = 0;
-  StringRef AwaitKindStr = 0;
+  StringRef AwaitKindStr;
   switch (Kind) {
   case AwaitKind::Init:
     AwaitKindStr = "init";
