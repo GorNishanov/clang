@@ -23,8 +23,8 @@ using llvm::BasicBlock;
 
 namespace {
 enum class AwaitKind { Init, Normal, Yield, Final };
-constexpr llvm::StringLiteral AwaitKindStr[] = {"init", "await", "yield",
-                                                "final"};
+static constexpr llvm::StringLiteral AwaitKindStr[] = {"init", "await", "yield",
+                                                       "final"};
 }
 
 struct clang::CodeGen::CGCoroData {
