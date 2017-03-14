@@ -23,12 +23,14 @@ using llvm::BasicBlock;
 
 namespace {
 enum class AwaitKind { Init, Normal, Yield, Final };
+constexpr llvm::StringLiteral AwaitKindStr[] = {"init", "await", "yield",
+                                                "final"};
 }
 
 struct clang::CodeGen::CGCoroData {
   // What is the current await expression kind and how many
   // await/yield expressions were encountered so far.
-  // These are used to generate human readable labels in LLVM IR.
+  // These are used to generate pretty labels for await expressions in LLVM IR.
   AwaitKind CurrentAwaitKind = AwaitKind::Init;
   unsigned AwaitNum = 0;
   unsigned YieldNum = 0;
@@ -88,30 +90,24 @@ static void createCoroData(CodeGenFunction &CGF,
 }
 
 // Synthesize a pretty name for a suspend point.
-static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
+static SmallString<32> buildSuspendPrefixStr(CGCoroData &Coro, AwaitKind Kind) {
   unsigned No = 0;
-  StringRef AwaitKindStr;
   switch (Kind) {
   case AwaitKind::Init:
-    AwaitKindStr = "init";
-    break;
   case AwaitKind::Final:
-    AwaitKindStr = "final";
     break;
   case AwaitKind::Normal:
-    AwaitKindStr = "await";
     No = ++Coro.AwaitNum;
     break;
   case AwaitKind::Yield:
-    AwaitKindStr = "yield";
     No = ++Coro.YieldNum;
     break;
   }
-  SmallString<32> Suffix(AwaitKindStr);
+  SmallString<32> Prefix(AwaitKindStr[static_cast<unsigned>(Kind)]);
   if (No > 1) {
-    Twine(No).toVector(Suffix);
+    Twine(No).toVector(Prefix);
   }
-  return Suffix;
+  return Prefix;
 }
 
 // Emit suspend expression which roughly looks like:
@@ -146,9 +142,10 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     AwaitKind Kind, AggValueSlot aggSlot,
                                     bool ignoreResult) {
   auto &Builder = CGF.Builder;
-  auto Suffix = buildSuspendSuffixStr(Coro, Kind);
+  auto Prefix = buildSuspendPrefixStr(Coro, Kind);
 
   auto *E = S.getCommonExpr();
+  // Skip over dummy unary co_await operator. FIXME: Explain why?
   if (auto *UO = dyn_cast<UnaryOperator>(E))
     if (UO->getOpcode() == UO_Coawait)
       E = UO->getSubExpr();
@@ -157,11 +154,14 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
       CodeGenFunction::OpaqueValueMappingData::bind(CGF, S.getOpaqueValue(), E);
   auto UnbindOnExit = llvm::make_scope_exit([&] { Binder.unbind(CGF); });
 
-  BasicBlock *ReadyBlock = CGF.createBasicBlock(Suffix + Twine(".ready"));
-  BasicBlock *SuspendBlock = CGF.createBasicBlock(Suffix + Twine(".suspend"));
-  BasicBlock *CleanupBlock = CGF.createBasicBlock(Suffix + Twine(".cleanup"));
+  BasicBlock *ReadyBlock = CGF.createBasicBlock(Prefix + Twine(".ready"));
+  BasicBlock *SuspendBlock = CGF.createBasicBlock(Prefix + Twine(".suspend"));
+  BasicBlock *CleanupBlock = CGF.createBasicBlock(Prefix + Twine(".cleanup"));
 
+  // If expression is ready, no need to suspend.
   CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
+
+  // Otherwise, emit suspend logic.
   CGF.EmitBlock(SuspendBlock);
 
   llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
@@ -170,10 +170,11 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
 
   auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
   if (SuspendRet != nullptr) {
+    // Veto suspension if requested by bool returning await_suspend.
     assert(SuspendRet->getType()->isIntegerTy(1) &&
       "Sema should have already checked that it is void or bool");
     BasicBlock *RealSuspendBlock =
-        CGF.createBasicBlock(Suffix + Twine(".suspend.bool"));
+        CGF.createBasicBlock(Prefix + Twine(".suspend.bool"));
     CGF.Builder.CreateCondBr(SuspendRet, RealSuspendBlock, ReadyBlock);
     SuspendBlock = RealSuspendBlock;
     CGF.EmitBlock(RealSuspendBlock);
@@ -185,10 +186,13 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
       CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   auto *SuspendResult = Builder.CreateCall(
       CoroSuspend, {SaveCall, Builder.getInt1(IsFinalSuspend)});
+
+  // Create a switch capturing three possible continuations.
   auto *Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
   Switch->addCase(Builder.getInt8(0), ReadyBlock);
   Switch->addCase(Builder.getInt8(1), CleanupBlock);
 
+  // Emit cleanup for this suspend point.
   CGF.EmitBlock(CleanupBlock);
   CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
 
@@ -242,6 +246,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   // FIXME: Emit initial suspend and more before the body.
 
+  CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
   EmitStmt(S.getBody());
 
   // See if we need to generate final suspend.
