@@ -71,7 +71,7 @@ extern "C" void f0() {
   // Cleanup code goes here:
   // -----------------------
   // CHECK: [[CLEANUP_BB]]:
-  
+
   // When coroutine is resumed, call await_resume
   // --------------------------
   // CHECK: [[READY_BB]]:
@@ -143,12 +143,12 @@ extern "C" void UseComplex(_Complex float);
 // CHECK-LABEL: @TestComplex(
 extern "C" void TestComplex() {
   UseComplex(co_await ComplexAwaiter{});
-  // CHECK: %{{.+}} = call <2 x float> @_ZN14ComplexAwaiter12await_resumeEv(%struct.ComplexAwaiter*
-  // CHECK: call void @UseComplex(<2 x float> %8)
+  // CHECK: call <2 x float> @_ZN14ComplexAwaiter12await_resumeEv(%struct.ComplexAwaiter*
+  // CHECK: call void @UseComplex(<2 x float> %{{.+}})
 
   co_await ComplexAwaiter{};
   // CHECK: call <2 x float> @_ZN14ComplexAwaiter12await_resumeEv(%struct.ComplexAwaiter*
-  
+
   _Complex float Val = co_await ComplexAwaiter{};
   // CHECK: call <2 x float> @_ZN14ComplexAwaiter12await_resumeEv(%struct.ComplexAwaiter*
 }
