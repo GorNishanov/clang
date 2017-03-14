@@ -209,3 +209,22 @@ extern "C" void TestScalar() {
   co_await ScalarAwaiter{};
   // CHECK: call i32 @_ZN13ScalarAwaiter12await_resumeEv(%struct.ScalarAwaiter*
 }
+
+// Test operator co_await codegen.
+enum class MyInt: int {};
+ScalarAwaiter operator co_await(MyInt);
+
+struct MyAgg {
+  AggrAwaiter operator co_await();
+};
+
+// CHECK-LABEL: @TestOpAwait(
+extern "C" void TestOpAwait() {
+  co_await MyInt(42);
+  // CHECK: call void @_Zaw5MyInt(i32 42)
+  // CHECK: call i32 @_ZN13ScalarAwaiter12await_resumeEv(%struct.ScalarAwaiter* %
+
+  co_await MyAgg{};  
+  // CHECK: call void @_ZN5MyAggawEv(%struct.MyAgg* %
+  // CHECK: call void @_ZN11AggrAwaiter12await_resumeEv(%struct.Aggr* sret %
+}

@@ -141,19 +141,12 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     CoroutineSuspendExpr const &S,
                                     AwaitKind Kind, AggValueSlot aggSlot,
                                     bool ignoreResult) {
-  auto &Builder = CGF.Builder;
-  auto Prefix = buildSuspendPrefixStr(Coro, Kind);
-
   auto *E = S.getCommonExpr();
-  // Skip over dummy unary co_await operator. FIXME: Explain why?
-  if (auto *UO = dyn_cast<UnaryOperator>(E))
-    if (UO->getOpcode() == UO_Coawait)
-      E = UO->getSubExpr();
-
   auto Binder =
       CodeGenFunction::OpaqueValueMappingData::bind(CGF, S.getOpaqueValue(), E);
   auto UnbindOnExit = llvm::make_scope_exit([&] { Binder.unbind(CGF); });
 
+  auto Prefix = buildSuspendPrefixStr(Coro, Kind);
   BasicBlock *ReadyBlock = CGF.createBasicBlock(Prefix + Twine(".ready"));
   BasicBlock *SuspendBlock = CGF.createBasicBlock(Prefix + Twine(".suspend"));
   BasicBlock *CleanupBlock = CGF.createBasicBlock(Prefix + Twine(".cleanup"));
@@ -164,6 +157,7 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   // Otherwise, emit suspend logic.
   CGF.EmitBlock(SuspendBlock);
 
+  auto &Builder = CGF.Builder;
   llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
   auto *NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
   auto *SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
@@ -172,7 +166,7 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   if (SuspendRet != nullptr) {
     // Veto suspension if requested by bool returning await_suspend.
     assert(SuspendRet->getType()->isIntegerTy(1) &&
-      "Sema should have already checked that it is void or bool");
+           "Sema should have already checked that it is void or bool");
     BasicBlock *RealSuspendBlock =
         CGF.createBasicBlock(Prefix + Twine(".suspend.bool"));
     CGF.Builder.CreateCondBr(SuspendRet, RealSuspendBlock, ReadyBlock);
