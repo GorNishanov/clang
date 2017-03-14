@@ -112,10 +112,10 @@ public:
     Visit(GE->getResultExpr());
   }
   void VisitCoawaitExpr(CoawaitExpr *E) {
-    CGF.EmitCoawaitExpr(*E, getReturnValueSlot());
+    CGF.EmitCoawaitExpr(*E, Dest, IsResultUnused);
   }
   void VisitCoyieldExpr(CoyieldExpr *E) {
-    CGF.EmitCoyieldExpr(*E, getReturnValueSlot());
+    CGF.EmitCoyieldExpr(*E, Dest, IsResultUnused);
   }
   void VisitUnaryCoawait(UnaryOperator *E) { Visit(E->getSubExpr()); }
   void VisitUnaryExtension(UnaryOperator *E) { Visit(E->getSubExpr()); }

@@ -141,12 +141,11 @@ static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
 //
 //  See llvm's docs/Coroutines.rst for more details.
 //
-static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
+static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     CoroutineSuspendExpr const &S,
-                                    AwaitKind Kind,
-                                    ReturnValueSlot ReturnValue) {
+                                    AwaitKind Kind, AggValueSlot aggSlot,
+                                    bool ignoreResult) {
   auto &Builder = CGF.Builder;
-  const bool IsFinalSuspend = Kind == AwaitKind::Final;
   auto Suffix = buildSuspendSuffixStr(Coro, Kind);
 
   auto *E = S.getCommonExpr();
@@ -180,6 +179,8 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
     CGF.EmitBlock(RealSuspendBlock);
   }
 
+  // Emit the suspend point.
+  const bool IsFinalSuspend = (Kind == AwaitKind::Final);
   llvm::Function *CoroSuspend =
       CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   auto *SuspendResult = Builder.CreateCall(
@@ -189,38 +190,25 @@ static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
   Switch->addCase(Builder.getInt8(1), CleanupBlock);
 
   CGF.EmitBlock(CleanupBlock);
-
   CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
 
   // Emit await_resume expression.
   CGF.EmitBlock(ReadyBlock);
-  QualType Type = S.getResumeExpr()->getType();
-  switch (CGF.getEvaluationKind(Type)) {
-  case TEK_Scalar:
-    return CGF.EmitScalarExpr(S.getResumeExpr());
-  case TEK_Aggregate:
-    CGF.EmitAggExpr(S.getResumeExpr(),
-                    AggValueSlot::forAddr(ReturnValue.getValue(), Qualifiers(),
-                                          AggValueSlot::IsDestructed,
-                                          AggValueSlot::DoesNotNeedGCBarriers,
-                                          AggValueSlot::IsNotAliased));
-    break;
-  case TEK_Complex:
-    CGF.CGM.ErrorUnsupported(S.getResumeExpr(), "_Complex await expression");
-    break;
-  }
-  return nullptr;
+  return CGF.EmitAnyExpr(S.getResumeExpr(), aggSlot, ignoreResult);
 }
 
-llvm::Value *CodeGenFunction::EmitCoawaitExpr(const CoawaitExpr &E,
-                                              ReturnValueSlot ReturnValue) {
+RValue CodeGenFunction::EmitCoawaitExpr(const CoawaitExpr &E,
+                                        AggValueSlot aggSlot,
+                                        bool ignoreResult) {
   return emitSuspendExpression(*this, *CurCoro.Data, E,
-                               CurCoro.Data->CurrentAwaitKind, ReturnValue);
+                               CurCoro.Data->CurrentAwaitKind, aggSlot,
+                               ignoreResult);
 }
-llvm::Value *CodeGenFunction::EmitCoyieldExpr(const CoyieldExpr &E,
-                                              ReturnValueSlot ReturnValue) {
+RValue CodeGenFunction::EmitCoyieldExpr(const CoyieldExpr &E,
+                                        AggValueSlot aggSlot,
+                                        bool ignoreResult) {
   return emitSuspendExpression(*this, *CurCoro.Data, E, AwaitKind::Yield,
-                               ReturnValue);
+                               aggSlot, ignoreResult);
 }
 
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {

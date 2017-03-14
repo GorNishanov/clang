@@ -277,10 +277,10 @@ public:
     return Visit(GE->getResultExpr());
   }
   Value *VisitCoawaitExpr(CoawaitExpr *S) {
-    return CGF.EmitCoawaitExpr(*S);
+    return CGF.EmitCoawaitExpr(*S).getScalarVal();
   }
   Value *VisitCoyieldExpr(CoyieldExpr *S) {
-    return CGF.EmitCoyieldExpr(*S);
+    return CGF.EmitCoyieldExpr(*S).getScalarVal();
   }
   Value *VisitUnaryCoawait(const UnaryOperator *E) {
     return Visit(E->getSubExpr());
