@@ -110,6 +110,8 @@ CoroutineBodyStmt::CoroutineBodyStmt(CoroutineBodyStmt::CtorArgs const &Args)
   SubStmts[CoroutineBodyStmt::Deallocate] = Args.Deallocate;
   SubStmts[CoroutineBodyStmt::ResultDecl] = Args.ResultDecl;
   SubStmts[CoroutineBodyStmt::ReturnStmt] = Args.ReturnStmt;
+  SubStmts[CoroutineBodyStmt::ReturnStmtOnAllocFailure] =
+      Args.ReturnStmtOnAllocFailure;
   std::copy(Args.ParamMoves.begin(), Args.ParamMoves.end(),
             const_cast<Stmt **>(getParamMoves().data()));
 }

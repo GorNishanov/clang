@@ -576,7 +576,19 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   auto *AllocateCall = EmitScalarExpr(S.getAllocate());
   auto *AllocOrInvokeContBB = Builder.GetInsertBlock();
-  Builder.CreateBr(InitBB);
+
+  if (auto *RetOnAllocFailure = S.getReturnStmtOnAllocFailure()) {
+    auto *RetOnFailureBB = createBasicBlock("coro.ret.on.failure");
+    auto *NullPtr = llvm::ConstantPointerNull::get(Int8PtrTy);
+    auto *Cond = Builder.CreateICmpNE(AllocateCall, NullPtr);
+    Builder.CreateCondBr(Cond, InitBB, RetOnFailureBB);
+
+    EmitBlock(RetOnFailureBB);
+    EmitStmt(RetOnAllocFailure);
+  }
+  else {
+    Builder.CreateBr(InitBB);
+  }
 
   EmitBlock(InitBB);
   auto *Phi = Builder.CreatePHI(VoidPtrTy, 2);

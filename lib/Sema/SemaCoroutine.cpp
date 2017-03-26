@@ -758,7 +758,8 @@ public:
     this->IsValid = makePromiseStmt() && makeInitialAndFinalSuspend() &&
                     makeOnException() && makeOnFallthrough() &&
                     makeNewAndDeleteExpr() && makeResultDecl() &&
-                    makeReturnStmt() && makeParamMoves() && makeBody();
+                    makeReturnOnAllocFailure() && makeReturnStmt() &&
+                    makeParamMoves() && makeBody();
   }
 
   bool isInvalid() const { return !this->IsValid; }
@@ -771,6 +772,7 @@ public:
   bool makeResultDecl();
   bool makeReturnStmt();
   bool makeParamMoves();
+  bool makeReturnOnAllocFailure();
   bool makeBody();
 
   // Create a static_cast\<T&&>(expr).
@@ -845,6 +847,34 @@ bool SubStmtBuilder::makePromiseStmt() {
     return false;
 
   this->Promise = PromiseStmt.get();
+  return true;
+}
+
+bool SubStmtBuilder::makeReturnOnAllocFailure() {
+  if (!PromiseRecordDecl)
+    return true;
+#if 0
+  if (!lookupMember(S, "get_return_object_on_allocation_failure",
+                    PromiseRecordDecl, Loc))
+    return true;
+
+  ExprResult ReturnObjectOnAllocationFailure =
+    S.ActOnCallExpr(S.getCurrentScope, Expr *Fn, SourceLocation LParenLoc,
+      MultiExprArg ArgExprs, SourceLocation RParenLoc,
+      Expr *ExecConfig, bool IsExecConfig) {
+
+      buildPromiseCall(S, Fn.CoroutinePromise, Loc,
+                       "get_return_object_on_allocation_failure", None);
+  if (ReturnObjectOnAllocationFailure.isInvalid())
+    return false;
+
+  StmtResult ReturnStmt = S.ActOnReturnStmt(
+      Loc, ReturnObjectOnAllocationFailure.get(), S.getCurScope());
+  if (ReturnStmt.isInvalid())
+    return false;
+
+  this->ReturnStmtOnAllocFailure = ReturnStmt.get();
+#endif
   return true;
 }
 

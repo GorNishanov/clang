@@ -117,3 +117,21 @@ extern "C" void f3(promise_sized_delete_tag) {
   // CHECK: call void @_ZNSt12experimental16coroutine_traitsIJv24promise_sized_delete_tagEE12promise_typedlEPvm(i8* %[[MEM]], i64 %[[SIZE2]])
   co_return;
 }
+
+struct promise_on_alloc_failure_tag {};
+
+template<>
+struct std::experimental::coroutine_traits<int, promise_on_alloc_failure_tag> {
+  struct promise_type {
+    void get_return_object() {}
+    suspend_always initial_suspend() { return {}; }
+    suspend_always final_suspend() { return {}; }
+    void return_void() {}
+    static int get_return_object_on_allocation_failure() { return -1; }
+  };
+};
+
+// CHECK-LABEL: f4(
+extern "C" int f4(promise_on_alloc_failure_tag) {
+  co_return;
+}
