@@ -851,30 +851,30 @@ bool SubStmtBuilder::makePromiseStmt() {
 }
 
 bool SubStmtBuilder::makeReturnOnAllocFailure() {
-  if (!PromiseRecordDecl)
-    return true;
-#if 0
-  if (!lookupMember(S, "get_return_object_on_allocation_failure",
-                    PromiseRecordDecl, Loc))
-    return true;
+  if (!PromiseRecordDecl) return true;
+
+  DeclarationName DN =
+      S.PP.getIdentifierInfo("get_return_object_on_allocation_failure");
+  LookupResult Found(S, DN, Loc, Sema::LookupMemberName);
+  // Suppress diagnostics when a private member is selected. The same warnings
+  // will be produced again when building the call.
+  Found.suppressDiagnostics();
+  if (!S.LookupQualifiedName(Found, PromiseRecordDecl)) return true;
+
+  CXXScopeSpec SS;
+  ExprResult DeclNameExpr =
+      S.BuildDeclarationNameExpr(SS, Found, /*NeedsADL=*/false);
+  if (DeclNameExpr.isInvalid()) return false;
 
   ExprResult ReturnObjectOnAllocationFailure =
-    S.ActOnCallExpr(S.getCurrentScope, Expr *Fn, SourceLocation LParenLoc,
-      MultiExprArg ArgExprs, SourceLocation RParenLoc,
-      Expr *ExecConfig, bool IsExecConfig) {
-
-      buildPromiseCall(S, Fn.CoroutinePromise, Loc,
-                       "get_return_object_on_allocation_failure", None);
-  if (ReturnObjectOnAllocationFailure.isInvalid())
-    return false;
+      S.ActOnCallExpr(nullptr, DeclNameExpr.get(), Loc, {}, Loc);
+  if (ReturnObjectOnAllocationFailure.isInvalid()) return false;
 
   StmtResult ReturnStmt = S.ActOnReturnStmt(
       Loc, ReturnObjectOnAllocationFailure.get(), S.getCurScope());
-  if (ReturnStmt.isInvalid())
-    return false;
+  if (ReturnStmt.isInvalid()) return false;
 
   this->ReturnStmtOnAllocFailure = ReturnStmt.get();
-#endif
   return true;
 }
 
