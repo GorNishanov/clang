@@ -5387,7 +5387,7 @@ Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
   // but can be very challenging to debug.
   if (auto *Caller = getCurFunctionDecl())
     if (Caller->hasAttr<ARMInterruptAttr>())
-      if (!FDecl->hasAttr<ARMInterruptAttr>())
+      if (!FDecl || !FDecl->hasAttr<ARMInterruptAttr>())
         Diag(Fn->getExprLoc(), diag::warn_arm_interrupt_calling_convention);
 
   // Promote the function operand.
@@ -11261,7 +11261,7 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
   
   if (CompResultTy.isNull())
     return new (Context) BinaryOperator(LHS.get(), RHS.get(), Opc, ResultTy, VK,
-                                        OK, OpLoc, FPFeatures.fp_contract);
+                                        OK, OpLoc, FPFeatures);
   if (getLangOpts().CPlusPlus && LHS.get()->getObjectKind() !=
       OK_ObjCProperty) {
     VK = VK_LValue;
@@ -11269,7 +11269,7 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
   }
   return new (Context) CompoundAssignOperator(
       LHS.get(), RHS.get(), Opc, ResultTy, VK, OK, CompLHSTy, CompResultTy,
-      OpLoc, FPFeatures.fp_contract);
+      OpLoc, FPFeatures);
 }
 
 /// DiagnoseBitwisePrecedence - Emit a warning when bitwise and comparison

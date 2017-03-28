@@ -43,27 +43,36 @@ using llvm::SwitchInst;
 using llvm::PHINode;
 using llvm::Use;
 
+
 namespace {
 enum class AwaitKind { Init, Normal, Yield, Final };
-char const *AwaitKindStr[] = {"init", "await", "yield", "final"};
+static constexpr llvm::StringLiteral AwaitKindStr[] = {"init", "await", "yield",
+                                                       "final"};
 }
 
-namespace clang {
-namespace CodeGen {
-
-struct CGCoroData {
+struct clang::CodeGen::CGCoroData {
+  // What is the current await expression kind and how many
+  // await/yield expressions were encountered so far.
+  // These are used to generate pretty labels for await expressions in LLVM IR.
   AwaitKind CurrentAwaitKind = AwaitKind::Init;
-  llvm::BasicBlock *SuspendBB = nullptr;
-
-  CodeGenFunction::JumpDest CleanupJD;
-
-  // Stores the jump destination just before the final suspend. Coreturn
-  // statements jumps to this point after calling return_xxx promise member.
-  CodeGenFunction::JumpDest FinalJD;
-
   unsigned AwaitNum = 0;
   unsigned YieldNum = 0;
+
+  // How many co_return statements are in the coroutine. Used to decide whether
+  // we need to add co_return; equivalent at the end of the user authored body.
   unsigned CoreturnCount = 0;
+
+  // A branch to this block is emitted when coroutine needs to suspend.
+  llvm::BasicBlock *SuspendBB = nullptr;
+
+  // Stores the jump destination just before the coroutine memory is freed.
+  // This is the destination that every suspend point jumps to for the cleanup
+  // branch.
+  CodeGenFunction::JumpDest CleanupJD;
+
+  // Stores the jump destination just before the final suspend. The co_return
+  // statements jumps to this point after calling return_xxx promise member.
+  CodeGenFunction::JumpDest FinalJD;
 
   // Stores the llvm.coro.id emitted in the function so that we can supply it
   // as the first argument to coro.begin, coro.alloc and coro.free intrinsics.
@@ -77,9 +86,8 @@ struct CGCoroData {
   // EmitCoroutineBody.
   CallExpr const *CoroIdExpr = nullptr;
 };
-}
-}
 
+// Defining these here allows to keep CGCoroData private to this file.
 clang::CodeGen::CodeGenFunction::CGCoroInfo::CGCoroInfo() {}
 CodeGenFunction::CGCoroInfo::~CGCoroInfo() {}
 
@@ -105,12 +113,12 @@ static void createCoroData(CodeGenFunction &CGF,
   CurCoro.Data->CoroIdExpr = CoroIdExpr;
 }
 
-bool CodeGenFunction::isCoroutine() const { return CurCoro.Data != nullptr; }
-
-static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
+// Synthesize a pretty name for a suspend point.
+static SmallString<32> buildSuspendPrefixStr(CGCoroData &Coro, AwaitKind Kind) {
   unsigned No = 0;
   switch (Kind) {
-  default:
+  case AwaitKind::Init:
+  case AwaitKind::Final:
     break;
   case AwaitKind::Normal:
     No = ++Coro.AwaitNum;
@@ -119,102 +127,116 @@ static SmallString<32> buildSuspendSuffixStr(CGCoroData &Coro, AwaitKind Kind) {
     No = ++Coro.YieldNum;
     break;
   }
-  SmallString<32> Suffix(AwaitKindStr[static_cast<int>(Kind)]);
+  SmallString<32> Prefix(AwaitKindStr[static_cast<unsigned>(Kind)]);
   if (No > 1) {
-    Twine(No).toVector(Suffix);
+    Twine(No).toVector(Prefix);
   }
-  return Suffix;
+  return Prefix;
 }
 
-static Value *emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
+// Emit suspend expression which roughly looks like:
+//
+//   auto && x = CommonExpr();
+//   if (!x.await_ready()) {
+//      llvm_coro_save();
+//      x.await_suspend(...);     (*)
+//      llvm_coro_suspend(); (**)
+//   }
+//   x.await_resume();
+//
+// where the result of the entire expression is the result of x.await_resume()
+//
+//   (*) If x.await_suspend return type is bool, it allows to veto a suspend:
+//      if (x.await_suspend(...))
+//        llvm_coro_suspend();
+//
+//  (**) llvm_coro_suspend() encodes three possible continuations as
+//       a switch instruction:
+//
+//  %where-to = call i8 @llvm.coro.suspend(...)
+//  switch i8 %where-to, label %coro.ret [ ; jump to epilogue to suspend
+//    i8 0, label %yield.ready   ; go here when resumed
+//    i8 1, label %yield.cleanup ; go here when destroyed
+//  ]
+//
+//  See llvm's docs/Coroutines.rst for more details.
+//
+static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     CoroutineSuspendExpr const &S,
-                                    AwaitKind Kind,
-                                    ReturnValueSlot ReturnValue) {
-  auto &Builder = CGF.Builder;
-  const bool IsFinalSuspend = Kind == AwaitKind::Final;
-  auto Suffix = buildSuspendSuffixStr(Coro, Kind);
-
+                                    AwaitKind Kind, AggValueSlot aggSlot,
+                                    bool ignoreResult) {
   auto *E = S.getCommonExpr();
-  if (auto *UO = dyn_cast<UnaryOperator>(E))
-    if (UO->getOpcode() == UO_Coawait)
-      E = UO->getSubExpr();
-
-  auto Binder = CodeGenFunction::OpaqueValueMappingData::bind(
-      CGF, S.getOpaqueValue(), E);
+  auto Binder =
+      CodeGenFunction::OpaqueValueMappingData::bind(CGF, S.getOpaqueValue(), E);
   auto UnbindOnExit = llvm::make_scope_exit([&] { Binder.unbind(CGF); });
 
-  BasicBlock *ReadyBlock = CGF.createBasicBlock(Suffix + Twine(".ready"));
-  BasicBlock *SuspendBlock = CGF.createBasicBlock(Suffix + Twine(".suspend"));
-  BasicBlock *CleanupBlock = CGF.createBasicBlock(Suffix + Twine(".cleanup"));
+  auto Prefix = buildSuspendPrefixStr(Coro, Kind);
+  BasicBlock *ReadyBlock = CGF.createBasicBlock(Prefix + Twine(".ready"));
+  BasicBlock *SuspendBlock = CGF.createBasicBlock(Prefix + Twine(".suspend"));
+  BasicBlock *CleanupBlock = CGF.createBasicBlock(Prefix + Twine(".cleanup"));
 
+  // If expression is ready, no need to suspend.
   CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
+
+  // Otherwise, emit suspend logic.
   CGF.EmitBlock(SuspendBlock);
 
+  auto &Builder = CGF.Builder;
   llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
   auto *NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
   auto *SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
 
   auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
   if (SuspendRet != nullptr) {
-    // FIXME: Add proper error if the result of the expression is not bool.
-    if (!SuspendRet->getType()->isIntegerTy(1)) {
-      CGF.ErrorUnsupported(S.getSuspendExpr(), "non void and non bool await_suspend");
-      return nullptr;
-    }
+    // Veto suspension if requested by bool returning await_suspend.
+    assert(SuspendRet->getType()->isIntegerTy(1) &&
+           "Sema should have already checked that it is void or bool");
     BasicBlock *RealSuspendBlock =
-        CGF.createBasicBlock(Suffix + Twine(".suspend.bool"));
+        CGF.createBasicBlock(Prefix + Twine(".suspend.bool"));
     CGF.Builder.CreateCondBr(SuspendRet, RealSuspendBlock, ReadyBlock);
     SuspendBlock = RealSuspendBlock;
     CGF.EmitBlock(RealSuspendBlock);
   }
 
+  // Emit the suspend point.
+  const bool IsFinalSuspend = (Kind == AwaitKind::Final);
   llvm::Function *CoroSuspend =
       CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
   auto *SuspendResult = Builder.CreateCall(
       CoroSuspend, {SaveCall, Builder.getInt1(IsFinalSuspend)});
+
+  // Create a switch capturing three possible continuations.
   auto *Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
   Switch->addCase(Builder.getInt8(0), ReadyBlock);
   Switch->addCase(Builder.getInt8(1), CleanupBlock);
 
+  // Emit cleanup for this suspend point.
   CGF.EmitBlock(CleanupBlock);
-
   CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
 
   // Emit await_resume expression.
   CGF.EmitBlock(ReadyBlock);
-  QualType Type = S.getResumeExpr()->getType();
-  switch (CGF.getEvaluationKind(Type)) {
-  case TEK_Scalar:
-    return CGF.EmitScalarExpr(S.getResumeExpr());
-  case TEK_Aggregate:
-    CGF.EmitAggExpr(S.getResumeExpr(),
-                    AggValueSlot::forAddr(ReturnValue.getValue(), Qualifiers(),
-                                          AggValueSlot::IsDestructed,
-                                          AggValueSlot::DoesNotNeedGCBarriers,
-                                          AggValueSlot::IsNotAliased));
-    break;
-  case TEK_Complex:
-    CGF.CGM.ErrorUnsupported(S.getResumeExpr(), "_Complex await expression");
-    break;
-  }
-  return nullptr;
+  return CGF.EmitAnyExpr(S.getResumeExpr(), aggSlot, ignoreResult);
+}
+
+RValue CodeGenFunction::EmitCoawaitExpr(const CoawaitExpr &E,
+                                        AggValueSlot aggSlot,
+                                        bool ignoreResult) {
+  return emitSuspendExpression(*this, *CurCoro.Data, E,
+                               CurCoro.Data->CurrentAwaitKind, aggSlot,
+                               ignoreResult);
+}
+RValue CodeGenFunction::EmitCoyieldExpr(const CoyieldExpr &E,
+                                        AggValueSlot aggSlot,
+                                        bool ignoreResult) {
+  return emitSuspendExpression(*this, *CurCoro.Data, E, AwaitKind::Yield,
+                               aggSlot, ignoreResult);
 }
 
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   ++CurCoro.Data->CoreturnCount;
   EmitStmt(S.getPromiseCall());
   EmitBranchThroughCleanup(CurCoro.Data->FinalJD);
-}
-
-llvm::Value *CodeGenFunction::EmitCoawaitExpr(const CoawaitExpr &E,
-                                              ReturnValueSlot ReturnValue) {
-  return emitSuspendExpression(*this, *CurCoro.Data, E,
-                               CurCoro.Data->CurrentAwaitKind, ReturnValue);
-}
-llvm::Value *CodeGenFunction::EmitCoyieldExpr(const CoyieldExpr &E,
-                                              ReturnValueSlot ReturnValue) {
-  return emitSuspendExpression(*this, *CurCoro.Data, E, AwaitKind::Yield,
-                               ReturnValue);
 }
 
 // Hunts for the parameter reference in the parameter copy/move declaration.
@@ -454,9 +476,20 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   auto *AllocateCall = EmitScalarExpr(S.getAllocate());
   auto *AllocOrInvokeContBB = Builder.GetInsertBlock();
-  Builder.CreateBr(InitBB);
 
-  EmitBlock(InitBB);
+  if (auto *RetOnAllocFailure = S.getReturnStmtOnAllocFailure()) {
+    auto *RetOnFailureBB = createBasicBlock("coro.ret.on.failure");
+    auto *NullPtr = llvm::ConstantPointerNull::get(Int8PtrTy);
+    auto *Cond = Builder.CreateICmpNE(AllocateCall, NullPtr);
+    Builder.CreateCondBr(Cond, InitBB, RetOnFailureBB);
+
+    EmitBlock(RetOnFailureBB);
+    EmitStmt(RetOnAllocFailure);
+  }
+  else {
+    Builder.CreateBr(InitBB);
+  }
+
   auto *Phi = Builder.CreatePHI(VoidPtrTy, 2);
   Phi->addIncoming(NullPtr, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
