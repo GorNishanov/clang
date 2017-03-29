@@ -771,10 +771,18 @@ void Sema::CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *&Body) {
            "a null body is only allowed for invalid declarations");
     return;
   }
-  if (auto *CoroBody = dyn_cast<CoroutineBodyStmt>(Body)) {
-    Body = CoroBody->getBody();
+
+  if (isa<CoroutineBodyStmt>(Body)) {
+    // FIXME(EricWF): Nothing todo. the body is already a transformed coroutine
+    // body statement.
+    return;
   }
-  else {
+  
+  //if (auto *CoroBody = dyn_cast<CoroutineBodyStmt>(Body)) {
+    //Body = CoroBody->getBody();
+  //}
+  //else 
+  {
     // Coroutines [stmt.return]p1:
     //   A return statement shall not appear in a coroutine.
     if (Fn->FirstReturnLoc.isValid()) {
