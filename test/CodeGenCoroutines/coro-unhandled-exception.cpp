@@ -17,7 +17,7 @@ struct coro_t {
     coro::suspend_never initial_suspend() { return {}; }
     coro::suspend_never final_suspend() { return {}; }
     void return_void(){}
-    void set_exception(std::exception_ptr &&) noexcept; // {}
+    void unhandled_exception() noexcept;
   };
 };
 
@@ -40,24 +40,31 @@ coro_t f() {
 // CHECK: [[CATCHSW]]:
 // CHECK:   %[[CATCHSWTOK:.+]] = catchswitch within none [label %[[CATCH:.+]]] unwind label
 // CHECK: [[CATCH]]:
-// CHECK:   catchpad within [[CATCHSWTOK:.+]]
-// CHECK: %[[TOK:.+]] = invoke i32 @"\01?current_exception@std@@YAHXZ"()
-// CHECK:   to label %{{.+}} unwind label %[[COROENDBB:.+]]
-// CHECK: [[COROENDBB]]:
-// CHECK-NEXT: %[[CLPAD:.+]] = cleanuppad within none
-// CHECK-NEXT: call i1 @llvm.coro.end(i8* null, i1 true) [ "funclet"(token %[[CLPAD]]) ]
-// CHECK-NEXT: cleanupret from %[[CLPAD]] unwind label 
+// CHECK:   %[[CATCHTOK:.+]] = catchpad within [[CATCHSWTOK:.+]]
+// CHECK:   call void @"\01?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
+// CHECK:   catchret from %[[CATCHTOK]] to label %[[CATCHRETDEST:.+]]
+// CHECK: [[CATCHRETDEST]]:
+// CHECK-NEXT: br label %[[TRYCONT:.+]]
+// CHECK: [[TRYCONT]]:
+// CHECK-NEXT: br label %[[COROFIN:.+]]
+// CHECK: [[COROFIN]]:
+// CHECK-NEXT: invoke void @"\01?final_suspend@promise_type@coro_t@@QEAA?AUsuspend_never@coroutines_v1@experimental@std@@XZ"(
 
 // CHECK-LPAD: @_Z1fv(
 // CHECK-LPAD:   invoke void @_Z9may_throwv()
-// CHECK-LPAD:       to label %[[CONT:.+]] unwind label %[[CATCHBB:.+]]
-// CHECK-LPAD: [[CATCHBB]]:
-// CHECK-LPAD:    landingpad { i8*, i32 }
-// CHECK-LPAD:          catch i8* null
+// CHECK-LPAD:       to label %[[CONT:.+]] unwind label %[[CLEANUP:.+]]
+// CHECK-LPAD: [[CLEANUP]]:
+// CHECK-LPAD:   call void @_ZN7CleanupD1Ev(%struct.Cleanup* %x) #2
+// CHECK-LPAD:   br label %[[CATCH:.+]]
+
+// CHECK-LPAD: [[CATCH]]:
 // CHECK-LPAD:    call i8* @__cxa_begin_catch
-// CHECK-LPAD:    %[[EPTR:.+]] = invoke i32 @_ZSt17current_exceptionv()
-// CHECK-LPAD:          to label %[[SETE:.+]] unwind label
-// CHECK-LPAD: [[SETE]]:
-// CHECK-LPAD:    store i32 %[[EPTR]], i32* %[[TMP:.+]], align 4
-// CHECK-LPAD:    call void @_ZN6coro_t12promise_type13set_exceptionEOi(%"struct.coro_t::promise_type"* %__promise, i32* dereferenceable(4) %[[TMP]])
+// CHECK-LPAD:    call void @_ZN6coro_t12promise_type19unhandled_exceptionEv(%"struct.coro_t::promise_type"* %__promise) #2
 // CHECK-LPAD:    invoke void @__cxa_end_catch()
+// CHECK-LPAD-NEXT:  to label %[[CATCHRETDEST:.+]] unwind label
+// CHECK-LPAD: [[CATCHRETDEST]]:
+// CHECK-LPAD-NEXT: br label %[[TRYCONT:.+]]
+// CHECK-LPAD: [[TRYCONT]]:
+// CHECK-LPAD-NEXT: br label %[[COROFIN:.+]]
+// CHECK-LPAD: [[COROFIN]]:
+// CHECK-LPAD-NEXT: invoke void @_ZN6coro_t12promise_type13final_suspendEv(
