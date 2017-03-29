@@ -13,6 +13,7 @@ struct coro_t {
     void return_void();
     promise_type();
     ~promise_type();
+    void unhandled_exception();
   };
 };
 
