@@ -152,6 +152,11 @@ extern "C" int f4(promise_on_alloc_failure_tag) {
 
   // CHECK: [[ERRBB]]:
   // CHECK: %[[RETVAL:.+]] = call i32 @_ZNSt12experimental16coroutine_traitsIJi28promise_on_alloc_failure_tagEE12promise_type39get_return_object_on_allocation_failureEv(
-  // CHECK: ret i32 %[[RETVAL]]
+  // CHECK: store i32 %[[RETVAL]], i32* %[[RETVALADDR:.+]]
+  // CHECK: br label %[[RETBB:.+]]
+
+  // CHECK: [[RETBB]]:
+  // CHECK: %[[RETVAL2:.+]] = load i32, i32* %[[RETVALADDR]]
+  // CHECK: ret i32 %[[RETVAL2]]
   co_return;
 }
