@@ -747,7 +747,8 @@ bool CoroutineStmtBuilder::buildDependentStatements() {
   assert(!this->IsPromiseDependentType &&
          "coroutine cannot have a dependent promise type");
   this->IsValid = makeOnException() && makeOnFallthrough() &&
-                  makeReturnOnAllocFailure() && makeNewAndDeleteExpr();
+                  makeGroDeclAndReturnStmt() && makeReturnOnAllocFailure() &&
+                  makeNewAndDeleteExpr();
   return this->IsValid;
 }
 
@@ -985,20 +986,61 @@ bool CoroutineStmtBuilder::makeReturnObject() {
       buildPromiseCall(S, Fn.CoroutinePromise, Loc, "get_return_object", None);
   if (ReturnObject.isInvalid())
     return false;
-  QualType RetType = FD.getReturnType();
-  if (!RetType->isDependentType()) {
-    InitializedEntity Entity =
-        InitializedEntity::InitializeResult(Loc, RetType, false);
-    ReturnObject = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
-                                                   ReturnObject.get());
-    if (ReturnObject.isInvalid())
-      return false;
-  }
-  ReturnObject = S.ActOnFinishFullExpr(ReturnObject.get(), Loc);
-  if (ReturnObject.isInvalid())
-    return false;
 
   this->ReturnValue = ReturnObject.get();
+  return true;
+}
+
+bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
+  assert(!IsPromiseDependentType &&
+         "cannot make statement while the promise type is dependent");
+  assert(this->ReturnValue && "ReturnValue must be already formed");
+
+  QualType RetType = this->ReturnValue->getType();
+  assert(!RetType->isDependentType() &&
+         "get_return_object type must no longer be dependent");
+
+  if (RetType->isVoidType()) {
+    ExprResult Res = S.ActOnFinishFullExpr(this->ReturnValue, Loc);
+    if (Res.isInvalid())
+      return false;
+
+    this->ResultDecl = Res.get();
+    return true;
+  }
+
+  auto *GroDecl = VarDecl::Create(
+      S.Context, &FD, FD.getLocation(), FD.getLocation(),
+      &S.PP.getIdentifierTable().get("__coro_gro"), RetType,
+      S.Context.getTrivialTypeSourceInfo(RetType, Loc), SC_None);
+
+  InitializedEntity Entity = InitializedEntity::InitializeVariable(GroDecl);
+  ExprResult Res = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
+                                                     this->ReturnValue);
+  if (Res.isInvalid())
+    return false;
+
+  Res = S.ActOnFinishFullExpr(Res.get());
+  if (Res.isInvalid())
+    return false;
+
+  GroDecl->setInit(Res.get());
+  this->ResultDecl = Res.get();
+
+  ExprResult declRef = S.BuildDeclRefExpr(GroDecl, RetType, VK_LValue, Loc);
+  if (declRef.isInvalid())
+    return false;
+
+  // FIXME: ActOnReturnStmt expects a scope that is inside of the function, due
+  //   to CheckJumpOutOfSEHFinally(*this, ReturnLoc, *CurScope->getFnParent());
+  //   S.getCurScope()->getFnParent() == nullptr at ActOnFinishFunctionBody when
+  //   CoroutineBodyStmt is built. Figure it out and fix it.
+  //   Use BuildReturnStmt here to unbreak sanitized tests. (Gor:3/27/2017)
+  StmtResult ReturnStmt = S.BuildReturnStmt(Loc, declRef.get());
+  if (ReturnStmt.isInvalid())
+    return false;
+
+  this->ReturnStmt = ReturnStmt.get();
   return true;
 }
 

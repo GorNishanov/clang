@@ -272,6 +272,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, S.getDeallocate());
 
     EmitStmt(S.getPromiseDeclStmt());
+    EmitStmt(S.getResultDecl()); // FIXME: Gro lifetime is wrong.
 
     CurCoro.Data->FinalJD = getJumpDestInCurrentScope(FinalBB);
 
@@ -290,8 +291,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   }
 
   EmitBlock(RetBB);
-
-  // FIXME: Emit return for the coroutine return object.
+  if (Stmt *Ret = S.getReturnStmt())
+    EmitStmt(Ret);
 }
 
 // Emit coroutine intrinsic and patch up arguments of the token type.
