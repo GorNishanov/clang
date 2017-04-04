@@ -785,23 +785,12 @@ static bool diagReturnOnAllocFailure(Sema &S, Expr *E,
     }
   }
 
-  S.Diag(
-      Loc,
-      diag::err_coroutine_promise_get_return_object_on_allocation_failure)
+  S.Diag(Loc,
+         diag::err_coroutine_promise_get_return_object_on_allocation_failure)
       << PromiseRecordDecl;
   S.Diag(Fn.FirstCoroutineStmtLoc, diag::note_declared_coroutine_here)
       << Fn.getFirstCoroutineStmtKeyword();
   return false;
-}
-
-static void noteMemberDeclaredHere(Sema& S, Expr *E, FunctionScopeInfo &Fn) {
-  if (auto *MbrRef = dyn_cast<CXXMemberCallExpr>(E)) {
-    auto *MethodDecl = MbrRef->getMethodDecl();
-    S.Diag(MethodDecl->getLocation(), diag::note_promise_member_declared_here)
-      << MethodDecl->getName();
-  }
-  S.Diag(Fn.FirstCoroutineStmtLoc, diag::note_declared_coroutine_here)
-    << Fn.getFirstCoroutineStmtKeyword();
 }
 
 bool CoroutineStmtBuilder::makeReturnOnAllocFailure() {
@@ -844,9 +833,9 @@ bool CoroutineStmtBuilder::makeReturnOnAllocFailure() {
   if (ReturnStmt.isInvalid()) {
     S.Diag(Found.getFoundDecl()->getLocation(),
            diag::note_promise_member_declared_here)
-            << DN.getAsString();
+        << DN.getAsString();
     S.Diag(Fn.FirstCoroutineStmtLoc, diag::note_declared_coroutine_here)
-      << Fn.getFirstCoroutineStmtKeyword();
+        << Fn.getFirstCoroutineStmtKeyword();
     return false;
   }
 
@@ -994,7 +983,6 @@ bool CoroutineStmtBuilder::makeOnException() {
 }
 
 bool CoroutineStmtBuilder::makeReturnObject() {
-
   // Build implicit 'p.get_return_object()' expression and form initialization
   // of return type from it.
   ExprResult ReturnObject =
@@ -1006,6 +994,16 @@ bool CoroutineStmtBuilder::makeReturnObject() {
   return true;
 }
 
+static void noteMemberDeclaredHere(Sema &S, Expr *E, FunctionScopeInfo &Fn) {
+  if (auto *MbrRef = dyn_cast<CXXMemberCallExpr>(E)) {
+    auto *MethodDecl = MbrRef->getMethodDecl();
+    S.Diag(MethodDecl->getLocation(), diag::note_promise_member_declared_here)
+        << MethodDecl->getName();
+  }
+  S.Diag(Fn.FirstCoroutineStmtLoc, diag::note_declared_coroutine_here)
+      << Fn.getFirstCoroutineStmtKeyword();
+}
+
 bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
   assert(!IsPromiseDependentType &&
          "cannot make statement while the promise type is dependent");
@@ -1014,7 +1012,7 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
   QualType const GroType = this->ReturnValue->getType();
   assert(!GroType->isDependentType() &&
          "get_return_object type must no longer be dependent");
-  
+
   QualType const FnRetType = FD.getReturnType();
   assert(!FnRetType->isDependentType() &&
          "get_return_object type must no longer be dependent");
@@ -1027,13 +1025,12 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
     this->ResultDecl = Res.get();
     return true;
   }
-  
+
   if (GroType->isVoidType()) {
     // Trigger a nice error message.
     InitializedEntity Entity =
         InitializedEntity::InitializeResult(Loc, FnRetType, false);
-    S.PerformMoveOrCopyInitialization(Entity, nullptr, FnRetType,
-                                                     ReturnValue);
+    S.PerformMoveOrCopyInitialization(Entity, nullptr, FnRetType, ReturnValue);
     noteMemberDeclaredHere(S, ReturnValue, Fn);
     return false;
   }
@@ -1042,7 +1039,7 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
       S.Context, &FD, FD.getLocation(), FD.getLocation(),
       &S.PP.getIdentifierTable().get("__coro_gro"), GroType,
       S.Context.getTrivialTypeSourceInfo(GroType, Loc), SC_None);
-  
+
   S.CheckVariableDeclarationType(GroDecl);
   if (GroDecl->isInvalidDecl())
     return false;
@@ -1069,7 +1066,7 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
   // Form a declaration statement for the return declaration, so that AST
   // visitors can more easily find it.
   StmtResult GroDeclStmt =
-  S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(GroDecl), Loc, Loc);
+      S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(GroDecl), Loc, Loc);
   if (GroDeclStmt.isInvalid())
     return false;
 
