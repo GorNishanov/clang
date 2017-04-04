@@ -1013,6 +1013,10 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
       S.Context, &FD, FD.getLocation(), FD.getLocation(),
       &S.PP.getIdentifierTable().get("__coro_gro"), RetType,
       S.Context.getTrivialTypeSourceInfo(RetType, Loc), SC_None);
+  
+  S.CheckVariableDeclarationType(GroDecl);
+  if (GroDecl->isInvalidDecl())
+    return false;
 
   InitializedEntity Entity = InitializedEntity::InitializeVariable(GroDecl);
   ExprResult Res = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
@@ -1024,8 +1028,23 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
   if (Res.isInvalid())
     return false;
 
-  GroDecl->setInit(Res.get());
-  this->ResultDecl = Res.get();
+  if (RetType == FD.getReturnType()) {
+    GroDecl->setNRVOVariable(true);
+  }
+
+  S.AddInitializerToDecl(GroDecl, Res.get(),
+                         /*DirectInit=*/false);
+
+  S.FinalizeDeclaration(GroDecl);
+
+  // Form a declaration statement for the return declaration, so that AST
+  // visitors can more easily find it.
+  StmtResult GroDeclStmt =
+  S.ActOnDeclStmt(S.ConvertDeclToDeclGroup(GroDecl), Loc, Loc);
+  if (GroDeclStmt.isInvalid())
+    return false;
+
+  this->ResultDecl = GroDeclStmt.get();
 
   ExprResult declRef = S.BuildDeclRefExpr(GroDecl, RetType, VK_LValue, Loc);
   if (declRef.isInvalid())
