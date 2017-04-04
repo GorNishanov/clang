@@ -373,7 +373,6 @@ static ExprResult buildPromiseCall(Sema &S, VarDecl *Promise,
   if (PromiseRef.isInvalid())
     return ExprError();
 
-  // Call 'yield_value', passing in E.
   return buildMemberCall(S, PromiseRef.get(), Loc, Name, Args);
 }
 
@@ -795,6 +794,16 @@ static bool diagReturnOnAllocFailure(Sema &S, Expr *E,
   return false;
 }
 
+static void noteMemberDeclaredHere(Sema& S, Expr *E, FunctionScopeInfo &Fn) {
+  if (auto *MbrRef = dyn_cast<CXXMemberCallExpr>(E)) {
+    auto *MethodDecl = MbrRef->getMethodDecl();
+    S.Diag(MethodDecl->getLocation(), diag::note_promise_member_declared_here)
+      << MethodDecl->getName();
+  }
+  S.Diag(Fn.FirstCoroutineStmtLoc, diag::note_declared_coroutine_here)
+    << Fn.getFirstCoroutineStmtKeyword();
+}
+
 bool CoroutineStmtBuilder::makeReturnOnAllocFailure() {
   assert(!IsPromiseDependentType &&
          "cannot make statement while the promise type is dependent");
@@ -832,8 +841,14 @@ bool CoroutineStmtBuilder::makeReturnOnAllocFailure() {
   //   Use BuildReturnStmt here to unbreak sanitized tests. (Gor:3/27/2017)
   StmtResult ReturnStmt =
       S.BuildReturnStmt(Loc, ReturnObjectOnAllocationFailure.get());
-  if (ReturnStmt.isInvalid())
+  if (ReturnStmt.isInvalid()) {
+    S.Diag(Found.getFoundDecl()->getLocation(),
+           diag::note_promise_member_declared_here)
+            << DN.getAsString();
+    S.Diag(Fn.FirstCoroutineStmtLoc, diag::note_declared_coroutine_here)
+      << Fn.getFirstCoroutineStmtKeyword();
     return false;
+  }
 
   this->ReturnStmtOnAllocFailure = ReturnStmt.get();
   return true;
@@ -996,11 +1011,15 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
          "cannot make statement while the promise type is dependent");
   assert(this->ReturnValue && "ReturnValue must be already formed");
 
-  QualType RetType = this->ReturnValue->getType();
-  assert(!RetType->isDependentType() &&
+  QualType const GroType = this->ReturnValue->getType();
+  assert(!GroType->isDependentType() &&
+         "get_return_object type must no longer be dependent");
+  
+  QualType const FnRetType = FD.getReturnType();
+  assert(!FnRetType->isDependentType() &&
          "get_return_object type must no longer be dependent");
 
-  if (RetType->isVoidType()) {
+  if (FnRetType->isVoidType()) {
     ExprResult Res = S.ActOnFinishFullExpr(this->ReturnValue, Loc);
     if (Res.isInvalid())
       return false;
@@ -1008,18 +1027,28 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
     this->ResultDecl = Res.get();
     return true;
   }
+  
+  if (GroType->isVoidType()) {
+    // Trigger a nice error message.
+    InitializedEntity Entity =
+        InitializedEntity::InitializeResult(Loc, FnRetType, false);
+    S.PerformMoveOrCopyInitialization(Entity, nullptr, FnRetType,
+                                                     ReturnValue);
+    noteMemberDeclaredHere(S, ReturnValue, Fn);
+    return false;
+  }
 
   auto *GroDecl = VarDecl::Create(
       S.Context, &FD, FD.getLocation(), FD.getLocation(),
-      &S.PP.getIdentifierTable().get("__coro_gro"), RetType,
-      S.Context.getTrivialTypeSourceInfo(RetType, Loc), SC_None);
+      &S.PP.getIdentifierTable().get("__coro_gro"), GroType,
+      S.Context.getTrivialTypeSourceInfo(GroType, Loc), SC_None);
   
   S.CheckVariableDeclarationType(GroDecl);
   if (GroDecl->isInvalidDecl())
     return false;
 
   InitializedEntity Entity = InitializedEntity::InitializeVariable(GroDecl);
-  ExprResult Res = S.PerformMoveOrCopyInitialization(Entity, nullptr, RetType,
+  ExprResult Res = S.PerformMoveOrCopyInitialization(Entity, nullptr, GroType,
                                                      this->ReturnValue);
   if (Res.isInvalid())
     return false;
@@ -1028,7 +1057,7 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
   if (Res.isInvalid())
     return false;
 
-  if (RetType == FD.getReturnType()) {
+  if (GroType == FnRetType) {
     GroDecl->setNRVOVariable(true);
   }
 
@@ -1046,7 +1075,7 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
 
   this->ResultDecl = GroDeclStmt.get();
 
-  ExprResult declRef = S.BuildDeclRefExpr(GroDecl, RetType, VK_LValue, Loc);
+  ExprResult declRef = S.BuildDeclRefExpr(GroDecl, GroType, VK_LValue, Loc);
   if (declRef.isInvalid())
     return false;
 
@@ -1056,8 +1085,10 @@ bool CoroutineStmtBuilder::makeGroDeclAndReturnStmt() {
   //   CoroutineBodyStmt is built. Figure it out and fix it.
   //   Use BuildReturnStmt here to unbreak sanitized tests. (Gor:3/27/2017)
   StmtResult ReturnStmt = S.BuildReturnStmt(Loc, declRef.get());
-  if (ReturnStmt.isInvalid())
+  if (ReturnStmt.isInvalid()) {
+    noteMemberDeclaredHere(S, ReturnValue, Fn);
     return false;
+  }
 
   this->ReturnStmt = ReturnStmt.get();
   return true;
