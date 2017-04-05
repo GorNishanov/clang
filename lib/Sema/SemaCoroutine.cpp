@@ -541,8 +541,7 @@ ExprResult Sema::BuildResolvedCoawaitExpr(SourceLocation Loc, Expr *E,
     E = R.get();
   }
 
-  if (E->getType()->isDependentType() ||
-      Coroutine->CoroutinePromise->getType()->isDependentType()) {
+  if (E->getType()->isDependentType()) {
     Expr *Res = new (Context)
         CoawaitExpr(Loc, Context.DependentTy, E, IsImplicit);
     return Res;
@@ -563,7 +562,7 @@ ExprResult Sema::BuildResolvedCoawaitExpr(SourceLocation Loc, Expr *E,
       new (Context) CoawaitExpr(Loc, E, RSS.Results[0], RSS.Results[1],
                                 RSS.Results[2], RSS.OpaqueValue, IsImplicit);
 
-  return MaybeBindToTemporary(Res);
+  return Res;
 }
 
 ExprResult Sema::ActOnCoyieldExpr(Scope *S, SourceLocation Loc, Expr *E) {
@@ -590,23 +589,16 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   if (!Coroutine)
     return ExprError();
 
-  if (E->getType()->isPlaceholderType() &&
-      !E->getType()->isSpecificPlaceholderType(BuiltinType::Overload)) {
+  if (E->getType()->isPlaceholderType()) {
     ExprResult R = CheckPlaceholderExpr(E);
     if (R.isInvalid()) return ExprError();
     E = R.get();
   }
 
-  if (E->getType()->isDependentType() ||
-    Coroutine->CoroutinePromise->getType()->isDependentType()) {
+  if (E->getType()->isDependentType()) {
     Expr *Res = new (Context) CoyieldExpr(Loc, Context.DependentTy, E);
     return Res;
   }
-
-  // Build 'operator co_await' call.
-  ExprResult Awaitable = buildOperatorCoawaitCall(*this, getCurScope(), Loc, E);
-  if (Awaitable.isInvalid())
-    return ExprError();
 
   // If the expression is a temporary, materialize it as an lvalue so that we
   // can use it multiple times.
@@ -622,7 +614,7 @@ ExprResult Sema::BuildCoyieldExpr(SourceLocation Loc, Expr *E) {
   Expr *Res = new (Context) CoyieldExpr(Loc, E, RSS.Results[0], RSS.Results[1],
                                         RSS.Results[2], RSS.OpaqueValue);
 
-  return MaybeBindToTemporary(Res);
+  return Res;
 }
 
 StmtResult Sema::ActOnCoreturnStmt(Scope *S, SourceLocation Loc, Expr *E) {

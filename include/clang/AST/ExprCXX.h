@@ -4147,9 +4147,7 @@ public:
       : Expr(SC, Ty, VK_RValue, OK_Ordinary, true, true, true,
              Common->containsUnexpandedParameterPack()),
         KeywordLoc(KeywordLoc) {
-    // NOTE: A suspend expression is dependent on the coroutines promise
-    // type and may be dependent even when the `Op` expression is not.
-    assert(Ty->isDependentType() &&
+    assert(Common->isTypeDependent() && Ty->isDependentType() &&
            "wrong constructor for non-dependent co_await/co_yield expression");
     SubExprs[SubExpr::Common] = Common;
     SubExprs[SubExpr::Ready] = nullptr;

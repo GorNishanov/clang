@@ -471,9 +471,6 @@ public:
   /// Returns true inside SEH __try blocks.
   bool isSEHTryScope() const { return !SEHTryEpilogueStack.empty(); }
 
-  /// Returns true if the current function is a coroutine.
-  bool isCoroutine() const;
-
   /// Returns true while emitting a cleanuppad.
   bool isCleanupPadScope() const {
     return CurrentFuncletPad && isa<llvm::CleanupPadInst>(CurrentFuncletPad);

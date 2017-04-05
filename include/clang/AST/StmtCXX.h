@@ -326,7 +326,6 @@ class CoroutineBodyStmt final
     FirstParamMove ///< First offset for move construction of parameter copies.
   };
   unsigned NumParams;
-  Stmt *BodyInTryCatch;
 
   friend class ASTStmtReader;
   friend TrailingObjects;
@@ -338,7 +337,6 @@ public:
 
   struct CtorArgs {
     Stmt *Body = nullptr;
-    Stmt *BodyInTryCatch = nullptr;
     Stmt *Promise = nullptr;
     Expr *InitialSuspend = nullptr;
     Expr *FinalSuspend = nullptr;
@@ -369,7 +367,6 @@ public:
   Stmt *getBody() const {
     return getStoredStmts()[SubStmt::Body];
   }
-  Stmt *getBodyInTryCatch() const { return BodyInTryCatch; }
   Stmt *getPromiseDeclStmt() const {
     return getStoredStmts()[SubStmt::Promise];
   }
@@ -388,6 +385,12 @@ public:
   Stmt *getFallthroughHandler() const {
     return getStoredStmts()[SubStmt::OnFallthrough];
   }
+  Expr *getAllocate() const {
+    return cast_or_null<Expr>(getStoredStmts()[SubStmt::Allocate]);
+  }
+  Expr *getDeallocate() const {
+    return cast_or_null<Expr>(getStoredStmts()[SubStmt::Deallocate]);
+  }
   Expr *getReturnValueInit() const {
     return cast<Expr>(getStoredStmts()[SubStmt::ReturnValue]);
   }
@@ -395,12 +398,6 @@ public:
   Stmt *getReturnStmt() const { return getStoredStmts()[SubStmt::ReturnStmt]; }
   Stmt *getReturnStmtOnAllocFailure() const {
     return getStoredStmts()[SubStmt::ReturnStmtOnAllocFailure];
-  }
-  Expr *getAllocate() const {
-    return cast_or_null<Expr>(getStoredStmts()[SubStmt::Allocate]);
-  }
-  Expr *getDeallocate() const {
-    return cast_or_null<Expr>(getStoredStmts()[SubStmt::Deallocate]);
   }
   ArrayRef<Stmt const *> getParamMoves() const {
     return {getStoredStmts() + SubStmt::FirstParamMove, NumParams};

@@ -98,8 +98,7 @@ CoroutineBodyStmt *CoroutineBodyStmt::Create(
 }
 
 CoroutineBodyStmt::CoroutineBodyStmt(CoroutineBodyStmt::CtorArgs const &Args)
-    : Stmt(CoroutineBodyStmtClass), NumParams(Args.ParamMoves.size()),
-      BodyInTryCatch(Args.BodyInTryCatch) {
+    : Stmt(CoroutineBodyStmtClass), NumParams(Args.ParamMoves.size()) {
   Stmt **SubStmts = getStoredStmts();
   SubStmts[CoroutineBodyStmt::Body] = Args.Body;
   SubStmts[CoroutineBodyStmt::Promise] = Args.Promise;

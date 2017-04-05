@@ -16,15 +16,6 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtVisitor.h"
-#include "llvm/IR/Dominators.h"
-#include "llvm/IR/InstIterator.h"
-#include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Intrinsics.h"
-
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Module.h"
-#include "llvm/Pass.h"
-#include "llvm/Support/raw_ostream.h"
 
 // TODO: Improve diagnostic when await_suspend takes no arguments.
 
@@ -33,16 +24,6 @@ using namespace CodeGen;
 
 using llvm::Value;
 using llvm::BasicBlock;
-using llvm::ConstantInt;
-using llvm::APInt;
-
-using llvm::Function;
-using llvm::DominatorTree;
-using llvm::Instruction;
-using llvm::SwitchInst;
-using llvm::PHINode;
-using llvm::Use;
-
 
 namespace {
 enum class AwaitKind { Init, Normal, Yield, Final };
@@ -331,7 +312,7 @@ static SmallVector<llvm::OperandBundleDef, 1>
 getBundlesForCoroEnd(CodeGenFunction &CGF) {
   SmallVector<llvm::OperandBundleDef, 1> BundleList;
 
-  if (Instruction *EHPad = CGF.CurrentFuncletPad)
+  if (llvm::Instruction *EHPad = CGF.CurrentFuncletPad)
     BundleList.emplace_back("funclet", EHPad);
 
   return BundleList;
@@ -365,8 +346,6 @@ struct CallCoroEnd final : public EHScopeStack::Cleanup {
 namespace {
 // Make sure to call coro.delete on scope exit.
 struct CallCoroDelete final : public EHScopeStack::Cleanup {
-  llvm::Value *CoroId;
-  llvm::Value *CoroBegin;
   Stmt *Deallocate;
 
   // Emit "if (coro.free(CoroId, CoroBegin)) Deallocate;"
@@ -398,8 +377,7 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
     InsertPt->eraseFromParent();
     CGF.Builder.SetInsertPoint(AfterFreeBB);
   }
-  CallCoroDelete(llvm::Value *CoroId, llvm::Value *CoroBegin, Stmt *S)
-      : CoroId(CoroId), CoroBegin(CoroBegin), Deallocate(S) {}
+  explicit CallCoroDelete(Stmt *S) : Deallocate(S) {}
 };
 }
 
@@ -492,12 +470,16 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *AllocateCall = EmitScalarExpr(S.getAllocate());
   auto *AllocOrInvokeContBB = Builder.GetInsertBlock();
 
+  // Handle allocation failure if 'ReturnStmtOnAllocFailure' was provided.
   if (auto *RetOnAllocFailure = S.getReturnStmtOnAllocFailure()) {
     auto *RetOnFailureBB = createBasicBlock("coro.ret.on.failure");
+
+    // See if allocation was successful.
     auto *NullPtr = llvm::ConstantPointerNull::get(Int8PtrTy);
     auto *Cond = Builder.CreateICmpNE(AllocateCall, NullPtr);
     Builder.CreateCondBr(Cond, InitBB, RetOnFailureBB);
 
+    // If not, return OnAllocFailure object.
     EmitBlock(RetOnFailureBB);
     EmitStmt(RetOnAllocFailure);
   }
@@ -524,8 +506,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     ParamReferenceReplacerRAII ParamReplacer(LocalDeclMap);
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
 
-    EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, CoroId, CoroBegin,
-                                        S.getDeallocate());
+    EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, S.getDeallocate());
 
     EmitStmt(S.getPromiseDeclStmt());
 
