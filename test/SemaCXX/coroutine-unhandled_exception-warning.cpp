@@ -9,7 +9,7 @@
 using std::experimental::suspend_always;
 using std::experimental::suspend_never;
 
-struct promise_void {
+struct promise_void { // expected-note {{defined here}}
   void get_return_object();
   suspend_always initial_suspend();
   suspend_always final_suspend();

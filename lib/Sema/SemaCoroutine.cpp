@@ -963,6 +963,8 @@ bool CoroutineStmtBuilder::makeOnException() {
             : diag::
                   warn_coroutine_promise_unhandled_exception_required_with_exceptions;
     S.Diag(Loc, DiagID) << PromiseRecordDecl;
+    S.Diag(PromiseRecordDecl->getLocation(), diag::note_defined_here)
+        << PromiseRecordDecl;
     return !RequireUnhandledException;
   }
 
