@@ -147,6 +147,12 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     AwaitKind Kind, AggValueSlot aggSlot,
                                     bool ignoreResult) {
   auto *E = S.getCommonExpr();
+
+  // Skip paththrough operator co_await (present when awaiting on an LValue).
+  if (auto *UO = dyn_cast<UnaryOperator>(E))
+  if (UO->getOpcode() == UO_Coawait)
+    E = UO->getSubExpr();
+
   auto Binder =
       CodeGenFunction::OpaqueValueMappingData::bind(CGF, S.getOpaqueValue(), E);
   auto UnbindOnExit = llvm::make_scope_exit([&] { Binder.unbind(CGF); });
