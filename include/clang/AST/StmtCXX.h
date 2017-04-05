@@ -117,6 +117,17 @@ public:
   }
 
   friend class ASTStmtReader;
+  struct OnStack;
+};
+
+/// CXXTryStmt::OnStack - is an AST node for a simple CXXTryStmt
+/// with a single catch handler. It is used to construct an
+/// AST node as a local variable and should never be inserted into an AST tree.
+// Note: It must be kept in sync with CXXTryStmt constructor.
+struct CXXTryStmt::OnStack : CXXTryStmt {
+  alignas(CXXTryStmt) Stmt *Stmts[2];
+  OnStack(SourceLocation tryLoc, Stmt *tryBlock, Stmt *handler)
+      : CXXTryStmt(tryLoc, tryBlock, {handler}) {}
 };
 
 /// CXXForRangeStmt - This represents C++0x [stmt.ranged]'s ranged for
@@ -308,6 +319,7 @@ class CoroutineBodyStmt final
     OnFallthrough, ///< Handler for control flow falling off the body.
     Allocate,      ///< Coroutine frame memory allocation.
     Deallocate,    ///< Coroutine frame memory deallocation.
+    ReturnValue,   ///< Return value for thunk function: p.get_return_object().
     ResultDecl,    ///< Declaration holding the result of get_return_object.
     ReturnStmt,    ///< Return statement for the thunk function.
     ReturnStmtOnAllocFailure, ///< Return statement if allocation failed.
@@ -334,6 +346,7 @@ public:
     Stmt *OnFallthrough = nullptr;
     Expr *Allocate = nullptr;
     Expr *Deallocate = nullptr;
+    Expr *ReturnValue = nullptr;
     Stmt *ResultDecl = nullptr;
     Stmt *ReturnStmt = nullptr;
     Stmt *ReturnStmtOnAllocFailure = nullptr;
@@ -346,6 +359,10 @@ private:
 
 public:
   static CoroutineBodyStmt *Create(const ASTContext &C, CtorArgs const &Args);
+
+  bool hasDependentPromiseType() const {
+    return getPromiseDecl()->getType()->isDependentType();
+  }
 
   /// \brief Retrieve the body of the coroutine as written. This will be either
   /// a CompoundStmt or a TryStmt.
@@ -370,6 +387,9 @@ public:
   }
   Stmt *getFallthroughHandler() const {
     return getStoredStmts()[SubStmt::OnFallthrough];
+  }
+  Expr *getReturnValueInit() const {
+    return cast<Expr>(getStoredStmts()[SubStmt::ReturnValue]);
   }
   Stmt *getResultDecl() const { return getStoredStmts()[SubStmt::ResultDecl]; }
   Stmt *getReturnStmt() const { return getStoredStmts()[SubStmt::ReturnStmt]; }

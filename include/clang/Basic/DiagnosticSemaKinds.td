@@ -369,7 +369,9 @@ def warn_decl_shadow :
           "local variable|"
           "variable in %2|"
           "static data member of %2|"
-          "field of %2}1">,
+          "field of %2|"
+          "typedef in %2|"
+          "type alias in %2}1">,
   InGroup<Shadow>, DefaultIgnore;
 def warn_decl_shadow_uncaptured_local :
   Warning<warn_decl_shadow.Text>,
@@ -8284,9 +8286,9 @@ def err_opencl_return_value_with_address_space : Error<
   "return value cannot be qualified with address space">;
 def err_opencl_constant_no_init : Error<
   "variable in constant address space must be initialized">;
-def err_atomic_init_constant : Error<
-  "atomic variable can only be assigned to a compile time constant"
-  " in the declaration statement in the program scope">;
+def err_opencl_atomic_init: Error<
+  "atomic variable can be %select{assigned|initialized}0 to a variable only "
+  "in global address space">;
 def err_opencl_implicit_vector_conversion : Error<
   "implicit conversions between vector types (%0 and %1) are not permitted">;
 def err_opencl_invalid_type_array : Error<
@@ -8837,6 +8839,8 @@ def err_return_in_coroutine : Error<
   "return statement not allowed in coroutine; did you mean 'co_return'?">;
 def note_declared_coroutine_here : Note<
   "function is a coroutine due to use of '%0' here">;
+def note_promise_member_declared_here : Note<
+  "'%0' is declared here">;
 def err_coroutine_objc_method : Error<
   "Objective-C methods as coroutines are not yet supported">;
 def err_coroutine_unevaluated_context : Error<
@@ -8880,6 +8884,8 @@ def warn_coroutine_promise_unhandled_exception_required_with_exceptions : Warnin
   InGroup<Coroutine>;
 def err_coroutine_promise_get_return_object_on_allocation_failure : Error<
   "%0: 'get_return_object_on_allocation_failure()' must be a static member function">;
+def err_seh_in_a_coroutine_with_cxx_exceptions : Error<
+  "cannot use SEH '__try' in a coroutine when C++ exceptions are enabled">;
 }
 
 let CategoryName = "Documentation Issue" in {

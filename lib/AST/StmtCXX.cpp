@@ -44,6 +44,7 @@ CXXTryStmt *CXXTryStmt::Create(const ASTContext &C, EmptyShell Empty,
 CXXTryStmt::CXXTryStmt(SourceLocation tryLoc, Stmt *tryBlock,
                        ArrayRef<Stmt *> handlers)
     : Stmt(CXXTryStmtClass), TryLoc(tryLoc), NumHandlers(handlers.size()) {
+  // Must be kept in sync with CXXTryStmt::OnStack.
   Stmt **Stmts = reinterpret_cast<Stmt **>(this + 1);
   Stmts[0] = tryBlock;
   std::copy(handlers.begin(), handlers.end(), Stmts + 1);
@@ -108,6 +109,7 @@ CoroutineBodyStmt::CoroutineBodyStmt(CoroutineBodyStmt::CtorArgs const &Args)
   SubStmts[CoroutineBodyStmt::OnFallthrough] = Args.OnFallthrough;
   SubStmts[CoroutineBodyStmt::Allocate] = Args.Allocate;
   SubStmts[CoroutineBodyStmt::Deallocate] = Args.Deallocate;
+  SubStmts[CoroutineBodyStmt::ReturnValue] = Args.ReturnValue;
   SubStmts[CoroutineBodyStmt::ResultDecl] = Args.ResultDecl;
   SubStmts[CoroutineBodyStmt::ReturnStmt] = Args.ReturnStmt;
   SubStmts[CoroutineBodyStmt::ReturnStmtOnAllocFailure] =

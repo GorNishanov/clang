@@ -215,6 +215,7 @@ void Sema::PragmaStack<ValueType>::Act(SourceLocation PragmaLocation,
                                        ValueType Value) {
   if (Action == PSK_Reset) {
     CurrentValue = DefaultValue;
+    CurrentPragmaLocation = PragmaLocation;
     return;
   }
   if (Action & PSK_Push)
@@ -447,16 +448,16 @@ void Sema::ActOnPragmaVisibility(const IdentifierInfo* VisType,
   }
 }
 
-void Sema::ActOnPragmaFPContract(tok::OnOffSwitch OOS) {
-  switch (OOS) {
-  case tok::OOS_ON:
-    FPFeatures.setFPContractable(true);
+void Sema::ActOnPragmaFPContract(LangOptions::FPContractModeKind FPC) {
+  switch (FPC) {
+  case LangOptions::FPC_On:
+    FPFeatures.setAllowFPContractWithinStatement();
     break;
-  case tok::OOS_OFF:
-    FPFeatures.setFPContractable(false);
+  case LangOptions::FPC_Fast:
+    FPFeatures.setAllowFPContractAcrossStatement();
     break;
-  case tok::OOS_DEFAULT:
-    FPFeatures.setFPContractable(getLangOpts().DefaultFPContract);
+  case LangOptions::FPC_Off:
+    FPFeatures.setDisallowFPContract();
     break;
   }
 }

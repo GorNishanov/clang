@@ -144,6 +144,7 @@ struct std::experimental::coroutine_traits<int, promise_on_alloc_failure_tag> {
 
 // CHECK-LABEL: f4(
 extern "C" int f4(promise_on_alloc_failure_tag) {
+  // CHECK: %[[RetVal:.+]] = alloca i32
   // CHECK: %[[ID:.+]] = call token @llvm.coro.id(i32 16
   // CHECK: %[[SIZE:.+]] = call i64 @llvm.coro.size.i64()
   // CHECK: %[[MEM:.+]] = call i8* @_Znwm(i64 %[[SIZE]])
@@ -151,12 +152,16 @@ extern "C" int f4(promise_on_alloc_failure_tag) {
   // CHECK: br i1 %[[OK]], label %[[OKBB:.+]], label %[[ERRBB:.+]]
 
   // CHECK: [[ERRBB]]:
-  // CHECK: %[[RETVAL:.+]] = call i32 @_ZNSt12experimental16coroutine_traitsIJi28promise_on_alloc_failure_tagEE12promise_type39get_return_object_on_allocation_failureEv(
-  // CHECK: store i32 %[[RETVAL]], i32* %[[RETVALADDR:.+]]
-  // CHECK: br label %[[RETBB:.+]]
+  // CHECK:   %[[FailRet:.+]] = call i32 @_ZNSt12experimental16coroutine_traitsIJi28promise_on_alloc_failure_tagEE12promise_type39get_return_object_on_allocation_failureEv(
+  // CHECK:   store i32 %[[FailRet]], i32* %[[RetVal]]
+  // CHECK:   br label %[[RetBB:.+]]
 
-  // CHECK: [[RETBB]]:
-  // CHECK: %[[RETVAL2:.+]] = load i32, i32* %[[RETVALADDR]]
-  // CHECK: ret i32 %[[RETVAL2]]
+  // CHECK: [[OKBB]]:
+  // CHECK:   %[[OkRet:.+]] = call i32 @_ZNSt12experimental16coroutine_traitsIJi28promise_on_alloc_failure_tagEE12promise_type17get_return_objectEv(
+  // CHECK:   store i32 %[[OkRet]], i32* %[[RetVal]]
+
+  // CHECK: [[RetBB]]:
+  // CHECK:   %[[LoadRet:.+]] = load i32, i32* %[[RetVal]], align 4
+  // CHECK:   ret i32 %[[LoadRet]]
   co_return;
 }

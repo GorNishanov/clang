@@ -341,6 +341,12 @@ Retry:
     ConsumeToken();
     return StmtError();
 
+  case tok::annot_pragma_fp:
+    ProhibitAttributes(Attrs);
+    Diag(Tok, diag::err_pragma_fp_scope);
+    ConsumeToken();
+    return StmtError();
+
   case tok::annot_pragma_opencl_extension:
     ProhibitAttributes(Attrs);
     HandlePragmaOpenCLExtension();
@@ -900,6 +906,9 @@ void Parser::ParseCompoundStatementLeadingPragmas() {
     case tok::annot_pragma_fp_contract:
       HandlePragmaFPContract();
       break;
+    case tok::annot_pragma_fp:
+      HandlePragmaFP();
+      break;
     case tok::annot_pragma_ms_pointers_to_members:
       HandlePragmaMSPointersToMembers();
       break;
@@ -1179,7 +1188,8 @@ StmtResult Parser::ParseIfStatement(SourceLocation *TrailingElseLoc) {
   StmtResult ThenStmt;
   {
     EnterExpressionEvaluationContext PotentiallyDiscarded(
-        Actions, Sema::DiscardedStatement, nullptr, false,
+        Actions, Sema::ExpressionEvaluationContext::DiscardedStatement, nullptr,
+        false,
         /*ShouldEnter=*/ConstexprCondition && !*ConstexprCondition);
     ThenStmt = ParseStatement(&InnerStatementTrailingElseLoc);
   }
@@ -1212,7 +1222,8 @@ StmtResult Parser::ParseIfStatement(SourceLocation *TrailingElseLoc) {
                           Tok.is(tok::l_brace));
 
     EnterExpressionEvaluationContext PotentiallyDiscarded(
-        Actions, Sema::DiscardedStatement, nullptr, false,
+        Actions, Sema::ExpressionEvaluationContext::DiscardedStatement, nullptr,
+        false,
         /*ShouldEnter=*/ConstexprCondition && *ConstexprCondition);
     ElseStmt = ParseStatement();
 

@@ -325,6 +325,8 @@ static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
 }
 #endif
 
+// For WinEH exception representation backend needs to know what funclet coro.end
+// belongs to. That information is passed in a funclet bundle.
 static SmallVector<llvm::OperandBundleDef, 1>
 getBundlesForCoroEnd(CodeGenFunction &CGF) {
   SmallVector<llvm::OperandBundleDef, 1> BundleList;
@@ -338,15 +340,19 @@ getBundlesForCoroEnd(CodeGenFunction &CGF) {
 namespace {
 // We will insert coro.end to cut any of the destructors for objects that
 // do not need to be destroyed onces the coroutine is resumed.
+// See llvm/docs/Coroutines.rst for more details about coro.end.
 struct CallCoroEnd final : public EHScopeStack::Cleanup {
   void Emit(CodeGenFunction &CGF, Flags flags) override {
     auto &CGM = CGF.CGM;
     auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
     llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+    // See if we have a funclet bundle to associate coro.end with. (WinEH)
     auto Bundles = getBundlesForCoroEnd(CGF);
     auto *CoroEnd = CGF.Builder.CreateCall(
         CoroEndFn, {NullPtr, CGF.Builder.getTrue()}, Bundles);
     if (Bundles.empty()) {
+      // Otherwise, (landingpad model), create a conditional branch that leads
+      // either to a cleanup block or a block with EH resume instruction.
       auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
       auto *CleanupContBB = CGF.createBasicBlock("cleanup.cont");
       CGF.Builder.CreateCondBr(CoroEnd, ResumeBB, CleanupContBB);
@@ -449,6 +455,15 @@ struct GetReturnObjectManager {
 };
 }
 
+static void emitBodyAndFallthrough(CodeGenFunction &CGF,
+                                   const CoroutineBodyStmt &S, Stmt *Body) {
+  CGF.EmitStmt(Body);
+  const bool CanFallthrough = CGF.Builder.GetInsertBlock();
+  if (CanFallthrough)
+    if (Stmt *OnFallthrough = S.getFallthroughHandler())
+      CGF.EmitStmt(OnFallthrough);
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
   auto &TI = CGM.getContext().getTargetInfo();
@@ -539,15 +554,24 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     CurCoro.Data->FinalJD = getJumpDestInCurrentScope(FinalBB);
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
-    auto* Body = S.getBodyInTryCatch();
-    EmitStmt(Body ? Body : S.getBody());
+
+    // Emit user authored body (wrapping in try-catch if needed).
+    if (auto *OnException = S.getExceptionHandler()) {
+      auto Loc = S.getLocStart();
+      CXXCatchStmt Catch(Loc, /*exDecl=*/nullptr, OnException);
+      CXXTryStmt::OnStack TryStmt(Loc, S.getBody(), &Catch);
+
+      EnterCXXTryStmt(TryStmt);
+      emitBodyAndFallthrough(*this, S, TryStmt.getTryBlock());
+      ExitCXXTryStmt(TryStmt);
+    }
+    else {
+      emitBodyAndFallthrough(*this, S, S.getBody());
+    }
 
     // See if we need to generate final suspend.
     const bool CanFallthrough = Builder.GetInsertBlock();
     const bool HasCoreturns = CurCoro.Data->CoreturnCount > 0;
-    if (auto *OnFallthrough = S.getFallthroughHandler())
-      if (CanFallthrough && !S.getBodyInTryCatch())
-        EmitStmt(OnFallthrough);
     if (CanFallthrough || HasCoreturns) {
       EmitBlock(FinalBB);
       CurCoro.Data->CurrentAwaitKind = AwaitKind::Final;
@@ -557,7 +581,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   EmitBlock(RetBB);
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
-  Builder.CreateCall(CoroEnd, {NullPtr, Builder.getInt1(0)});
+  Builder.CreateCall(CoroEnd, {NullPtr, Builder.getFalse()});
 
   if (auto RetStmt = S.getReturnStmt())
     EmitStmt(RetStmt);
