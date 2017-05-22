@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CGCleanup.h"
 #include "CodeGenFunction.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "clang/AST/StmtCXX.h"
@@ -270,6 +271,65 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
 };
 }
 
+namespace {
+struct GetReturnObjectManager {
+  CodeGenFunction &CGF;
+  CGBuilderTy &Builder;
+  const CoroutineBodyStmt &S;
+
+  Address GroActiveFlag;
+  CodeGenFunction::AutoVarEmission GroEmission;
+
+  GetReturnObjectManager(CodeGenFunction &CGF, const CoroutineBodyStmt &S)
+      : CGF(CGF), Builder(CGF.Builder), S(S), GroActiveFlag(Address::invalid()),
+        GroEmission(CodeGenFunction::AutoVarEmission::invalid()) {}
+
+  // The gro variable has to outlive coroutine frame and coroutine promise, but,
+  // it can only be initialized after coroutine promise was created, thus, we
+  // split its emission in two parts. EmitGroAlloca emits an alloca and sets up
+  // cleanups. Later when coroutine promise is available we initialize the gro
+  // and sets the flag that the cleanup is now active.
+
+  void EmitGroAlloca() {
+    auto *GroDeclStmt = dyn_cast<DeclStmt>(S.getResultDecl());
+    if (!GroDeclStmt) {
+      // If get_return_object returns void, no need to do an alloca.
+      return;
+    }
+
+    auto *GroVarDecl = cast<VarDecl>(GroDeclStmt->getSingleDecl());
+
+    // Set GRO flag that it is not initialized yet
+    GroActiveFlag =
+      CGF.CreateTempAlloca(Builder.getInt1Ty(), CharUnits::One(), "gro.active");
+    Builder.CreateStore(Builder.getFalse(), GroActiveFlag);
+
+    GroEmission = CGF.EmitAutoVarAlloca(*GroVarDecl);
+    CGF.EmitAutoVarCleanups(GroEmission);
+
+    // FIXME: There must be a cleaner way to do this!
+    if (auto *Cleanup = dyn_cast_or_null<EHCleanupScope>(&*CGF.EHStack.begin())) {
+      assert(!Cleanup->hasActiveFlag() && "cleanup already has active flag?");
+      Cleanup->setActiveFlag(GroActiveFlag);
+      Cleanup->setTestFlagInEHCleanup();
+      Cleanup->setTestFlagInNormalCleanup();
+    }
+  }
+
+  void EmitGroInit() {
+    if (!GroActiveFlag.isValid()) {
+      // No Gro variable was allocated. Simply emit the call to
+      // get_return_object.
+      CGF.EmitStmt(S.getResultDecl());
+      return;
+    }
+
+    CGF.EmitAutoVarInit(GroEmission);
+    Builder.CreateStore(Builder.getTrue(), GroActiveFlag);
+  }
+};
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
   auto &TI = CGM.getContext().getTargetInfo();
@@ -303,14 +363,18 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     EmitBlock(InitBB);
   }
 
+  GetReturnObjectManager GroManager(*this, S);
+  GroManager.EmitGroAlloca();
+
   CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(RetBB);
   {
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
     EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, S.getDeallocate());
 
     EmitStmt(S.getPromiseDeclStmt());
-    EmitStmt(S.getResultDecl()); // FIXME: Gro lifetime is wrong.
 
+    // Now we have the promise, initialize the GRO
+    GroManager.EmitGroInit();
     EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
     CurCoro.Data->FinalJD = getJumpDestInCurrentScope(FinalBB);
