@@ -305,14 +305,21 @@ struct GetReturnObjectManager {
     Builder.CreateStore(Builder.getFalse(), GroActiveFlag);
 
     GroEmission = CGF.EmitAutoVarAlloca(*GroVarDecl);
-    CGF.EmitAutoVarCleanups(GroEmission);
 
-    // FIXME: There must be a cleaner way to do this!
-    if (auto *Cleanup = dyn_cast_or_null<EHCleanupScope>(&*CGF.EHStack.begin())) {
-      assert(!Cleanup->hasActiveFlag() && "cleanup already has active flag?");
-      Cleanup->setActiveFlag(GroActiveFlag);
-      Cleanup->setTestFlagInEHCleanup();
-      Cleanup->setTestFlagInNormalCleanup();
+    // Remember the top of EHStack before emitting the cleanup.
+    auto old_top = CGF.EHStack.stable_begin();
+    CGF.EmitAutoVarCleanups(GroEmission);
+    auto top = CGF.EHStack.stable_begin();
+
+    // Make the cleanup conditional on gro.active
+    for (auto b = CGF.EHStack.find(top), e = CGF.EHStack.find(old_top);
+      b != e; b++) {
+      if (auto *Cleanup = dyn_cast<EHCleanupScope>(&*b)) {
+        assert(!Cleanup->hasActiveFlag() && "cleanup already has active flag?");
+        Cleanup->setActiveFlag(GroActiveFlag);
+        Cleanup->setTestFlagInEHCleanup();
+        Cleanup->setTestFlagInNormalCleanup();
+      }
     }
   }
 
