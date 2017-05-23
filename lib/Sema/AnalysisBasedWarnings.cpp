@@ -335,7 +335,7 @@ static ControlFlowKind CheckFallThrough(AnalysisDeclContext &AC) {
   bool HasAbnormalEdge = false;
 
   // In a coroutine, only co_return statements count as normal returns. Remember
-  // if we are processing the coroutine or not.
+  // if we are processing a coroutine or not.
   const bool IsCoroutine = isa<CoroutineBodyStmt>(AC.getBody());
 
   // Ignore default cases that aren't likely to be reachable because all

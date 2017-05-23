@@ -117,17 +117,6 @@ public:
   }
 
   friend class ASTStmtReader;
-  struct OnStack;
-};
-
-/// CXXTryStmt::OnStack - is an AST node for a simple CXXTryStmt
-/// with a single catch handler. It is used to construct an
-/// AST node as a local variable and should never be inserted into an AST tree.
-// Note: It must be kept in sync with CXXTryStmt constructor.
-struct CXXTryStmt::OnStack : CXXTryStmt {
-  alignas(CXXTryStmt) Stmt *Stmts[2];
-  OnStack(SourceLocation tryLoc, Stmt *tryBlock, Stmt *handler)
-      : CXXTryStmt(tryLoc, tryBlock, {handler}) {}
 };
 
 /// CXXForRangeStmt - This represents C++0x [stmt.ranged]'s ranged for
@@ -331,6 +320,7 @@ class CoroutineBodyStmt final
   friend TrailingObjects;
 
   Stmt **getStoredStmts() { return getTrailingObjects<Stmt *>(); }
+
   Stmt *const *getStoredStmts() const { return getTrailingObjects<Stmt *>(); }
 
 public:
@@ -367,24 +357,28 @@ public:
   Stmt *getBody() const {
     return getStoredStmts()[SubStmt::Body];
   }
+
   Stmt *getPromiseDeclStmt() const {
     return getStoredStmts()[SubStmt::Promise];
   }
   VarDecl *getPromiseDecl() const {
     return cast<VarDecl>(cast<DeclStmt>(getPromiseDeclStmt())->getSingleDecl());
   }
+
   Stmt *getInitSuspendStmt() const {
     return getStoredStmts()[SubStmt::InitSuspend];
   }
   Stmt *getFinalSuspendStmt() const {
     return getStoredStmts()[SubStmt::FinalSuspend];
   }
+
   Stmt *getExceptionHandler() const {
     return getStoredStmts()[SubStmt::OnException];
   }
   Stmt *getFallthroughHandler() const {
     return getStoredStmts()[SubStmt::OnFallthrough];
   }
+
   Expr *getAllocate() const {
     return cast_or_null<Expr>(getStoredStmts()[SubStmt::Allocate]);
   }
@@ -413,7 +407,7 @@ public:
 
   child_range children() {
     return child_range(getStoredStmts(),
-      getStoredStmts() + SubStmt::FirstParamMove + NumParams);
+                       getStoredStmts() + SubStmt::FirstParamMove + NumParams);
   }
 
   static bool classof(const Stmt *T) {

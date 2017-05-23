@@ -2,7 +2,7 @@
 
 void *myAlloc(long long);
 
-// CHECK-LABEL: f( 
+// CHECK-LABEL: f(
 void f(int n) {
   // CHECK: %n.addr = alloca i32
   // CHECK: %n_copy = alloca i32
@@ -19,25 +19,25 @@ void f(int n) {
 
   // CHECK-NEXT: %[[SIZE:.+]] = call i64 @llvm.coro.size.i64()
   // CHECK-NEXT: %[[MEM:.+]] = call i8* @myAlloc(i64 %[[SIZE]])
-  // CHECK-NEXT: %[[BEG:.+]] = call i8* @llvm.coro.begin(token %[[COROID]], i8* %[[MEM]])
+  // CHECK-NEXT: %[[FRAME:.+]] = call i8* @llvm.coro.begin(token %[[COROID]], i8* %[[MEM]])
   __builtin_coro_begin(myAlloc(__builtin_coro_size()));
 
-  // CHECK-NEXT: call void @llvm.coro.resume(i8* %[[BEG]])
+  // CHECK-NEXT: call void @llvm.coro.resume(i8* %[[FRAME]])
   __builtin_coro_resume(__builtin_coro_frame());
 
-  // CHECK-NEXT: call void @llvm.coro.destroy(i8* %[[BEG]])
+  // CHECK-NEXT: call void @llvm.coro.destroy(i8* %[[FRAME]])
   __builtin_coro_destroy(__builtin_coro_frame());
 
-  // CHECK-NEXT: call i1 @llvm.coro.done(i8* %[[BEG]])
+  // CHECK-NEXT: call i1 @llvm.coro.done(i8* %[[FRAME]])
   __builtin_coro_done(__builtin_coro_frame());
 
-  // CHECK-NEXT: call i8* @llvm.coro.promise(i8* %[[BEG]], i32 48, i1 false)
+  // CHECK-NEXT: call i8* @llvm.coro.promise(i8* %[[FRAME]], i32 48, i1 false)
   __builtin_coro_promise(__builtin_coro_frame(), 48, 0);
 
-  // CHECK-NEXT: call i8* @llvm.coro.free(token %[[COROID]], i8* %[[BEG]])
+  // CHECK-NEXT: call i8* @llvm.coro.free(token %[[COROID]], i8* %[[FRAME]])
   __builtin_coro_free(__builtin_coro_frame());
 
-  // CHECK-NEXT: call i1 @llvm.coro.end(i8* %[[BEG]], i1 false)
+  // CHECK-NEXT: call i1 @llvm.coro.end(i8* %[[FRAME]], i1 false)
   __builtin_coro_end(__builtin_coro_frame(), 0);
 
   // CHECK-NEXT: call i8 @llvm.coro.suspend(token none, i1 true)

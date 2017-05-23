@@ -35,6 +35,3 @@ docs/_build
 docs/analyzer/_build
 # debug info testsuite
 test/debuginfo-tests
-# Backup directory of clang-format-vs
-tools/clang-format-vs/Backup
-

@@ -60,8 +60,16 @@ struct clang::CodeGen::CGCoroData {
   // Note: llvm.coro.id returns a token that cannot be directly expressed in a
   // builtin.
   llvm::CallInst *CoroId = nullptr;
+
+  // Stores the llvm.coro.begin emitted in the function so that we can replace
+  // all coro.frame intrinsics with direct SSA value of coro.begin that returns
+  // the address of the coroutine frame of the current coroutine.
   llvm::CallInst *CoroBegin = nullptr;
+
+  // Stores the last emitted coro.free for the deallocate expressions, we use it
+  // to wrap dealloc code with if(auto mem = coro.free) dealloc(mem).
   llvm::CallInst *LastCoroFree = nullptr;
+
   // If coro.id came from the builtin, remember the expression to give better
   // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
   // EmitCoroutineBody.
@@ -148,10 +156,18 @@ static RValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Coro,
                                     bool ignoreResult) {
   auto *E = S.getCommonExpr();
 
-  // Skip paththrough operator co_await (present when awaiting on an LValue).
+  // FIXME: rsmith 5/22/2017. Does it still make sense for us to have a 
+  // UO_Coawait at all? As I recall, the only purpose it ever had was to
+  // represent a dependent co_await expression that couldn't yet be resolved to
+  // a CoawaitExpr. But now we have (and need!) a separate DependentCoawaitExpr
+  // node to store unqualified lookup results, it seems that the UnaryOperator
+  // portion of the representation serves no purpose (and as seen in this patch,
+  // it's getting in the way). Can we remove it?
+
+  // Skip passthrough operator co_await (present when awaiting on an LValue).
   if (auto *UO = dyn_cast<UnaryOperator>(E))
-  if (UO->getOpcode() == UO_Coawait)
-    E = UO->getSubExpr();
+    if (UO->getOpcode() == UO_Coawait)
+      E = UO->getSubExpr();
 
   auto Binder =
       CodeGenFunction::OpaqueValueMappingData::bind(CGF, S.getOpaqueValue(), E);
@@ -286,32 +302,6 @@ namespace {
   };
 }
 
-#if 0 // TODO: Finish me to support elision of the parameter copies.
-static void EmitCoroParam(CodeGenFunction &CGF, DeclStmt *PM) {
-  assert(PM->isSingleDecl());
-  VarDecl *VD = static_cast<VarDecl *>(PM->getSingleDecl());
-  Expr *InitExpr = VD->getInit();
-  GetParamRef Visitor;
-  Visitor.Visit(InitExpr); // InitExpr);
-                           //  Visitor.TraverseStmtExpr(InitExpr);// InitExpr);
-  assert(Visitor.Expr);
-  auto DREOrig = cast<DeclRefExpr>(Visitor.Expr);
-
-  DeclRefExpr DRE(VD, /* RefersToEnclosingVariableOrCapture= */ false,
-                  VD->getType(), VK_LValue, SourceLocation{});
-  auto Orig = CGF.Builder.CreateBitCast(CGF.EmitLValue(DREOrig).getAddress(),
-                                        CGF.VoidPtrTy);
-  auto Copy = CGF.Builder.CreateBitCast(CGF.EmitLValue(&DRE).getAddress(),
-                                        CGF.VoidPtrTy);
-  SmallVector<Value *, 2> args{Orig.getPointer(), Copy.getPointer()};
-
-  // TODO:
-  //  Surround CTOR and DTOR for parameters with
-  //     if (coro.param(alloca.copy, alloca.original)) CTOR(...);
-  //     if (coro.param(alloca.copy, alloca.original)) DTOR(...);
-}
-#endif
-
 // For WinEH exception representation backend needs to know what funclet coro.end
 // belongs to. That information is passed in a funclet bundle.
 static SmallVector<llvm::OperandBundleDef, 1>
@@ -326,7 +316,7 @@ getBundlesForCoroEnd(CodeGenFunction &CGF) {
 
 namespace {
 // We will insert coro.end to cut any of the destructors for objects that
-// do not need to be destroyed onces the coroutine is resumed.
+// do not need to be destroyed once the coroutine is resumed.
 // See llvm/docs/Coroutines.rst for more details about coro.end.
 struct CallCoroEnd final : public EHScopeStack::Cleanup {
   void Emit(CodeGenFunction &CGF, Flags flags) override {
@@ -355,35 +345,48 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
   Stmt *Deallocate;
 
   // Emit "if (coro.free(CoroId, CoroBegin)) Deallocate;"
-  void Emit(CodeGenFunction &CGF, Flags flags) override {
+
+  // Note: That deallocation will be emitted twice: once for a normal exit and
+  // once for exceptional exit. This usage is safe because Deallocate does not
+  // contain any declarations. The SubStmtBuilder::makeNewAndDeleteExpr()
+  // builds a single call to a deallocation function which is safe to emit
+  // multiple times.
+  void Emit(CodeGenFunction &CGF, Flags) override {
     // Remember the current point, as we are going to emit deallocation code
     // first to get to coro.free instruction that is an argument to a delete
     // call.
     BasicBlock *SaveInsertBlock = CGF.Builder.GetInsertBlock();
 
-    auto *AfterFreeBB = CGF.createBasicBlock("after.coro.free");
     auto *FreeBB = CGF.createBasicBlock("coro.free");
-
     CGF.EmitBlock(FreeBB);
     CGF.EmitStmt(Deallocate);
+
+    auto *AfterFreeBB = CGF.createBasicBlock("after.coro.free");
     CGF.EmitBlock(AfterFreeBB);
 
+    // We should have captured coro.free from the emission of deallocate.
     auto *CoroFree = CGF.CurCoro.Data->LastCoroFree;
-    if (!CoroFree)
+    if (!CoroFree) {
+      CGF.CGM.Error(Deallocate->getLocStart(),
+                    "Deallocation expressoin does not refer to coro.free");
       return;
+    }
 
+    // Get back to the block we were originally and move coro.free there.
     auto *InsertPt = SaveInsertBlock->getTerminator();
     CoroFree->moveBefore(InsertPt);
     CGF.Builder.SetInsertPoint(InsertPt);
 
+    // Add if (auto *mem = coro.free) Deallocate;
     auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
     auto *Cond = CGF.Builder.CreateICmpNE(CoroFree, NullPtr);
     CGF.Builder.CreateCondBr(Cond, FreeBB, AfterFreeBB);
 
+    // No longer need old terminator.
     InsertPt->eraseFromParent();
     CGF.Builder.SetInsertPoint(AfterFreeBB);
   }
-  explicit CallCoroDelete(Stmt *S) : Deallocate(S) {}
+  explicit CallCoroDelete(Stmt *DeallocStmt) : Deallocate(DeallocStmt) {}
 };
 }
 
@@ -400,6 +403,12 @@ struct GetReturnObjectManager {
       : CGF(CGF), Builder(CGF.Builder), S(S), GroActiveFlag(Address::invalid()),
         GroEmission(CodeGenFunction::AutoVarEmission::invalid()) {}
 
+  // The gro variable has to outlive coroutine frame and coroutine promise, but,
+  // it can only be initialized after coroutine promise was created, thus, we
+  // split its emission in two parts. EmitGroAlloca emits an alloca and sets up
+  // cleanups. Later when coroutine promise is available we initialize the gro
+  // and sets the flag that the cleanup is now active.
+
   void EmitGroAlloca() {
     auto *GroDeclStmt = dyn_cast<DeclStmt>(S.getResultDecl());
     if (!GroDeclStmt) {
@@ -415,13 +424,21 @@ struct GetReturnObjectManager {
     Builder.CreateStore(Builder.getFalse(), GroActiveFlag);
 
     GroEmission = CGF.EmitAutoVarAlloca(*GroVarDecl);
-    CGF.EmitAutoVarCleanups(GroEmission);
 
-    if (auto *Cleanup = dyn_cast_or_null<EHCleanupScope>(&*CGF.EHStack.begin())) {
-      assert(!Cleanup->hasActiveFlag() && "cleanup already has active flag?");
-      Cleanup->setActiveFlag(GroActiveFlag);
-      Cleanup->setTestFlagInEHCleanup();
-      Cleanup->setTestFlagInNormalCleanup();
+    // Remember the top of EHStack before emitting the cleanup.
+    auto old_top = CGF.EHStack.stable_begin();
+    CGF.EmitAutoVarCleanups(GroEmission);
+    auto top = CGF.EHStack.stable_begin();
+
+    // Make the cleanup conditional on gro.active
+    for (auto b = CGF.EHStack.find(top), e = CGF.EHStack.find(old_top);
+      b != e; b++) {
+      if (auto *Cleanup = dyn_cast<EHCleanupScope>(&*b)) {
+        assert(!Cleanup->hasActiveFlag() && "cleanup already has active flag?");
+        Cleanup->setActiveFlag(GroActiveFlag);
+        Cleanup->setTestFlagInEHCleanup();
+        Cleanup->setTestFlagInNormalCleanup();
+      }
     }
   }
 
@@ -453,26 +470,26 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto &TI = CGM.getContext().getTargetInfo();
   unsigned NewAlign = TI.getNewAlign() / TI.getCharWidth();
 
+  auto *EntryBB = Builder.GetInsertBlock();
+  auto *AllocBB = createBasicBlock("coro.alloc");
+  auto *InitBB = createBasicBlock("coro.init");
+  auto *FinalBB = createBasicBlock("coro.final");
+  auto *RetBB = createBasicBlock("coro.ret");
+
   auto *CoroId = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_id),
       {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
-
-  auto *CoroAlloc = Builder.CreateCall(
-      CGM.getIntrinsic(llvm::Intrinsic::coro_alloc), {CoroId});
-
-  auto *EntryBB = Builder.GetInsertBlock();
-  auto *AllocBB = createBasicBlock("coro.alloc");
-  auto *FinalBB = createBasicBlock("coro.final");
-  auto *InitBB = createBasicBlock("coro.init");
-  auto *RetBB = createBasicBlock("coro.ret");
-
   createCoroData(*this, CurCoro, CoroId);
   CurCoro.Data->SuspendBB = RetBB;
+
+  // Backend is allowed to elide memory allocations, to help it, emit
+  // auto mem = coro.alloc() ? 0 : ... allocation code ...;
+  auto *CoroAlloc = Builder.CreateCall(
+      CGM.getIntrinsic(llvm::Intrinsic::coro_alloc), {CoroId});
 
   Builder.CreateCondBr(CoroAlloc, AllocBB, InitBB);
 
   EmitBlock(AllocBB);
-
   auto *AllocateCall = EmitScalarExpr(S.getAllocate());
   auto *AllocOrInvokeContBB = Builder.GetInsertBlock();
 
@@ -495,10 +512,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   EmitBlock(InitBB);
 
+  // Pass the result of the allocation to coro.begin.
   auto *Phi = Builder.CreatePHI(VoidPtrTy, 2);
   Phi->addIncoming(NullPtr, EntryBB);
   Phi->addIncoming(AllocateCall, AllocOrInvokeContBB);
-
   auto *CoroBegin = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_begin), {CoroId, Phi});
   CurCoro.Data->CoroBegin = CoroBegin;
@@ -542,15 +559,14 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
 
-    // Emit user authored body (wrapping in try-catch if needed).
     if (auto *OnException = S.getExceptionHandler()) {
       auto Loc = S.getLocStart();
       CXXCatchStmt Catch(Loc, /*exDecl=*/nullptr, OnException);
-      CXXTryStmt::OnStack TryStmt(Loc, S.getBody(), &Catch);
+      auto *TryStmt = CXXTryStmt::Create(getContext(), Loc, S.getBody(), &Catch);
 
-      EnterCXXTryStmt(TryStmt);
-      emitBodyAndFallthrough(*this, S, TryStmt.getTryBlock());
-      ExitCXXTryStmt(TryStmt);
+      EnterCXXTryStmt(*TryStmt);
+      emitBodyAndFallthrough(*this, S, TryStmt->getTryBlock());
+      ExitCXXTryStmt(*TryStmt);
     }
     else {
       emitBodyAndFallthrough(*this, S, S.getBody());
@@ -567,11 +583,13 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   }
 
   EmitBlock(RetBB);
+  // Emit coro.end before getReturnStmt (and parameter destructors), since
+  // resume and destroy parts of the coroutine should not include them.
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
   Builder.CreateCall(CoroEnd, {NullPtr, Builder.getFalse()});
 
-  if (auto RetStmt = S.getReturnStmt())
-    EmitStmt(RetStmt);
+  if (Stmt *Ret = S.getReturnStmt())
+    EmitStmt(Ret);
 }
 
 // Emit coroutine intrinsic and patch up arguments of the token type.
@@ -581,7 +599,7 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   switch (IID) {
   default:
     break;
-  // The coro.frame builtin is replaced with a SSA value of the coro.begin
+  // The coro.frame builtin is replaced with an SSA value of the coro.begin
   // intrinsic.
   case llvm::Intrinsic::coro_frame: {
     if (CurCoro.Data && CurCoro.Data->CoroBegin) {
@@ -618,6 +636,8 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   llvm::Value *F = CGM.getIntrinsic(IID);
   llvm::CallInst *Call = Builder.CreateCall(F, Args);
 
+  // Note: The following code is to enable to emit coro.id and coro.begin by
+  // hand to experiment with coroutines in C.
   // If we see @llvm.coro.id remember it in the CoroData. We will update
   // coro.alloc, coro.begin and coro.free intrinsics to refer to it.
   if (IID == llvm::Intrinsic::coro_id) {

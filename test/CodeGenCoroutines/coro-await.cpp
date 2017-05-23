@@ -21,8 +21,12 @@ struct coroutine_handle : coroutine_handle<> {
 }
 }
 
-struct suspend_never {
-  int stuff;
+struct init_susp {
+  bool await_ready();
+  void await_suspend(std::experimental::coroutine_handle<>);
+  void await_resume();
+};
+struct final_susp {
   bool await_ready();
   void await_suspend(std::experimental::coroutine_handle<>);
   void await_resume();
@@ -39,8 +43,8 @@ template<>
 struct std::experimental::coroutine_traits<void> {
   struct promise_type {
     void get_return_object();
-    suspend_never initial_suspend();
-    suspend_never final_suspend();
+    init_susp initial_suspend();
+    final_susp final_suspend();
     void return_void();
   };
 };
@@ -48,6 +52,13 @@ struct std::experimental::coroutine_traits<void> {
 // CHECK-LABEL: f0(
 extern "C" void f0() {
   // CHECK: %[[FRAME:.+]] = call i8* @llvm.coro.begin(
+
+  // See if initial_suspend was issued:
+  // ----------------------------------
+  // CHECK: call void @_ZNSt12experimental16coroutine_traitsIJvEE12promise_type15initial_suspendEv(
+  // CHECK-NEXT: call zeroext i1 @_ZN9init_susp11await_readyEv(%struct.init_susp*
+  // CHECK: %[[INITSP_ID:.+]] = call token @llvm.coro.save(
+  // CHECK: call i8 @llvm.coro.suspend(token %[[INITSP_ID]], i1 false)
 
   co_await suspend_always{};
   // See if we need to suspend:
@@ -83,6 +94,13 @@ extern "C" void f0() {
   // --------------------------
   // CHECK: [[READY_BB]]:
   // CHECK:  call void @_ZN14suspend_always12await_resumeEv(%struct.suspend_always* %[[AWAITABLE]])
+
+  // See if final_suspend was issued:
+  // ----------------------------------
+  // CHECK: call void @_ZNSt12experimental16coroutine_traitsIJvEE12promise_type13final_suspendEv(
+  // CHECK-NEXT: call zeroext i1 @_ZN10final_susp11await_readyEv(%struct.final_susp*
+  // CHECK: %[[FINALSP_ID:.+]] = call token @llvm.coro.save(
+  // CHECK: call i8 @llvm.coro.suspend(token %[[FINALSP_ID]], i1 true)
 }
 
 struct suspend_maybe {
@@ -98,8 +116,8 @@ template<>
 struct std::experimental::coroutine_traits<void,int> {
   struct promise_type {
     void get_return_object();
-    suspend_always initial_suspend();
-    suspend_always final_suspend();
+    init_susp initial_suspend();
+    final_susp final_suspend();
     void return_void();
     suspend_maybe yield_value(int);
   };
@@ -234,4 +252,29 @@ extern "C" void TestOpAwait() {
   co_await MyAgg{};
   // CHECK: call void @_ZN5MyAggawEv(%struct.MyAgg* %
   // CHECK: call void @_ZN11AggrAwaiter12await_resumeEv(%struct.Aggr* sret %
+}
+
+// CHECK-LABEL: EndlessLoop(
+extern "C" void EndlessLoop() {
+  // CHECK: %[[FRAME:.+]] = call i8* @llvm.coro.begin(
+
+  // See if initial_suspend was issued:
+  // ----------------------------------
+  // CHECK: call void @_ZNSt12experimental16coroutine_traitsIJvEE12promise_type15initial_suspendEv(
+  // CHECK-NEXT: call zeroext i1 @_ZN9init_susp11await_readyEv(%struct.init_susp*
+
+  for (;;)
+    co_await suspend_always{};
+
+  // Verify that final_suspend was NOT issued:
+  // ----------------------------------
+  // CHECK-NOT: call void @_ZNSt12experimental16coroutine_traitsIJvEE12promise_type13final_suspendEv(
+  // CHECK-NOT: call zeroext i1 @_ZN10final_susp11await_readyEv(%struct.final_susp*
+}
+
+// Verifies that we don't crash when awaiting on an lvalue.
+// CHECK-LABEL: @_Z11AwaitLValuev(
+void AwaitLValue() {
+  suspend_always lval;
+  co_await lval;
 }

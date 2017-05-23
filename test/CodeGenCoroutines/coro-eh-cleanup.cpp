@@ -1,18 +1,38 @@
-// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -triple=x86_64-pc-windows-msvc18.0.0 -emit-llvm %s -o - -fexceptions -fcxx-exceptions -disable-llvm-passes | FileCheck %s
-// RUN: %clang_cc1 -std=c++14 -fcoroutines-ts -triple=x86_64-unknown-linux-gnu -emit-llvm -o - %s -fexceptions -fcxx-exceptions -disable-llvm-passes | FileCheck --check-prefix=CHECK-LPAD %s
+// RUN: %clang_cc1 -std=c++1z -fcoroutines-ts -triple=x86_64-pc-windows-msvc18.0.0 -emit-llvm %s -o - -fexceptions -fcxx-exceptions -disable-llvm-passes | FileCheck %s
+// RUN: %clang_cc1 -std=c++1z -fcoroutines-ts -triple=x86_64-unknown-linux-gnu -emit-llvm -o - %s -fexceptions -fcxx-exceptions -disable-llvm-passes | FileCheck --check-prefix=CHECK-LPAD %s
 
-#include "Inputs/coroutine.h"
+namespace std::experimental {
+template <typename R, typename... T> struct coroutine_traits {
+  using promise_type = typename R::promise_type;
+};
+
+template <class Promise = void> struct coroutine_handle;
+
+template <> struct coroutine_handle<void> {
+  static coroutine_handle from_address(void *) noexcept;
+  coroutine_handle() = default;
+  template <class PromiseType>
+  coroutine_handle(coroutine_handle<PromiseType>) noexcept;
+};
+template <class Promise> struct coroutine_handle: coroutine_handle<void> {
+  coroutine_handle() = default;
+  static coroutine_handle from_address(void *) noexcept;
+};
+}
+
+struct suspend_always {
+  bool await_ready() noexcept;
+  void await_suspend(std::experimental::coroutine_handle<>) noexcept;
+  void await_resume() noexcept;
+};
 
 struct coro_t {
   struct promise_type {
-    coro_t get_return_object() {
-      coro::coroutine_handle<promise_type>{};
-      return {};
-    }
-    coro::suspend_never initial_suspend() { return {}; }
-    coro::suspend_never final_suspend() { return {}; }
-    void return_void(){}
-    void unhandled_exception();
+    coro_t get_return_object() noexcept;
+    suspend_always initial_suspend() noexcept;
+    suspend_always final_suspend() noexcept;
+    void return_void() noexcept;
+    void unhandled_exception() noexcept;
   };
 };
 
@@ -31,9 +51,12 @@ coro_t f() {
 // CHECK: [[EHCLEANUP]]:
 // CHECK:   %[[INNERPAD:.+]] = cleanuppad within none []
 // CHECK:   call void @"\01??_DCleanup@@QEAAXXZ"(
-// CHECK:   cleanupret from %[[INNERPAD]] unwind label %[[CATCHDISPBB:.+]]
-// CHECK: [[CATCHDISPBB]]:
-// CHECK: catchswitch within none [label %{{.+}}] unwind label %[[COROENDBB:.+]]
+// CHECK:   cleanupret from %{{.+}} unwind label %[[CATCHDISPATCH:.+]]
+
+// CHECK: [[CATCHDISPATCH]]:
+// CHECK:   catchswitch within none [label %[[CATCHPAD:.+]]] unwind label %[[COROENDBB:.+]]
+// CHECK: [[CATCHPAD]]:
+// CHECK:   call void @"\01?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
 
 // CHECK: [[COROENDBB]]:
 // CHECK-NEXT: %[[CLPAD:.+]] = cleanuppad within none
@@ -42,29 +65,22 @@ coro_t f() {
 
 // CHECK-LPAD: @_Z1fv(
 // CHECK-LPAD:   invoke void @_Z9may_throwv()
-// CHECK-LPAD:       to label %[[CONT:.+]] unwind label %[[CATCHDISPBB:.+]]
-// CHECK-LPAD: [[CATCHDISPBB]]:
-// CHECK-LPAD:    landingpad { i8*, i32 }
-// CHECK-LPAD-NEXT: catch
-// CHECK-LPAD:    call void @_ZN7CleanupD1Ev(
-// CHECK-LPAD-NEXT: br label %[[CATCHBB:.+]]
-
-// CHECK-LPAD: [[CATCHBB]]:
-// CHECK-LPAD:  invoke void @_ZN6coro_t12promise_type19unhandled_exceptionEv(%"struct.coro_t::promise_type"* %__promise)
-// CHECK-LPAD-NEXT: to label %{{.+}} unwind label %[[LPAD:.+]]
-
-// CHECK-LPAD: [[LPAD]]:
-// CHECK-LPAD:   invoke void @__cxa_end_catch()
-// CHECK-LPAD-NEXT: to label %[[CONT:.+]] unwind label
-// CHECK-LPAD: [[CONT]]:
-// CHECK-LPAD-NEXT:   br label %[[EHCLEANUP:.+]]
-
+// CHECK-LPAD:       to label %[[CONT:.+]] unwind label %[[EHCLEANUP:.+]]
 // CHECK-LPAD: [[EHCLEANUP]]:
-// CHECK-LPAD:     %[[I1RESUME:.+]] = call i1 @llvm.coro.end(i8* null, i1 true)
-// CHECK-LPAD:  br i1  %[[I1RESUME]], label %[[EHRESUME:.+]], label
+// CHECK-LPAD:    landingpad { i8*, i32 }
+// CHECK-LPAD:          catch
+// CHECK-LPAD:   call void @_ZN7CleanupD1Ev(
+// CHECK-LPAD:   call i8* @__cxa_begin_catch
+// CHECK-LPAD:   call void @_ZN6coro_t12promise_type19unhandled_exceptionEv
+// CHECK-LPAD:   invoke void @__cxa_end_catch()
+// CHECK-LPAD:             to label %{{.+}} unwind label %[[UNWINDBB:.+]]
+
+// CHECK-LPAD: [[UNWINDBB]]:
+// CHECK-LPAD:   %[[I1RESUME:.+]] = call i1 @llvm.coro.end(i8* null, i1 true)
+// CHECK-LPAD:   br i1  %[[I1RESUME]], label %[[EHRESUME:.+]], label
 // CHECK-LPAD: [[EHRESUME]]:
-// CHECK-LPAD-NEXT:  %[[EXN:.+]] = load i8*, i8** %exn.slot, align 8
-// CHECK-LPAD-NEXT:  %[[SEL:.+]] = load i32, i32* %ehselector.slot, align 4
-// CHECK-LPAD-NEXT:  %[[LPAD0:.+]] = insertvalue { i8*, i32 } undef, i8* %[[EXN]], 0
-// CHECK-LPAD-NEXT:  %[[LPAD1:.+]] = insertvalue { i8*, i32 } %[[LPAD0]], i32 %[[SEL]], 1
-// CHECK-LPAD-NEXT:  resume { i8*, i32 } %[[LPAD1]]
+// CHECK-LPAD-NEXT:  %[[exn:.+]] = load i8*, i8** %exn.slot, align 8
+// CHECK-LPAD-NEXT:  %[[sel:.+]] = load i32, i32* %ehselector.slot, align 4
+// CHECK-LPAD-NEXT:  %[[val1:.+]] = insertvalue { i8*, i32 } undef, i8* %[[exn]], 0
+// CHECK-LPAD-NEXT:  %[[val2:.+]] = insertvalue { i8*, i32 } %[[val1]], i32 %[[sel]], 1
+// CHECK-LPAD-NEXT:  resume { i8*, i32 } %[[val2]]

@@ -44,7 +44,6 @@ CXXTryStmt *CXXTryStmt::Create(const ASTContext &C, EmptyShell Empty,
 CXXTryStmt::CXXTryStmt(SourceLocation tryLoc, Stmt *tryBlock,
                        ArrayRef<Stmt *> handlers)
     : Stmt(CXXTryStmtClass), TryLoc(tryLoc), NumHandlers(handlers.size()) {
-  // Must be kept in sync with CXXTryStmt::OnStack.
   Stmt **Stmts = reinterpret_cast<Stmt **>(this + 1);
   Stmts[0] = tryBlock;
   std::copy(handlers.begin(), handlers.end(), Stmts + 1);
