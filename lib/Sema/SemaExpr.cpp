@@ -5399,9 +5399,11 @@ Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
   // that the callee might not preserve them. This is easy to diagnose here,
   // but can be very challenging to debug.
   if (auto *Caller = getCurFunctionDecl())
-    if (Caller->hasAttr<ARMInterruptAttr>())
-      if (!FDecl || !FDecl->hasAttr<ARMInterruptAttr>())
+    if (Caller->hasAttr<ARMInterruptAttr>()) {
+      bool VFP = Context.getTargetInfo().hasFeature("vfp");
+      if (VFP && (!FDecl || !FDecl->hasAttr<ARMInterruptAttr>()))
         Diag(Fn->getExprLoc(), diag::warn_arm_interrupt_calling_convention);
+    }
 
   // Promote the function operand.
   // We special-case function promotion here because we only allow promoting
@@ -15372,7 +15374,7 @@ static ExprResult diagnoseUnknownAnyExpr(Sema &S, Expr *E) {
 }
 
 /// Check for operands with placeholder types and complain if found.
-/// Returns true if there was an error and no recovery was possible.
+/// Returns ExprError() if there was an error and no recovery was possible.
 ExprResult Sema::CheckPlaceholderExpr(Expr *E) {
   if (!getLangOpts().CPlusPlus) {
     // C cannot handle TypoExpr nodes on either side of a binop because it

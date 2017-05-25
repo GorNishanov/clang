@@ -55,6 +55,7 @@ enum CoverageFeature {
   Coverage8bitCounters = 1 << 8,
   CoverageTracePC = 1 << 9,
   CoverageTracePCGuard = 1 << 10,
+  CoverageNoPrune = 1 << 11,
 };
 
 /// Parse a -fsanitize= or -fno-sanitize= argument's values, diagnosing any
@@ -511,7 +512,6 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
         << "-fsanitize-coverage=edge";
   // Basic block tracing and 8-bit counters require some type of coverage
   // enabled.
-  int CoverageTypes = CoverageFunc | CoverageBB | CoverageEdge;
   if (CoverageFeatures & CoverageTraceBB)
     D.Diag(clang::diag::warn_drv_deprecated_arg)
         << "-fsanitize-coverage=trace-bb"
@@ -520,9 +520,18 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
     D.Diag(clang::diag::warn_drv_deprecated_arg)
         << "-fsanitize-coverage=8bit-counters"
         << "-fsanitize-coverage=trace-pc-guard";
+
+  int InsertionPointTypes = CoverageFunc | CoverageBB | CoverageEdge;
+  if ((CoverageFeatures & InsertionPointTypes) &&
+      !(CoverageFeatures &(CoverageTracePC | CoverageTracePCGuard))) {
+    D.Diag(clang::diag::warn_drv_deprecated_arg)
+        << "-fsanitize-coverage=[func|bb|edge]"
+        << "-fsanitize-coverage=[func|bb|edge],[trace-pc-guard|trace-pc]";
+  }
+
   // trace-pc w/o func/bb/edge implies edge.
   if ((CoverageFeatures & (CoverageTracePC | CoverageTracePCGuard)) &&
-      !(CoverageFeatures & CoverageTypes))
+      !(CoverageFeatures & InsertionPointTypes))
     CoverageFeatures |= CoverageEdge;
 
   if (AllAddedKinds & Address) {
@@ -621,7 +630,8 @@ void SanitizerArgs::addArgs(const ToolChain &TC, const llvm::opt::ArgList &Args,
     std::make_pair(CoverageTraceGep, "-fsanitize-coverage-trace-gep"),
     std::make_pair(Coverage8bitCounters, "-fsanitize-coverage-8bit-counters"),
     std::make_pair(CoverageTracePC, "-fsanitize-coverage-trace-pc"),
-    std::make_pair(CoverageTracePCGuard, "-fsanitize-coverage-trace-pc-guard")};
+    std::make_pair(CoverageTracePCGuard, "-fsanitize-coverage-trace-pc-guard"),
+    std::make_pair(CoverageNoPrune, "-fsanitize-coverage-no-prune")};
   for (auto F : CoverageFlags) {
     if (CoverageFeatures & F.first)
       CmdArgs.push_back(Args.MakeArgString(F.second));
@@ -778,6 +788,7 @@ int parseCoverageFeatures(const Driver &D, const llvm::opt::Arg *A) {
         .Case("8bit-counters", Coverage8bitCounters)
         .Case("trace-pc", CoverageTracePC)
         .Case("trace-pc-guard", CoverageTracePCGuard)
+        .Case("no-prune", CoverageNoPrune)
         .Default(0);
     if (F == 0)
       D.Diag(clang::diag::err_drv_unsupported_option_argument)
