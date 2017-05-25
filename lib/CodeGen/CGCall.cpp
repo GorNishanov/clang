@@ -1586,9 +1586,10 @@ CodeGenTypes::GetFunctionType(const CGFunctionInfo &FI) {
 
     case ABIArgInfo::Indirect: {
       assert(NumIRArgs == 1);
-      // indirect arguments are always on the stack, which is addr space #0.
+      // indirect arguments are always on the stack, which is alloca addr space.
       llvm::Type *LTy = ConvertTypeForMem(it->type);
-      ArgTypes[FirstIRArg] = LTy->getPointerTo();
+      ArgTypes[FirstIRArg] = LTy->getPointerTo(
+          CGM.getDataLayout().getAllocaAddrSpace());
       break;
     }
 
@@ -3710,12 +3711,14 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   Address ArgMemory = Address::invalid();
   const llvm::StructLayout *ArgMemoryLayout = nullptr;
   if (llvm::StructType *ArgStruct = CallInfo.getArgStruct()) {
-    ArgMemoryLayout = CGM.getDataLayout().getStructLayout(ArgStruct);
+    const llvm::DataLayout &DL = CGM.getDataLayout();
+    ArgMemoryLayout = DL.getStructLayout(ArgStruct);
     llvm::Instruction *IP = CallArgs.getStackBase();
     llvm::AllocaInst *AI;
     if (IP) {
       IP = IP->getNextNode();
-      AI = new llvm::AllocaInst(ArgStruct, "argmem", IP);
+      AI = new llvm::AllocaInst(ArgStruct, DL.getAllocaAddrSpace(),
+                                "argmem", IP);
     } else {
       AI = CreateTempAlloca(ArgStruct, "argmem");
     }
