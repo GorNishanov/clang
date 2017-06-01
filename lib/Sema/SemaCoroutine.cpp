@@ -822,6 +822,12 @@ bool CoroutineStmtBuilder::buildStatements() {
   return this->IsValid;
 }
 
+bool CoroutineStmtBuilder::buildParameterMoves() {
+  assert(this->IsValid && "coroutine already invalid");
+  assert(this->ParamMoves.empty() && "param moves already built");
+  return this->IsValid = makeParamMoves();
+}
+
 bool CoroutineStmtBuilder::buildDependentStatements() {
   assert(this->IsValid && "coroutine already invalid");
   assert(!this->IsPromiseDependentType &&

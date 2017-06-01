@@ -93,3 +93,18 @@ void f(int val, MoveOnly moParam, MoveAndCopy mcParam) {
   // CHECK-NEXT: call void @_ZN8MoveOnlyD1Ev(%struct.MoveOnly* %[[MoCopy]]
   // CHECK-NEXT: call i8* @llvm.coro.free(
 }
+
+template <typename T>
+void dependent_params(T x) {
+  co_return;
+}
+
+struct A {
+  int WontFitIntoRegisterForSure[128];
+  A();
+  ~A();
+};
+
+void call_dependent_params() {
+  dependent_params(A{});
+}
