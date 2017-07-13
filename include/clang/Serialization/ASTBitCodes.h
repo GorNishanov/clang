@@ -1545,9 +1545,12 @@ namespace clang {
 
       // ARC
       EXPR_OBJC_BRIDGED_CAST,     // ObjCBridgedCastExpr
-      
+
       STMT_MS_DEPENDENT_EXISTS,   // MSDependentExistsStmt
-      EXPR_LAMBDA                 // LambdaExpr
+      EXPR_LAMBDA,                // LambdaExpr
+      STMT_COROUTINE_BODY,
+      STMT_CORETURN,
+      EXPR_COAWAIT,
     };
 
     /// \brief The kinds of designators that can occur in a
