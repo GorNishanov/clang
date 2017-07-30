@@ -363,6 +363,23 @@ static ExprResult buildMemberCall(Sema &S, Expr *Base, SourceLocation Loc,
   return S.ActOnCallExpr(nullptr, Result.get(), Loc, Args, Loc, nullptr);
 }
 
+static Expr *maybeTailCall(Sema &S, QualType RetType, Expr *E,
+                           SourceLocation Loc) {
+  if (RetType->isReferenceType())
+    return nullptr;
+  Type const* T = RetType.getTypePtr();
+  if (!T->isClassType() && !T->isStructureType())
+    return nullptr;
+  ExprResult AddressExpr = buildMemberCall(S, E, Loc, "address", None);
+  if (AddressExpr.isInvalid())
+    return nullptr;
+
+  Expr *JustAddress = AddressExpr.get();
+  // FIXME: Check that the type of AddressExpr is void*
+  return buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_resume,
+                          JustAddress);
+}
+
 /// Build calls to await_ready, await_suspend, and await_resume for a co_await
 /// expression.
 static ReadySuspendResumeResult buildCoawaitCalls(Sema &S, VarDecl *CoroPromise,
@@ -412,16 +429,20 @@ static ReadySuspendResumeResult buildCoawaitCalls(Sema &S, VarDecl *CoroPromise,
     //   - await-suspend is the expression e.await_suspend(h), which shall be
     //     a prvalue of type void or bool.
     QualType RetType = AwaitSuspend->getCallReturnType(S.Context);
-    // non-class prvalues always have cv-unqualified types
-    QualType AdjRetType = RetType.getUnqualifiedType();
-    if (RetType->isReferenceType() ||
-        (AdjRetType != S.Context.BoolTy && AdjRetType != S.Context.VoidTy)) {
-      S.Diag(AwaitSuspend->getCalleeDecl()->getLocation(),
-             diag::err_await_suspend_invalid_return_type)
-          << RetType;
-      S.Diag(Loc, diag::note_coroutine_promise_call_implicitly_required)
-          << AwaitSuspend->getDirectCallee();
-      Calls.IsInvalid = true;
+    if (Expr *TailCallSuspend = maybeTailCall(S, RetType, AwaitSuspend, Loc))
+      Calls.Results[ACT::ACT_Suspend] = TailCallSuspend;
+    else {
+      // non-class prvalues always have cv-unqualified types
+      QualType AdjRetType = RetType.getUnqualifiedType();
+      if (RetType->isReferenceType() ||
+          (AdjRetType != S.Context.BoolTy && AdjRetType != S.Context.VoidTy)) {
+        S.Diag(AwaitSuspend->getCalleeDecl()->getLocation(),
+               diag::err_await_suspend_invalid_return_type)
+            << RetType;
+        S.Diag(Loc, diag::note_coroutine_promise_call_implicitly_required)
+            << AwaitSuspend->getDirectCallee();
+        Calls.IsInvalid = true;
+      }
     }
   }
 
