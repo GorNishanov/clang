@@ -324,6 +324,13 @@ static void runHorribleHackToFixupCleanupBlocks(Function &F) {
 
 void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   ++CurCoro.Data->CoreturnCount;
+  const Expr *RV = S.getOperand();
+  if (RV && RV->getType()->isVoidType()) {
+    // Make sure to evaluate the expression of a co_return with a void
+    // expression for side effects.
+    RunCleanupsScope cleanupScope(*this);
+    EmitIgnoredExpr(RV);
+  }
   EmitStmt(S.getPromiseCall());
   EmitBranchThroughCleanup(CurCoro.Data->FinalJD);
 }
