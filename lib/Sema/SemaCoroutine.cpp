@@ -496,7 +496,6 @@ VarDecl *Sema::buildCoroutinePromise(SourceLocation Loc) {
     return nullptr;
   ActOnUninitializedDecl(VD);
   FD->addDecl(VD);
-  assert(!VD->isInvalidDecl());
   return VD;
 }
 
