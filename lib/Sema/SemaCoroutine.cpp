@@ -1279,6 +1279,7 @@ bool CoroutineStmtBuilder::makeOnFallthrough() {
 }
 
 bool CoroutineStmtBuilder::makeOnException() {
+  #if 0
   // Try to form 'p.unhandled_exception();'
   assert(!IsPromiseDependentType &&
          "cannot make statement while the promise type is dependent");
@@ -1296,6 +1297,13 @@ bool CoroutineStmtBuilder::makeOnException() {
         << PromiseRecordDecl;
     return !RequireUnhandledException;
   }
+  #endif
+  // Try to form 'p.unhandled_exception();'
+  assert(!IsPromiseDependentType &&
+         "cannot make statement while the promise type is dependent");
+
+  if (!lookupMember(S, "unhandled_exception", PromiseRecordDecl, Loc))
+    return true;
 
   // If exceptions are disabled, don't try to build OnException.
   if (!S.getLangOpts().CXXExceptions)
