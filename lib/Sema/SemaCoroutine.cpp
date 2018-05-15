@@ -1282,7 +1282,7 @@ bool CoroutineStmtBuilder::makeOnException() {
   // Try to form 'p.unhandled_exception();'
   assert(!IsPromiseDependentType &&
          "cannot make statement while the promise type is dependent");
-
+#if 0
   const bool RequireUnhandledException = S.getLangOpts().CXXExceptions;
 
   if (!lookupMember(S, "unhandled_exception", PromiseRecordDecl, Loc)) {
@@ -1296,7 +1296,12 @@ bool CoroutineStmtBuilder::makeOnException() {
         << PromiseRecordDecl;
     return !RequireUnhandledException;
   }
+#else
+  if (!lookupMember(S, "unhandled_exception", PromiseRecordDecl, Loc)) {
+    return true;
+  }
 
+#endif
   // If exceptions are disabled, don't try to build OnException.
   if (!S.getLangOpts().CXXExceptions)
     return true;

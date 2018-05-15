@@ -351,6 +351,31 @@ namespace {
 // We will insert coro.end to cut any of the destructors for objects that
 // do not need to be destroyed once the coroutine is resumed.
 // See llvm/docs/Coroutines.rst for more details about coro.end.
+struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    auto &CGM = CGF.CGM; // xxx
+    auto *None = llvm::ConstantTokenNone::get(CGM.getLLVMContext());
+    llvm::Function *CoroSuspendEhFn = CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
+    // See if we have a funclet bundle to associate coro.end with. (WinEH)
+    auto Bundles = getBundlesForCoroEnd(CGF);
+    auto *CoroSuspendEh =
+        CGF.Builder.CreateCall(CoroSuspendEhFn, {None}, Bundles);
+    if (Bundles.empty()) {
+      // Otherwise, (landingpad model), create a conditional branch that leads
+      // either to a cleanup block or a block with EH resume instruction.
+      auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
+      auto *CleanupContBB = CGF.createBasicBlock("eh.suspend.cleanup");
+      CGF.Builder.CreateCondBr(CoroSuspendEh, ResumeBB, CleanupContBB);
+      CGF.EmitBlock(CleanupContBB);
+    }
+  }
+};
+} // namespace
+
+namespace {
+// We will insert coro.end to cut any of the destructors for objects that
+// do not need to be destroyed once the coroutine is resumed.
+// See llvm/docs/Coroutines.rst for more details about coro.end.
 struct CallCoroEnd final : public EHScopeStack::Cleanup {
   void Emit(CodeGenFunction &CGF, Flags flags) override {
     auto &CGM = CGF.CGM;
@@ -401,7 +426,7 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
     auto *CoroFree = CGF.CurCoro.Data->LastCoroFree;
     if (!CoroFree) {
       CGF.CGM.Error(Deallocate->getLocStart(),
-                    "Deallocation expressoin does not refer to coro.free");
+                    "Deallocation expression does not refer to coro.free");
       return;
     }
 
@@ -556,6 +581,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   GetReturnObjectManager GroManager(*this, S);
   GroManager.EmitGroAlloca();
 
+  EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
+
   CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(RetBB);
   {
     ParamReferenceReplacerRAII ParamReplacer(LocalDeclMap);
@@ -585,7 +612,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // Now we have the promise, initialize the GRO
     GroManager.EmitGroInit();
 
-    EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
+    EHStack.pushCleanup<CallCoroEhSuspend>(EHCleanup);
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     EmitStmt(S.getInitSuspendStmt());
