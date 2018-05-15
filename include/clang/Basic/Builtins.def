@@ -1389,6 +1389,8 @@ BUILTIN(__builtin_nontemporal_store, "v.", "t")
 BUILTIN(__builtin_nontemporal_load, "v.", "t")
 
 // Coroutine intrinsics.
+BUILTIN(__builtin_coro_resume_cc, "vv*v*", "")
+BUILTIN(__builtin_coro_cc_addr, "v*v*", "n")
 BUILTIN(__builtin_coro_resume, "vv*", "")
 BUILTIN(__builtin_coro_destroy, "vv*", "")
 BUILTIN(__builtin_coro_done, "bv*", "n")
