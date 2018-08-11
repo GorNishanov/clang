@@ -483,6 +483,13 @@ static ExprResult buildPromiseCall(Sema &S, VarDecl *Promise,
   return buildMemberCall(S, PromiseRef.get(), Loc, Name, Args);
 }
 
+#if 0
+static Expr *buildImplicitObjectParameter(Sema &S, FunctionDecl *FD, SourceLocation Loc)
+{
+  
+}
+#endif
+
 VarDecl *Sema::buildCoroutinePromise(SourceLocation Loc) {
   assert(isa<FunctionDecl>(CurContext) && "not in a function scope");
   auto *FD = cast<FunctionDecl>(CurContext);
@@ -510,6 +517,20 @@ VarDecl *Sema::buildCoroutinePromise(SourceLocation Loc) {
   // Build a list of arguments, based on the coroutine functions arguments,
   // that will be passed to the promise type's constructor.
   llvm::SmallVector<Expr *, 4> CtorArgExprs;
+
+  // Add implicit object parameter.
+  if (auto *MD = dyn_cast<CXXMethodDecl>(FD)) {
+    if (MD->isInstance() && !isLambdaCallOperator(MD)) {
+      ExprResult ThisExpr = ActOnCXXThis(Loc);
+      if (ThisExpr.isInvalid())
+        return nullptr;
+      ThisExpr = CreateBuiltinUnaryOp(Loc, UO_Deref, ThisExpr.get());
+      if (ThisExpr.isInvalid())
+        return nullptr;
+      CtorArgExprs.push_back(ThisExpr.get());
+    }
+  }
+
   auto &Moves = ScopeInfo->CoroutineParameterMoves;
   for (auto *PD : FD->parameters()) {
     if (PD->getType()->isDependentType())
