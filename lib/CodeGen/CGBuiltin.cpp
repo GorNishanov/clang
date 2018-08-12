@@ -3110,6 +3110,10 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return EmitCoroutineIntrinsic(E, Intrinsic::coro_promise);
   case Builtin::BI__builtin_coro_resume:
     return EmitCoroutineIntrinsic(E, Intrinsic::coro_resume);
+  case Builtin::BI__builtin_coro_resume_cc:
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_resume_cc);
+  case Builtin::BI__builtin_coro_cc_addr:
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_cc_addr);
   case Builtin::BI__builtin_coro_frame:
     return EmitCoroutineIntrinsic(E, Intrinsic::coro_frame);
   case Builtin::BI__builtin_coro_noop:

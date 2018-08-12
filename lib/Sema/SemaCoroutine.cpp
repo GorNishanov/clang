@@ -501,6 +501,13 @@ static ExprResult buildPromiseCall(Sema &S, VarDecl *Promise,
   return buildMemberCall(S, PromiseRef.get(), Loc, Name, Args);
 }
 
+#if 0
+static Expr *buildImplicitObjectParameter(Sema &S, FunctionDecl *FD, SourceLocation Loc)
+{
+  
+}
+#endif
+
 VarDecl *Sema::buildCoroutinePromise(SourceLocation Loc) {
   assert(isa<FunctionDecl>(CurContext) && "not in a function scope");
   auto *FD = cast<FunctionDecl>(CurContext);

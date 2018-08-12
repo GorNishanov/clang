@@ -736,6 +736,10 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   for (auto &Arg : E->arguments())
     Args.push_back(EmitScalarExpr(Arg));
 
+  if (IID == llvm::Intrinsic::coro_cc_addr) {
+    Args.push_back(llvm::ConstantTokenNone::get(getLLVMContext()));
+  }
+
   llvm::Value *F = CGM.getIntrinsic(IID);
   llvm::CallInst *Call = Builder.CreateCall(F, Args);
 
