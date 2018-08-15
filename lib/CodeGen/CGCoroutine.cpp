@@ -544,6 +544,7 @@ static void emitBodyAndFallthrough(CodeGenFunction &CGF,
 
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
+  auto *None = llvm::ConstantTokenNone::get(getLLVMContext());
   auto &TI = CGM.getContext().getTargetInfo();
   unsigned NewAlign = TI.getNewAlign() / TI.getCharWidth();
 
@@ -555,7 +556,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   auto *CoroId = Builder.CreateCall(
       CGM.getIntrinsic(llvm::Intrinsic::coro_id),
-      {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
+      {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr, None});
   createCoroData(*this, CurCoro, CoroId);
   CurCoro.Data->SuspendBB = RetBB;
 
@@ -736,7 +737,7 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
   for (auto &Arg : E->arguments())
     Args.push_back(EmitScalarExpr(Arg));
 
-  if (IID == llvm::Intrinsic::coro_cc_addr) {
+  if (IID == llvm::Intrinsic::coro_cc_addr || IID == llvm::Intrinsic::coro_id) {
     Args.push_back(llvm::ConstantTokenNone::get(getLLVMContext()));
   }
 

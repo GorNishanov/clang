@@ -11,7 +11,7 @@ void f(int n) {
   int promise;
 
   // CHECK: %[[PROM_ADDR:.+]] = bitcast i32* %promise to i8*
-  // CHECK-NEXT: %[[COROID:.+]] = call token @llvm.coro.id(i32 32, i8* %[[PROM_ADDR]], i8* null, i8* null)
+  // CHECK-NEXT: %[[COROID:.+]] = call token @llvm.coro.id(i32 32, i8* %[[PROM_ADDR]], i8* null, i8* null, token none)
   __builtin_coro_id(32, &promise, 0, 0);
 
   // CHECK-NEXT: call i1 @llvm.coro.alloc(token %[[COROID]])
