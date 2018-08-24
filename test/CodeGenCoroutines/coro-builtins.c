@@ -17,7 +17,7 @@ void f(int n) {
   // CHECK-NEXT: call i1 @llvm.coro.alloc(token %[[COROID]])
   __builtin_coro_alloc();
 
-  // CHECK-NEXT: call i8* @llvm.coro.noop()
+  // CHECK-NEXT: call i8* @llvm.coro.noop(i8* null)
   __builtin_coro_noop();
 
   // CHECK-NEXT: %[[SIZE:.+]] = call i64 @llvm.coro.size.i64()

@@ -713,6 +713,10 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
     auto NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
     return RValue::get(NullPtr);
   }
+  case llvm::Intrinsic::coro_noop:
+    Args.push_back(llvm::ConstantPointerNull::get(Builder.getInt8PtrTy()));
+    break;
+
   // The following three intrinsics take a token parameter referring to a token
   // returned by earlier call to @llvm.coro.id. Since we cannot represent it in
   // builtins, we patch it up here.
