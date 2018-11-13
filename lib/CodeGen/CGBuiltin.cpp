@@ -3276,11 +3276,18 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return RValue::get(EmitMSVCBuiltinExpr(MSVCIntrin::__fastfail, E));
 
   case Builtin::BI__builtin_coro_size: {
-    auto & Context = getContext();
+    auto &Context = getContext();
     auto SizeTy = Context.getSizeType();
     auto T = Builder.getIntNTy(Context.getTypeSize(SizeTy));
     Value *F = CGM.getIntrinsic(Intrinsic::coro_size, T);
     return RValue::get(Builder.CreateCall(F));
+  }
+  case Builtin::BI__builtin_coro_size_chk: {
+    auto &Context = getContext();
+    auto SizeTy = Context.getSizeType();
+    auto T = Builder.getIntNTy(Context.getTypeSize(SizeTy));
+    Value *F = CGM.getIntrinsic(Intrinsic::coro_size_chk, T);
+    return RValue::get(Builder.CreateCall(F, EmitScalarExpr(E->getArg(0))));
   }
 
   case Builtin::BI__builtin_coro_id:
