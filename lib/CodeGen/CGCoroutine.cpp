@@ -183,13 +183,20 @@ static LValueOrRValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Co
       CodeGenFunction::OpaqueValueMappingData::bind(CGF, S.getOpaqueValue(), E);
   auto UnbindOnExit = llvm::make_scope_exit([&] { Binder.unbind(CGF); });
 
+  llvm::APSInt IsReady;
+  const auto IsReadyConstExpr =
+      S.getReadyExpr()->isIntegerConstantExpr(IsReady, CGF.getContext());
+
   auto Prefix = buildSuspendPrefixStr(Coro, Kind);
   BasicBlock *ReadyBlock = CGF.createBasicBlock(Prefix + Twine(".ready"));
   BasicBlock *SuspendBlock = CGF.createBasicBlock(Prefix + Twine(".suspend"));
   BasicBlock *CleanupBlock = CGF.createBasicBlock(Prefix + Twine(".cleanup"));
 
   // If expression is ready, no need to suspend.
-  CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
+  if (IsReadyConstExpr) {
+    CGF.EmitBranch(IsReady.getExtValue() ? ReadyBlock : SuspendBlock);
+  else
+    CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
 
   // Otherwise, emit suspend logic.
   CGF.EmitBlock(SuspendBlock);
