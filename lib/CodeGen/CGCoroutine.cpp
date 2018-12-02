@@ -177,6 +177,8 @@ static LValueOrRValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Co
                                     CoroutineSuspendExpr const &S,
                                     AwaitKind Kind, AggValueSlot aggSlot,
                                     bool ignoreResult, bool forLValue) {
+  auto &Builder = CGF.Builder;
+  auto Prefix = buildSuspendPrefixStr(Coro, Kind);
   auto *E = S.getCommonExpr();
 
   auto Binder =
@@ -187,53 +189,49 @@ static LValueOrRValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Co
   const auto IsReadyConstExpr =
       S.getReadyExpr()->isIntegerConstantExpr(IsReady, CGF.getContext());
 
-  auto Prefix = buildSuspendPrefixStr(Coro, Kind);
-  BasicBlock *ReadyBlock = CGF.createBasicBlock(Prefix + Twine(".ready"));
-  BasicBlock *SuspendBlock = CGF.createBasicBlock(Prefix + Twine(".suspend"));
-  BasicBlock *CleanupBlock = CGF.createBasicBlock(Prefix + Twine(".cleanup"));
+  if (!IsReadyConstExpr || !IsReady.getExtValue()) {
 
-  // If expression is ready, no need to suspend.
-  if (IsReadyConstExpr) {
-    CGF.EmitBranch(IsReady.getExtValue() ? ReadyBlock : SuspendBlock);
-  else
-    CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
+    BasicBlock *ReadyBlock = CGF.createBasicBlock(Prefix + Twine(".ready"));
+    BasicBlock *CleanupBlock = CGF.createBasicBlock(Prefix + Twine(".cleanup"));
 
-  // Otherwise, emit suspend logic.
-  CGF.EmitBlock(SuspendBlock);
+    if (!IsReadyConstExpr) {
+      BasicBlock *SuspendBlock = CGF.createBasicBlock(Prefix + Twine(".suspend"));
+      CGF.EmitBranchOnBoolExpr(S.getReadyExpr(), ReadyBlock, SuspendBlock, 0);
+      CGF.EmitBlock(SuspendBlock);
+    }
 
-  auto &Builder = CGF.Builder;
-  llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
-  auto *NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
-  auto *SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
+    llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
+    auto *NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
+    auto *SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
 
-  auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
-  if (SuspendRet != nullptr && SuspendRet->getType()->isIntegerTy(1)) {
-    // Veto suspension if requested by bool returning await_suspend.
-    BasicBlock *RealSuspendBlock =
-        CGF.createBasicBlock(Prefix + Twine(".suspend.bool"));
-    CGF.Builder.CreateCondBr(SuspendRet, RealSuspendBlock, ReadyBlock);
-    SuspendBlock = RealSuspendBlock;
-    CGF.EmitBlock(RealSuspendBlock);
+    auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
+    if (SuspendRet != nullptr && SuspendRet->getType()->isIntegerTy(1)) {
+      // Veto suspension if requested by bool returning await_suspend.
+      BasicBlock *RealSuspendBlock =
+          CGF.createBasicBlock(Prefix + Twine(".suspend.bool"));
+      CGF.Builder.CreateCondBr(SuspendRet, RealSuspendBlock, ReadyBlock);
+      CGF.EmitBlock(RealSuspendBlock);
+    }
+
+    // Emit the suspend point.
+    const bool IsFinalSuspend = (Kind == AwaitKind::Final);
+    llvm::Function *CoroSuspend =
+        CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
+    auto *SuspendResult = Builder.CreateCall(
+        CoroSuspend, {SaveCall, Builder.getInt1(IsFinalSuspend)});
+
+    // Create a switch capturing three possible continuations.
+    auto *Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
+    Switch->addCase(Builder.getInt8(0), ReadyBlock);
+    Switch->addCase(Builder.getInt8(1), CleanupBlock);
+
+    // Emit cleanup for this suspend point.
+    CGF.EmitBlock(CleanupBlock);
+    CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
+
+    // Emit await_resume expression.
+    CGF.EmitBlock(ReadyBlock);
   }
-
-  // Emit the suspend point.
-  const bool IsFinalSuspend = (Kind == AwaitKind::Final);
-  llvm::Function *CoroSuspend =
-      CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
-  auto *SuspendResult = Builder.CreateCall(
-      CoroSuspend, {SaveCall, Builder.getInt1(IsFinalSuspend)});
-
-  // Create a switch capturing three possible continuations.
-  auto *Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
-  Switch->addCase(Builder.getInt8(0), ReadyBlock);
-  Switch->addCase(Builder.getInt8(1), CleanupBlock);
-
-  // Emit cleanup for this suspend point.
-  CGF.EmitBlock(CleanupBlock);
-  CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
-
-  // Emit await_resume expression.
-  CGF.EmitBlock(ReadyBlock);
 
   // Exception handling requires additional IR. If the 'await_resume' function
   // is marked as 'noexcept', we avoid generating this additional IR.
