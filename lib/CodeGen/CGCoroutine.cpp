@@ -382,7 +382,7 @@ namespace {
 // For WinEH exception representation backend needs to know what funclet coro.end
 // belongs to. That information is passed in a funclet bundle.
 static SmallVector<llvm::OperandBundleDef, 1>
-getBundlesForCoroEnd(CodeGenFunction &CGF) {
+getBundlesForWinEH(CodeGenFunction &CGF) {
   SmallVector<llvm::OperandBundleDef, 1> BundleList;
 
   if (llvm::Instruction *EHPad = CGF.CurrentFuncletPad)
@@ -392,16 +392,17 @@ getBundlesForCoroEnd(CodeGenFunction &CGF) {
 }
 
 namespace {
-// We will insert coro.end to cut any of the destructors for objects that
+// We will insert coro.eh.suspend to cut any of the destructors for objects that
 // do not need to be destroyed once the coroutine is resumed.
 // See llvm/docs/Coroutines.rst for more details about coro.end.
 struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
   void Emit(CodeGenFunction &CGF, Flags flags) override {
-    auto &CGM = CGF.CGM; // xxx
+    auto &CGM = CGF.CGM;
     auto *None = llvm::ConstantTokenNone::get(CGM.getLLVMContext());
-    llvm::Function *CoroSuspendEhFn = CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
-    // See if we have a funclet bundle to associate coro.end with. (WinEH)
-    auto Bundles = getBundlesForCoroEnd(CGF);
+    llvm::Function *CoroSuspendEhFn =
+        CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
+    // See if we have a funclet bundle to associate the intrinscs with.
+    auto Bundles = getBundlesForWinEH(CGF);
     auto *CoroSuspendEh =
         CGF.Builder.CreateCall(CoroSuspendEhFn, {None}, Bundles);
     if (Bundles.empty()) {
@@ -426,7 +427,7 @@ struct CallCoroEnd final : public EHScopeStack::Cleanup {
     auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
     llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
     // See if we have a funclet bundle to associate coro.end with. (WinEH)
-    auto Bundles = getBundlesForCoroEnd(CGF);
+    auto Bundles = getBundlesForWinEH(CGF);
     auto *CoroEnd = CGF.Builder.CreateCall(
         CoroEndFn, {NullPtr, CGF.Builder.getTrue()}, Bundles);
     if (Bundles.empty()) {
