@@ -77,6 +77,10 @@ struct clang::CodeGen::CGCoroData {
   // to wrap dealloc code with if(auto mem = coro.free) dealloc(mem).
   llvm::CallInst *LastCoroFree = nullptr;
 
+  // Stores the last emitted coro.save, we use it to connect to coro.eh.suspend
+  // which is emitted a bit later;
+  llvm::CallInst *LastCoroSave = nullptr;
+
   // If coro.id came from the builtin, remember the expression to give better
   // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
   // EmitCoroutineBody.
@@ -395,16 +399,38 @@ namespace {
 // We will insert coro.eh.suspend to cut any of the destructors for objects that
 // do not need to be destroyed once the coroutine is resumed.
 // See llvm/docs/Coroutines.rst for more details about coro.end.
+struct CallCoroSave final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    auto &CGM = CGF.CGM;
+    llvm::Function *CoroSaveFn =
+        CGM.getIntrinsic(llvm::Intrinsic::coro_save);
+    // See if we have a funclet bundle to associate the intrinscs with.
+    auto Bundles = getBundlesForWinEH(CGF);
+    auto *CoroSave = CGF.Builder.CreateCall(CoroSaveFn, {CGF.CurCoro.Data->CoroBegin}, Bundles);
+    CGF.CurCoro.Data->LastCoroSave = CoroSave;
+  }
+};
+} // namespace
+
+namespace {
+// We will insert coro.eh.suspend to cut any of the destructors for objects that
+// do not need to be destroyed once the coroutine is resumed.
+// See llvm/docs/Coroutines.rst for more details about coro.end.
 struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
   void Emit(CodeGenFunction &CGF, Flags flags) override {
     auto &CGM = CGF.CGM;
-    auto *None = llvm::ConstantTokenNone::get(CGM.getLLVMContext());
+    // We should have captured coro.save earlier.
+    auto *CoroSave = CGF.CurCoro.Data->LastCoroSave;
+    if (!CoroSave) {
+      CGF.CGM.Error(SourceLocation{}, "Missing coro.save");
+      return;
+    }
     llvm::Function *CoroSuspendEhFn =
         CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
     // See if we have a funclet bundle to associate the intrinscs with.
     auto Bundles = getBundlesForWinEH(CGF);
     auto *CoroSuspendEh =
-        CGF.Builder.CreateCall(CoroSuspendEhFn, {None}, Bundles);
+        CGF.Builder.CreateCall(CoroSuspendEhFn, {CoroSave}, Bundles);
     if (Bundles.empty()) {
       // Otherwise, (landingpad model), create a conditional branch that leads
       // either to a cleanup block or a block with EH resume instruction.
@@ -471,7 +497,7 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
     auto *CoroFree = CGF.CurCoro.Data->LastCoroFree;
     if (!CoroFree) {
       CGF.CGM.Error(Deallocate->getBeginLoc(),
-                    "Deallocation expressoin does not refer to coro.free");
+                    "Deallocation expression does not refer to coro.free");
       return;
     }
 
@@ -561,6 +587,9 @@ struct GetReturnObjectManager {
 
 static void emitBodyAndFallthrough(CodeGenFunction &CGF,
                                    const CoroutineBodyStmt &S, Stmt *Body) {
+  CodeGenFunction::RunCleanupsScope BodyScope(CGF);
+  CGF.EHStack.pushCleanup<CallCoroSave>(EHCleanup);
+
   CGF.EmitStmt(Body);
   const bool CanFallthrough = CGF.Builder.GetInsertBlock();
   if (CanFallthrough)
@@ -657,8 +686,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // Now we have the promise, initialize the GRO
     GroManager.EmitGroInit();
 
-    EHStack.pushCleanup<CallCoroEhSuspend>(EHCleanup);
-
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     CurCoro.Data->ExceptionHandler = S.getExceptionHandler();
     EmitStmt(S.getInitSuspendStmt());
@@ -666,37 +693,42 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
 
-    if (CurCoro.Data->ExceptionHandler) {
-      // If we generated IR to record whether an exception was thrown from
-      // 'await_resume', then use that IR to determine whether the coroutine
-      // body should be skipped.
-      // If we didn't generate the IR (perhaps because 'await_resume' was marked
-      // as 'noexcept'), then we skip this check.
-      BasicBlock *ContBB = nullptr;
-      if (CurCoro.Data->ResumeEHVar) {
-        BasicBlock *BodyBB = createBasicBlock("coro.resumed.body");
-        ContBB = createBasicBlock("coro.resumed.cont");
-        Value *SkipBody = Builder.CreateFlagLoad(CurCoro.Data->ResumeEHVar,
-                                                 "coro.resumed.eh");
-        Builder.CreateCondBr(SkipBody, ContBB, BodyBB);
-        EmitBlock(BodyBB);
+    {
+      CodeGenFunction::RunCleanupsScope EhSuspendScope(*this);
+      EHStack.pushCleanup<CallCoroEhSuspend>(EHCleanup);
+
+      if (CurCoro.Data->ExceptionHandler) {
+        // If we generated IR to record whether an exception was thrown from
+        // 'await_resume', then use that IR to determine whether the coroutine
+        // body should be skipped.
+        // If we didn't generate the IR (perhaps because 'await_resume' was marked
+        // as 'noexcept'), then we skip this check.
+        BasicBlock *ContBB = nullptr;
+        if (CurCoro.Data->ResumeEHVar) {
+          BasicBlock *BodyBB = createBasicBlock("coro.resumed.body");
+          ContBB = createBasicBlock("coro.resumed.cont");
+          Value *SkipBody = Builder.CreateFlagLoad(CurCoro.Data->ResumeEHVar,
+                                                  "coro.resumed.eh");
+          Builder.CreateCondBr(SkipBody, ContBB, BodyBB);
+          EmitBlock(BodyBB);
+        }
+
+        auto Loc = S.getBeginLoc();
+        CXXCatchStmt Catch(Loc, /*exDecl=*/nullptr,
+                          CurCoro.Data->ExceptionHandler);
+        auto *TryStmt =
+            CXXTryStmt::Create(getContext(), Loc, S.getBody(), &Catch);
+
+        EnterCXXTryStmt(*TryStmt);
+        emitBodyAndFallthrough(*this, S, TryStmt->getTryBlock());
+        ExitCXXTryStmt(*TryStmt);
+
+        if (ContBB)
+          EmitBlock(ContBB);
       }
-
-      auto Loc = S.getBeginLoc();
-      CXXCatchStmt Catch(Loc, /*exDecl=*/nullptr,
-                         CurCoro.Data->ExceptionHandler);
-      auto *TryStmt =
-          CXXTryStmt::Create(getContext(), Loc, S.getBody(), &Catch);
-
-      EnterCXXTryStmt(*TryStmt);
-      emitBodyAndFallthrough(*this, S, TryStmt->getTryBlock());
-      ExitCXXTryStmt(*TryStmt);
-
-      if (ContBB)
-        EmitBlock(ContBB);
-    }
-    else {
-      emitBodyAndFallthrough(*this, S, S.getBody());
+      else {
+        emitBodyAndFallthrough(*this, S, S.getBody());
+      }
     }
 
     // See if we need to generate final suspend.
