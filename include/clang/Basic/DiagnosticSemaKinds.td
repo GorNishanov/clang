@@ -2634,6 +2634,8 @@ def err_field_with_address_space : Error<
   "field may not be qualified with an address space">;
 def err_compound_literal_with_address_space : Error<
   "compound literal in function scope may not be qualified with an address space">;
+def err_address_space_mismatch_templ_inst : Error<
+  "conflicting address space qualifiers are provided between types %0 and %1">;
 def err_attr_objc_ownership_redundant : Error<
   "the type %0 is already explicitly ownership-qualified">;
 def err_invalid_nsnumber_type : Error<
@@ -4806,16 +4808,18 @@ def err_nested_redefinition : Error<"nested redefinition of %0">;
 def err_use_with_wrong_tag : Error<
   "use of %0 with tag type that does not match previous declaration">;
 def warn_struct_class_tag_mismatch : Warning<
-    "%select{struct|interface|class}0%select{| template}1 %2 was previously "
-    "declared as a %select{struct|interface|class}3%select{| template}1">,
-    InGroup<MismatchedTags>, DefaultIgnore;
+  "%select{struct|interface|class}0%select{| template}1 %2 was previously "
+  "declared as a %select{struct|interface|class}3%select{| template}1; "
+  "this is valid, but may result in linker errors under the Microsoft C++ ABI">,
+  InGroup<MismatchedTags>, DefaultIgnore;
 def warn_struct_class_previous_tag_mismatch : Warning<
-    "%2 defined as %select{a struct|an interface|a class}0%select{| template}1 "
-    "here but previously declared as "
-    "%select{a struct|an interface|a class}3%select{| template}1">,
-     InGroup<MismatchedTags>, DefaultIgnore;
+  "%2 defined as %select{a struct|an interface|a class}0%select{| template}1 "
+  "here but previously declared as "
+  "%select{a struct|an interface|a class}3%select{| template}1; "
+  "this is valid, but may result in linker errors under the Microsoft C++ ABI">,
+  InGroup<MismatchedTags>, DefaultIgnore;
 def note_struct_class_suggestion : Note<
-    "did you mean %select{struct|interface|class}0 here?">;
+  "did you mean %select{struct|interface|class}0 here?">;
 def ext_forward_ref_enum : Extension<
   "ISO C forbids forward references to 'enum' types">;
 def err_forward_ref_enum : Error<
