@@ -85,6 +85,10 @@ struct clang::CodeGen::CGCoroData {
   // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
   // EmitCoroutineBody.
   CallExpr const *CoroIdExpr = nullptr;
+
+  // Indicates whether exception can escape the body of the coroutine and thus
+  // we need to insert coro.save and coro.eh.suspend on the unwind edge.
+  bool ExceptionCanEscapeTheCoroutine = true;
 };
 
 // Defining these here allows to keep CGCoroData private to this file.
@@ -140,7 +144,7 @@ static SourceLocation getFnLocation(CodeGenFunction& CGF) {
   return {};
 }
 
-static bool memberCallExpressionCanThrow(const Expr *E) {
+static bool memberCallExpressionCanThrow(const Stmt *E) {
   if (const auto *CE = dyn_cast<CXXMemberCallExpr>(E))
     if (const auto *Proto =
             CE->getMethodDecl()->getType()->getAs<FunctionProtoType>())
@@ -167,6 +171,8 @@ namespace {
 // to make it legal to call coro.destroy() from inside unhandled_exception.
 struct CallCoroSave final : public EHScopeStack::Cleanup {
   void Emit(CodeGenFunction &CGF, Flags flags) override {
+    if (!CGF.CurCoro.Data->ExceptionCanEscapeTheCoroutine)
+      return;
     auto &CGM = CGF.CGM;
     llvm::Function *CoroSaveFn = CGM.getIntrinsic(llvm::Intrinsic::coro_save);
     // See if we have a funclet bundle to associate the intrinscs with.
@@ -188,6 +194,8 @@ namespace {
 // We will insert coro.eh.suspend if unhandled_exception has a throwing edge.
 struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
   void Emit(CodeGenFunction &CGF, Flags flags) override {
+    if (!CGF.CurCoro.Data->ExceptionCanEscapeTheCoroutine)
+      return;
     auto &CGM = CGF.CGM;
     // We should have captured coro.save earlier.
     auto *CoroSave = CGF.CurCoro.Data->LastCoroSave;
@@ -635,6 +643,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
   createCoroData(*this, CurCoro, CoroId);
   CurCoro.Data->SuspendBB = RetBB;
+
+  if (auto *ExceptionHandler = S.getExceptionHandler())
+    CurCoro.Data->ExceptionCanEscapeTheCoroutine =
+        memberCallExpressionCanThrow(ExceptionHandler);
 
   // Backend is allowed to elide memory allocations, to help it, emit
   // auto mem = coro.alloc() ? 0 : ... allocation code ...;

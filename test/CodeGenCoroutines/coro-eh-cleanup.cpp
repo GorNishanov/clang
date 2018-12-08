@@ -51,17 +51,32 @@ coro_t f() {
 // CHECK: [[EHCLEANUP]]:
 // CHECK:   %[[INNERPAD:.+]] = cleanuppad within none []
 // CHECK:   call void @"??1Cleanup@@QEAA@XZ"(
-// CHECK:   cleanupret from %{{.+}} unwind label %[[CATCHDISPATCH:.+]]
+// CHECK:   cleanupret from %{{.+}} unwind label %[[COROSAVEBB:.+]]
+
+// CHECK: [[COROSAVEBB]]:
+// CHECK-NEXT: cleanuppad within none
+// CHECK-NEXT: cleanupret from %{{.+}} unwind label %[[CATCHDISPATCH:.+]]
 
 // CHECK: [[CATCHDISPATCH]]:
-// CHECK:   catchswitch within none [label %[[CATCHPAD:.+]]] unwind label %[[COROENDBB:.+]]
+// CHECK-NEXT: catchswitch within none [label %[[CATCHPAD:.+]]] unwind label %[[COROEHSUS:.+]]
+
 // CHECK: [[CATCHPAD]]:
-// CHECK:   call void @"?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
+// CHECK-NEXT: catchpad within
+// CHECK-NEXT: call void @"?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
+
+// CHECK: [[COROEHSUS]]:
+// CHECK-NEXT: cleanuppad within
+// CHECK-NEXT: cleanupret from %{{.+}} unwind label %[[COROFREEBB:.+]]
+
+// CHECK: [[COROFREEBB]]:
+// CHECK-NEXT: cleanuppad within
+// CHECK-NEXT: call i8* @llvm.coro.free(
+// CHECK: cleanupret from %{{.+}} unwind label %[[COROENDBB:.+]]
 
 // CHECK: [[COROENDBB]]:
 // CHECK-NEXT: %[[CLPAD:.+]] = cleanuppad within none
 // CHECK-NEXT: call i1 @llvm.coro.end(i8* null, i1 true) [ "funclet"(token %[[CLPAD]]) ]
-// CHECK-NEXT: cleanupret from %[[CLPAD]] unwind label
+// CHECK-NEXT: cleanupret from %[[CLPAD]] unwind to caller
 
 // CHECK-LPAD: @_Z1fv(
 // CHECK-LPAD:   invoke void @_Z9may_throwv()
