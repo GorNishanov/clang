@@ -862,6 +862,9 @@ is responsible for freeing it.
 Similiarly, the annotation ``__attribute__((ns_returns_not_retained))``
 specifies that the object is returned at ``+0`` and the ownership remains with
 the callee.
+The annotation ``__attribute__((ns_consumes_self))`` specifies that
+the Objective-C method call consumes the reference to ``self``, e.g. by
+attaching it to a supplied parameter.
 Additionally, parameters can have an annotation
 ``__attribute__((ns_consumed))``, which specifies that passing an owned object
 as that parameter effectively transfers the ownership, and the caller is no
@@ -881,7 +884,11 @@ the same attribute family is present:
 ``__attribute__((os_returns_not_retained))``,
 ``__attribute__((os_returns_retained))`` and ``__attribute__((os_consumed))``,
 with the same respective semantics.
-These attributes are also used by the Clang Static Analyzer.
+Similar to ``__attribute__((ns_consumes_self))``,
+``__attribute__((os_consumes_this))`` specifies that the method call consumes
+the reference to "this" (e.g., when attaching it to a different object supplied
+as a parameter).
+These attributes are only used by the Clang Static Analyzer.
 
 The family of attributes ``X_returns_X_retained`` can be added to functions,
 C++ methods, and Objective-C methods and properties.
@@ -3591,6 +3598,63 @@ function is inlined, the attribute indicates that debuggers should associate
 the resulting instructions with the call site, rather than with the
 corresponding line within the inlined callee.
   }];
+}
+
+def NoDerefDocs : Documentation {
+  let Category = DocCatType;
+  let Content = [{
+The ``noderef`` attribute causes clang to diagnose dereferences of annotated pointer types.
+This is ideally used with pointers that point to special memory which cannot be read
+from or written to, but allowing for the pointer to be used in pointer arithmetic.
+The following are examples of valid expressions where dereferences are diagnosed:
+
+.. code-block:: c
+
+  int __attribute__((noderef)) *p;
+  int x = *p;  // warning
+
+  int __attribute__((noderef)) **p2;
+  x = **p2;  // warning
+
+  int * __attribute__((noderef)) *p3;
+  p = *p3;  // warning
+
+  struct S {
+    int a;
+  };
+  struct S __attribute__((noderef)) *s;
+  x = s->a;    // warning
+  x = (*s).a;  // warning
+
+Not all dereferences may diagnose a warning if the value directed by the pointer may not be
+accessed. The following are examples of valid expressions where may not be diagnosed:
+
+.. code-block:: c
+
+  int *q;
+  int __attribute__((noderef)) *p;
+  q = &*p;
+  q = *&p;
+
+  struct S {
+    int a;
+  };
+  struct S __attribute__((noderef)) *s;
+  p = &s->a;
+  p = &(*s).a;
+
+``noderef`` is currently only supported for pointers and arrays and not usable for
+references or Objective-C object pointers.
+
+.. code-block: c++
+
+  int x = 2;
+  int __attribute__((noderef)) &y = x;  // warning: 'noderef' can only be used on an array or pointer type
+
+.. code-block: objc
+
+  id __attribute__((noderef)) obj = [NSObject new]; // warning: 'noderef' can only be used on an array or pointer type
+}];
 }
 
 def ReinitializesDocs : Documentation {

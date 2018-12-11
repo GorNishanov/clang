@@ -1473,6 +1473,10 @@ def fno_zero_initialized_in_bss : Flag<["-"], "fno-zero-initialized-in-bss">, Gr
 def fobjc_arc : Flag<["-"], "fobjc-arc">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Synthesize retain and release calls for Objective-C pointers">;
 def fno_objc_arc : Flag<["-"], "fno-objc-arc">, Group<f_Group>;
+def fobjc_convert_messages_to_runtime_calls :
+  Flag<["-"], "fobjc-convert-messages-to-runtime-calls">, Group<f_Group>;
+def fno_objc_convert_messages_to_runtime_calls :
+  Flag<["-"], "fno-objc-convert-messages-to-runtime-calls">, Group<f_Group>, Flags<[CC1Option]>;
 def fobjc_arc_exceptions : Flag<["-"], "fobjc-arc-exceptions">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Use EH-safe code when synthesizing retains and releases in -fobjc-arc">;
 def fno_objc_arc_exceptions : Flag<["-"], "fno-objc-arc-exceptions">, Group<f_Group>;
@@ -2708,6 +2712,8 @@ def mv62 : Flag<["-"], "mv62">, Group<m_hexagon_Features_Group>,
   Alias<mcpu_EQ>, AliasArgs<["hexagonv62"]>;
 def mv65 : Flag<["-"], "mv65">, Group<m_hexagon_Features_Group>,
   Alias<mcpu_EQ>, AliasArgs<["hexagonv65"]>;
+def mv66 : Flag<["-"], "mv66">, Group<m_hexagon_Features_Group>,
+  Alias<mcpu_EQ>, AliasArgs<["hexagonv66"]>;
 def mhexagon_hvx : Flag<["-"], "mhvx">, Group<m_hexagon_Features_HVX_Group>,
   HelpText<"Enable Hexagon Vector eXtensions">;
 def mhexagon_hvx_EQ : Joined<["-"], "mhvx=">,

@@ -326,9 +326,11 @@ class CheckVarsEscapingDeclContext final
           const auto *Attr = FD->getAttr<OMPCaptureKindAttr>();
           if (!Attr)
             return;
-          if (!isOpenMPPrivate(
-                  static_cast<OpenMPClauseKind>(Attr->getCaptureKind())) ||
-              Attr->getCaptureKind() == OMPC_map)
+          if (((Attr->getCaptureKind() != OMPC_map) &&
+               !isOpenMPPrivate(
+                   static_cast<OpenMPClauseKind>(Attr->getCaptureKind()))) ||
+              ((Attr->getCaptureKind() == OMPC_map) &&
+               !FD->getType()->isAnyPointerType()))
             return;
         }
         if (!FD->getType()->isReferenceType()) {
@@ -2522,7 +2524,7 @@ void CGOpenMPRuntimeNVPTX::emitNonSPMDParallelCall(
     // passed from the outside of the target region.
     CodeGenFunction::OMPPrivateScope PrivateArgScope(CGF);
 
-    // There's somehting to share.
+    // There's something to share.
     if (!CapturedVars.empty()) {
       // Prepare for parallel region. Indicate the outlined function.
       Address SharedArgs =
