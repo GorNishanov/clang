@@ -68,7 +68,7 @@ coro_t f() {
 
 // CHECK: [[COROEHSUS]]:
 // CHECK-NEXT: cleanuppad within
-// CHECK-NEXT: call i1 @llvm.coro.eh.suspend(token %[[COROSAVE]])
+// CHECK-NEXT: call void @llvm.coro.eh.suspend(token %[[COROSAVE]])
 // CHECK-NEXT: cleanupret from %{{.+}} unwind label %[[COROFREEBB:.+]]
 
 // CHECK: [[COROFREEBB]]:
@@ -93,12 +93,4 @@ coro_t f() {
 // CHECK-LPAD:   invoke void @_ZN6coro_t12promise_type19unhandled_exceptionEv
 // CHECK-LPAD-NEXT:  to label %{{.+}} unwind label
 
-// CHECK-LPAD: %[[EHSUSCOND:.+]] = call i1 @llvm.coro.eh.suspend(token %[[LPCOROSAVE]])
-// CHECK-LPAD-NEXT: br i1 %[[EHSUSCOND]], label %[[EHRESUME:.+]], label
-
-// CHECK-LPAD: [[EHRESUME]]:
-// CHECK-LPAD-NEXT:  %[[exn:.+]] = load i8*, i8** %exn.slot, align 8
-// CHECK-LPAD-NEXT:  %[[sel:.+]] = load i32, i32* %ehselector.slot, align 4
-// CHECK-LPAD-NEXT:  %[[val1:.+]] = insertvalue { i8*, i32 } undef, i8* %[[exn]], 0
-// CHECK-LPAD-NEXT:  %[[val2:.+]] = insertvalue { i8*, i32 } %[[val1]], i32 %[[sel]], 1
-// CHECK-LPAD-NEXT:  resume { i8*, i32 } %[[val2]]
+// CHECK-LPAD: call void @llvm.coro.eh.suspend(token %[[LPCOROSAVE]])

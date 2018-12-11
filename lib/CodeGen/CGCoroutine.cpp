@@ -209,16 +209,7 @@ struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
         CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
     // See if we have a funclet bundle to associate the intrinscs with.
     auto Bundles = getBundlesForWinEH(CGF);
-    auto *CoroSuspendEh =
-        CGF.Builder.CreateCall(CoroSuspendEhFn, {CoroSave}, Bundles);
-    if (Bundles.empty()) {
-      // Otherwise, (landingpad model), create a conditional branch that leads
-      // either to a cleanup block or a block with EH resume instruction.
-      auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
-      auto *CleanupContBB = CGF.createBasicBlock("eh.suspend.cleanup");
-      CGF.Builder.CreateCondBr(CoroSuspendEh, ResumeBB, CleanupContBB);
-      CGF.EmitBlock(CleanupContBB);
-    }
+    CGF.Builder.CreateCall(CoroSuspendEhFn, {CoroSave}, Bundles);
   }
 };
 } // namespace
