@@ -468,6 +468,51 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
 }
 
 namespace {
+class ImplicitSuspendPointEmitter {
+  CodeGenFunction &CGF;
+  const AwaitKind Kind;
+  CGCoroData &CurCoro;
+  llvm::CallInst *SaveCall;
+
+  llvm::CallInst *emitSave() {
+    llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
+    return CGF.Builder.CreateCall(CoroSave, {CurCoro.CoroBegin});
+  }
+
+public:
+  ImplicitSuspendPointEmitter(CodeGenFunction &CGF, AwaitKind Kind)
+      : CGF(CGF), Kind(Kind), CurCoro(*CGF.CurCoro.Data), SaveCall(emitSave()) {
+  }
+  ~ImplicitSuspendPointEmitter() {
+    auto &Builder = CGF.Builder;
+    const bool IsFinalSuspend = (AwaitKind::Final == Kind);
+
+    llvm::Function *CoroSuspend =
+        CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_suspend);
+    auto *SuspendResult = Builder.CreateCall(
+        CoroSuspend, {SaveCall, CGF.Builder.getInt1(IsFinalSuspend)});
+
+   auto Prefix = buildSuspendPrefixStr(CurCoro, Kind);
+   BasicBlock *ReadyBlock = CGF.createBasicBlock(Prefix + Twine(".ready"));
+   BasicBlock *CleanupBlock = CGF.createBasicBlock(Prefix + Twine(".cleanup"));
+
+    CGCoroData &Coro = *CGF.CurCoro.Data;
+    // Create a switch capturing three possible continuations.
+    auto *Switch = Builder.CreateSwitch(SuspendResult, Coro.SuspendBB, 2);
+    Switch->addCase(Builder.getInt8(0), ReadyBlock);
+    Switch->addCase(Builder.getInt8(1), CleanupBlock);
+
+    // Emit cleanup for this suspend point.
+    CGF.EmitBlock(CleanupBlock);
+    CGF.EmitBranchThroughCleanup(Coro.CleanupJD);
+
+    // Emit normal resume block.
+    CGF.EmitBlock(ReadyBlock);
+  }
+};
+} // namespace
+
+namespace {
 struct GetReturnObjectManager {
   CodeGenFunction &CGF;
   CGBuilderTy &Builder;
@@ -520,6 +565,8 @@ struct GetReturnObjectManager {
   }
 
   void EmitGroInit() {
+    ImplicitSuspendPointEmitter RAII(CGF, AwaitKind::Init);
+
     if (!GroActiveFlag.isValid()) {
       // No Gro variable was allocated. Simply emit the call to
       // get_return_object.
@@ -558,6 +605,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
   createCoroData(*this, CurCoro, CoroId);
   CurCoro.Data->SuspendBB = RetBB;
+
+  const bool v2 = isa<CXXNullPtrLiteralExpr>(S.getInitSuspendStmt());
 
   // Backend is allowed to elide memory allocations, to help it, emit
   // auto mem = coro.alloc() ? 0 : ... allocation code ...;
@@ -677,7 +726,16 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     if (CanFallthrough || HasCoreturns) {
       EmitBlock(FinalBB);
       CurCoro.Data->CurrentAwaitKind = AwaitKind::Final;
-      EmitStmt(S.getFinalSuspendStmt());
+      if (v2) {
+        ImplicitSuspendPointEmitter RAII(*this, AwaitKind::Final);
+        auto *NextCoro = EmitScalarExpr(S.getFinalSuspendStmt());
+        llvm::Function *CoroResume =
+            CGM.getIntrinsic(llvm::Intrinsic::coro_resume);
+        Builder.CreateCall(CoroResume, {NextCoro});
+      }
+      else {
+        EmitStmt(S.getFinalSuspendStmt());
+      }
     } else {
       // We don't need FinalBB. Emit it to make sure the block is deleted.
       EmitBlock(FinalBB, /*IsFinished=*/true);

@@ -658,17 +658,28 @@ bool Sema::ActOnCoroutineBodyStart(Scope *SC, SourceLocation KWLoc,
   };
 
   ExprResult InitSuspend;
+  ExprResult FinalSuspend;
 
-  //auto *PromiseRecordDecl =
-  //    ScopeInfo->CoroutinePromise->getType()->getAsCXXRecordDecl();
-
-  //if (lookupMember(*this, "initial_suspend", PromiseRecordDecl, Loc)) {
-    InitSuspend = buildSuspends("initial_suspend");
-    if (InitSuspend.isInvalid())
+  if (getLangOpts().CoroutinesTS2) {
+    // Put a placeholder for initial_suspend.
+    InitSuspend = ActOnCXXNullPtrLiteral(Loc);
+ 
+    FinalSuspend =
+        buildPromiseCall(*this, ScopeInfo->CoroutinePromise, Loc, "final_suspend", None);
+    if (FinalSuspend.isInvalid())
       return true;
-  //}
+    
+    FinalSuspend = buildMemberCall(*this, FinalSuspend.get(), Loc, "address", None);
+    if (FinalSuspend.isInvalid())
+      return true;
+    FinalSuspend = ActOnFinishFullExpr(FinalSuspend.get());
+  } else {
+    InitSuspend = buildSuspends("initial_suspend");
+    FinalSuspend = buildSuspends("final_suspend");
+  }
 
-  ExprResult FinalSuspend = buildSuspends("final_suspend");
+  if (InitSuspend.isInvalid())
+    return true;
   if (FinalSuspend.isInvalid())
     return true;
 
