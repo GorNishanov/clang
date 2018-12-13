@@ -675,11 +675,11 @@ bool Sema::ActOnCoroutineBodyStart(Scope *SC, SourceLocation KWLoc,
     FinalSuspend = ActOnFinishFullExpr(FinalSuspend.get());
   } else {
     InitSuspend = buildSuspends("initial_suspend");
+    if (InitSuspend.isInvalid())
+      return true;
     FinalSuspend = buildSuspends("final_suspend");
   }
 
-  if (InitSuspend.isInvalid())
-    return true;
   if (FinalSuspend.isInvalid())
     return true;
 
