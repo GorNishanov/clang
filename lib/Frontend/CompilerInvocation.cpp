@@ -2578,7 +2578,9 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.Blocks = Args.hasArg(OPT_fblocks) || (Opts.OpenCL
     && Opts.OpenCLVersion == 200);
   Opts.BlocksRuntimeOptional = Args.hasArg(OPT_fblocks_runtime_optional);
-  Opts.CoroutinesTS = Args.hasArg(OPT_fcoroutines_ts);
+  Opts.CoroutinesTS =
+      Args.hasArg(OPT_fcoroutines_ts) || Args.hasArg(OPT_fcoroutines_ts2);
+  Opts.CoroutinesTS2 = Args.hasArg(OPT_fcoroutines_ts2);
 
   // Enable [[]] attributes in C++11 by default.
   Opts.DoubleSquareBracketAttributes =

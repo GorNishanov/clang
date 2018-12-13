@@ -673,6 +673,11 @@ def fcoroutines_ts : Flag <["-"], "fcoroutines-ts">, Group<f_Group>,
   HelpText<"Enable support for the C++ Coroutines TS">;
 def fno_coroutines_ts : Flag <["-"], "fno-coroutines-ts">, Group<f_Group>,
   Flags<[DriverOption]>;
+def fcoroutines_ts2 : Flag <["-"], "fcoroutines-ts2">, Group<f_Group>,
+  Flags<[DriverOption,CC1Option]>,
+  HelpText<"Like -fcoroutines_ts2 but uses alterative init and final suspend">;
+def fno_coroutines_ts2 : Flag <["-"], "fno-coroutines-ts2">, Group<f_Group>,
+  Flags<[DriverOption]>;
 
 def fembed_bitcode_EQ : Joined<["-"], "fembed-bitcode=">,
     Group<f_Group>, Flags<[DriverOption, CC1Option, CC1AsOption]>, MetaVarName<"<option>">,
