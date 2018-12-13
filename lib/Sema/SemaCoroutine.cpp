@@ -637,14 +637,14 @@ bool Sema::ActOnCoroutineBodyStart(Scope *SC, SourceLocation KWLoc,
   auto *Fn = cast<FunctionDecl>(CurContext);
   SourceLocation Loc = Fn->getLocation();
   // Build the initial suspend point
-  auto buildSuspends = [&](StringRef Name) mutable -> StmtResult {
+  auto buildSuspends = [&](StringRef Name) mutable -> ExprResult {
     ExprResult Suspend =
         buildPromiseCall(*this, ScopeInfo->CoroutinePromise, Loc, Name, None);
     if (Suspend.isInvalid())
-      return StmtError();
+      return ExprError();
     Suspend = buildOperatorCoawaitCall(*this, SC, Loc, Suspend.get());
     if (Suspend.isInvalid())
-      return StmtError();
+      return ExprError();
     Suspend = BuildResolvedCoawaitExpr(Loc, Suspend.get(),
                                        /*IsImplicit*/ true);
     Suspend = ActOnFinishFullExpr(Suspend.get());
@@ -652,16 +652,23 @@ bool Sema::ActOnCoroutineBodyStart(Scope *SC, SourceLocation KWLoc,
       Diag(Loc, diag::note_coroutine_promise_suspend_implicitly_required)
           << ((Name == "initial_suspend") ? 0 : 1);
       Diag(KWLoc, diag::note_declared_coroutine_here) << Keyword;
-      return StmtError();
+      return ExprError();
     }
-    return cast<Stmt>(Suspend.get());
+    return Suspend.get();
   };
 
-  StmtResult InitSuspend = buildSuspends("initial_suspend");
-  if (InitSuspend.isInvalid())
-    return true;
+  ExprResult InitSuspend;
 
-  StmtResult FinalSuspend = buildSuspends("final_suspend");
+  //auto *PromiseRecordDecl =
+  //    ScopeInfo->CoroutinePromise->getType()->getAsCXXRecordDecl();
+
+  //if (lookupMember(*this, "initial_suspend", PromiseRecordDecl, Loc)) {
+    InitSuspend = buildSuspends("initial_suspend");
+    if (InitSuspend.isInvalid())
+      return true;
+  //}
+
+  ExprResult FinalSuspend = buildSuspends("final_suspend");
   if (FinalSuspend.isInvalid())
     return true;
 

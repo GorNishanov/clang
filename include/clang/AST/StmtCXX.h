@@ -371,11 +371,11 @@ public:
     return cast<VarDecl>(cast<DeclStmt>(getPromiseDeclStmt())->getSingleDecl());
   }
 
-  Stmt *getInitSuspendStmt() const {
-    return getStoredStmts()[SubStmt::InitSuspend];
+  Expr *getInitSuspendStmt() const {
+    return cast<Expr>(getStoredStmts()[SubStmt::InitSuspend]);
   }
-  Stmt *getFinalSuspendStmt() const {
-    return getStoredStmts()[SubStmt::FinalSuspend];
+  Expr *getFinalSuspendStmt() const {
+    return cast<Expr>(getStoredStmts()[SubStmt::FinalSuspend]);
   }
 
   Stmt *getExceptionHandler() const {

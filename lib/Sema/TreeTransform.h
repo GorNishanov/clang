@@ -7036,11 +7036,11 @@ TreeTransform<Derived>::TransformCoroutineBodyStmt(CoroutineBodyStmt *S) {
 
   // Transform the implicit coroutine statements we built during the initial
   // parse.
-  StmtResult InitSuspend = getDerived().TransformStmt(S->getInitSuspendStmt());
+  ExprResult InitSuspend = getDerived().TransformExpr(S->getInitSuspendStmt());
   if (InitSuspend.isInvalid())
     return StmtError();
-  StmtResult FinalSuspend =
-      getDerived().TransformStmt(S->getFinalSuspendStmt());
+  ExprResult FinalSuspend =
+      getDerived().TransformExpr(S->getFinalSuspendStmt());
   if (FinalSuspend.isInvalid())
     return StmtError();
   ScopeInfo->setCoroutineSuspends(InitSuspend.get(), FinalSuspend.get());
