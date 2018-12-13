@@ -77,10 +77,18 @@ struct clang::CodeGen::CGCoroData {
   // to wrap dealloc code with if(auto mem = coro.free) dealloc(mem).
   llvm::CallInst *LastCoroFree = nullptr;
 
+  // Stores the last emitted coro.save, we use it to connect to coro.eh.suspend
+  // which is emitted a bit later;
+  llvm::CallInst *LastCoroSave = nullptr;
+
   // If coro.id came from the builtin, remember the expression to give better
   // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
   // EmitCoroutineBody.
   CallExpr const *CoroIdExpr = nullptr;
+
+  // Indicates whether exception can escape the body of the coroutine and thus
+  // we need to insert coro.save and coro.eh.suspend on the unwind edge.
+  bool ExceptionCanEscapeTheCoroutine = true;
 };
 
 // Defining these here allows to keep CGCoroData private to this file.
@@ -128,6 +136,12 @@ static SmallString<32> buildSuspendPrefixStr(CGCoroData &Coro, AwaitKind Kind) {
     Twine(No).toVector(Prefix);
   }
   return Prefix;
+}
+
+static SourceLocation getFnLocation(CodeGenFunction& CGF) {
+  if (auto *FD = CGF.CurCodeDecl)
+    return FD->getLocation();
+  return {};
 }
 
 static bool memberCallExpressionCanThrow(const Expr *E) {
@@ -382,7 +396,7 @@ namespace {
 // For WinEH exception representation backend needs to know what funclet coro.end
 // belongs to. That information is passed in a funclet bundle.
 static SmallVector<llvm::OperandBundleDef, 1>
-getBundlesForCoroEnd(CodeGenFunction &CGF) {
+getBundlesForWinEH(CodeGenFunction &CGF) {
   SmallVector<llvm::OperandBundleDef, 1> BundleList;
 
   if (llvm::Instruction *EHPad = CGF.CurrentFuncletPad)
@@ -401,7 +415,7 @@ struct CallCoroEnd final : public EHScopeStack::Cleanup {
     auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
     llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
     // See if we have a funclet bundle to associate coro.end with. (WinEH)
-    auto Bundles = getBundlesForCoroEnd(CGF);
+    auto Bundles = getBundlesForWinEH(CGF);
     auto *CoroEnd = CGF.Builder.CreateCall(
         CoroEndFn, {NullPtr, CGF.Builder.getTrue()}, Bundles);
     if (Bundles.empty()) {
@@ -475,6 +489,9 @@ class ImplicitSuspendPointEmitter {
   llvm::CallInst *SaveCall;
 
   llvm::CallInst *emitSave() {
+    if (!CGF.getLangOpts().CoroutinesTS2)
+      return nullptr;
+
     llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
     return CGF.Builder.CreateCall(CoroSave, {CurCoro.CoroBegin});
   }
@@ -484,6 +501,9 @@ public:
       : CGF(CGF), Kind(Kind), CurCoro(*CGF.CurCoro.Data), SaveCall(emitSave()) {
   }
   ~ImplicitSuspendPointEmitter() {
+    if (!SaveCall)
+      return;
+
     auto &Builder = CGF.Builder;
     const bool IsFinalSuspend = (AwaitKind::Final == Kind);
 
@@ -580,6 +600,54 @@ struct GetReturnObjectManager {
 };
 }
 
+namespace {
+// We will insert coro.save if exception leaves the body of the coroutine,
+// to make it legal to call coro.destroy() from inside unhandled_exception.
+struct CallCoroSave final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    if (!CGF.CurCoro.Data->ExceptionCanEscapeTheCoroutine)
+      return;
+    auto &CGM = CGF.CGM;
+    llvm::Function *CoroSaveFn = CGM.getIntrinsic(llvm::Intrinsic::coro_save);
+    // See if we have a funclet bundle to associate the intrinscs with.
+    auto Bundles = getBundlesForWinEH(CGF);
+    auto *CoroSave = CGF.Builder.CreateCall(
+        CoroSaveFn, {CGF.CurCoro.Data->CoroBegin}, Bundles);
+
+    if (CGF.CurCoro.Data->LastCoroSave) {
+      CGF.CGM.Error(getFnLocation(CGF), "Intrinsic coro.save was not consumed");
+      return;
+    }
+
+    CGF.CurCoro.Data->LastCoroSave = CoroSave;
+  }
+};
+} // namespace
+
+namespace {
+// We will insert coro.eh.suspend if unhandled_exception has a throwing edge.
+struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    if (!CGF.CurCoro.Data->ExceptionCanEscapeTheCoroutine)
+      return;
+    auto &CGM = CGF.CGM;
+    // We should have captured coro.save earlier.
+    auto *CoroSave = CGF.CurCoro.Data->LastCoroSave;
+    if (!CoroSave) {
+      CGF.CGM.Error(getFnLocation(CGF), "Missing coro.save");
+      return;
+    }
+    CGF.CurCoro.Data->LastCoroSave = nullptr; // We consumed it.
+
+    llvm::Function *CoroSuspendEhFn =
+        CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
+    // See if we have a funclet bundle to associate the intrinscs with.
+    auto Bundles = getBundlesForWinEH(CGF);
+    CGF.Builder.CreateCall(CoroSuspendEhFn, {CoroSave}, Bundles);
+  }
+};
+} // namespace
+
 static void emitBodyAndFallthrough(CodeGenFunction &CGF,
                                    const CoroutineBodyStmt &S, Stmt *Body) {
   CGF.EmitStmt(Body);
@@ -606,7 +674,11 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   createCoroData(*this, CurCoro, CoroId);
   CurCoro.Data->SuspendBB = RetBB;
 
-  const bool v2 = isa<CXXNullPtrLiteralExpr>(S.getInitSuspendStmt());
+  const bool v2 = getLangOpts().CoroutinesTS2;
+
+  if (auto *ExceptionHandler = S.getExceptionHandler())
+    CurCoro.Data->ExceptionCanEscapeTheCoroutine =
+        v2 && memberCallExpressionCanThrow(cast<Expr>(ExceptionHandler));
 
   // Backend is allowed to elide memory allocations, to help it, emit
   // auto mem = coro.alloc() ? 0 : ... allocation code ...;
