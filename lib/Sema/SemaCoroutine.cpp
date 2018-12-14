@@ -1341,6 +1341,16 @@ bool CoroutineStmtBuilder::makeOnFallthrough() {
   return true;
 }
 
+static bool memberCallExpressionCanThrow(const Expr *E) {
+  if (const auto *CE = dyn_cast<CXXMemberCallExpr>(E))
+    if (const auto *Proto =
+            CE->getMethodDecl()->getType()->getAs<FunctionProtoType>())
+      if (isNoexceptExceptionSpec(Proto->getExceptionSpecType()) &&
+          Proto->canThrow() == CT_Cannot)
+        return false;
+  return true;
+}
+
 bool CoroutineStmtBuilder::makeOnException() {
   // Try to form 'p.unhandled_exception();'
   assert(!IsPromiseDependentType &&
@@ -1379,7 +1389,8 @@ bool CoroutineStmtBuilder::makeOnException() {
     return false;
   }
 
-  if (S.getLangOpts().CoroutinesTS2) {
+  if (S.getLangOpts().CoroutinesTS2 &&
+      memberCallExpressionCanThrow(UnhandledException.get())) {
     Expr *FramePtr =
       buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_eh_save, {});
 

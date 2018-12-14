@@ -134,12 +134,6 @@ static SmallString<32> buildSuspendPrefixStr(CGCoroData &Coro, AwaitKind Kind) {
   return Prefix;
 }
 
-static SourceLocation getFnLocation(CodeGenFunction& CGF) {
-  if (auto *FD = CGF.CurCodeDecl)
-    return FD->getLocation();
-  return {};
-}
-
 static bool memberCallExpressionCanThrow(const Expr *E) {
   if (const auto *CE = dyn_cast<CXXMemberCallExpr>(E))
     if (const auto *Proto =
