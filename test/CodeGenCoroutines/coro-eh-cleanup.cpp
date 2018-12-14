@@ -54,13 +54,9 @@ coro_t f() {
 // CHECK:   cleanupret from %{{.+}} unwind label %[[CATCHDISPATCH:.+]]
 
 // CHECK: [[CATCHDISPATCH]]:
-// CHECK:   catchswitch within none [label %[[CATCHPAD:.+]]] unwind label %[[COROEHBB:.+]]
+// CHECK:   catchswitch within none [label %[[CATCHPAD:.+]]] unwind label %[[COROENDBB:.+]]
 // CHECK: [[CATCHPAD]]:
 // CHECK:   call void @"?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
-
-// CHECK: [[COROEHBB]]:
-// CHECK-NEXT: cleanuppad within none []
-// CHECK-NEXT: cleanupret from %{{.+}} unwind label %[[COROENDBB:.+]]
 
 // CHECK: [[COROENDBB]]:
 // CHECK-NEXT: %[[CLPAD:.+]] = cleanuppad within none

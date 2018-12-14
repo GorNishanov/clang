@@ -77,10 +77,6 @@ struct clang::CodeGen::CGCoroData {
   // to wrap dealloc code with if(auto mem = coro.free) dealloc(mem).
   llvm::CallInst *LastCoroFree = nullptr;
 
-  // Stores the last emitted coro.save, we use it to connect to coro.eh.suspend
-  // which is emitted a bit later;
-  llvm::CallInst *LastCoroSave = nullptr;
-
   // If coro.id came from the builtin, remember the expression to give better
   // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
   // EmitCoroutineBody.
@@ -599,7 +595,7 @@ struct GetReturnObjectManager {
   }
 };
 }
-
+#if 0
 namespace {
 // We will insert coro.save if exception leaves the body of the coroutine,
 // to make it legal to call coro.destroy() from inside unhandled_exception.
@@ -623,7 +619,8 @@ struct CallCoroSave final : public EHScopeStack::Cleanup {
   }
 };
 } // namespace
-
+#endif
+#if 0
 namespace {
 // We will insert coro.eh.suspend if unhandled_exception has a throwing edge.
 struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
@@ -632,12 +629,12 @@ struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
       return;
     auto &CGM = CGF.CGM;
     // We should have captured coro.save earlier.
-    auto *CoroSave = CGF.CurCoro.Data->LastCoroSave;
+    auto *CoroSave = CGF.CurCoro.Data->LastCoroEhSave;
     if (!CoroSave) {
       CGF.CGM.Error(getFnLocation(CGF), "Missing coro.save");
       return;
     }
-    CGF.CurCoro.Data->LastCoroSave = nullptr; // We consumed it.
+    CGF.CurCoro.Data->LastCoroEhSave = nullptr; // We consumed it.
 
     llvm::Function *CoroSuspendEhFn =
         CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
@@ -655,11 +652,12 @@ struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
   }
 };
 } // namespace
+#endif
 
 static void emitBodyAndFallthrough(CodeGenFunction &CGF,
                                    const CoroutineBodyStmt &S, Stmt *Body) {
-  CodeGenFunction::RunCleanupsScope CoroSave(CGF);
-  CGF.EHStack.pushCleanup<CallCoroSave>(EHCleanup);
+  //CodeGenFunction::RunCleanupsScope CoroSave(CGF);
+  //CGF.EHStack.pushCleanup<CallCoroSave>(EHCleanup);
 
   CGF.EmitStmt(Body);
   const bool CanFallthrough = CGF.Builder.GetInsertBlock();
@@ -688,8 +686,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   const bool v2 = getLangOpts().CoroutinesTS2;
 
   if (auto *ExceptionHandler = S.getExceptionHandler())
-    CurCoro.Data->ExceptionCanEscapeTheCoroutine =
-        v2 && memberCallExpressionCanThrow(cast<Expr>(ExceptionHandler));
+    CurCoro.Data->ExceptionCanEscapeTheCoroutine = v2;
+//        v2 && memberCallExpressionCanThrow(cast<Expr>(ExceptionHandler));
 
   // Backend is allowed to elide memory allocations, to help it, emit
   // auto mem = coro.alloc() ? 0 : ... allocation code ...;
@@ -761,8 +759,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // Now we have the promise, initialize the GRO
     GroManager.EmitGroInit();
 
-    EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
-
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     CurCoro.Data->ExceptionHandler = S.getExceptionHandler();
     EmitStmt(S.getInitSuspendStmt());
@@ -772,7 +768,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     {
       CodeGenFunction::RunCleanupsScope CoroEhScope(*this);
-      EHStack.pushCleanup<CallCoroEhSuspend>(EHCleanup);
+      EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
+
       if (CurCoro.Data->ExceptionHandler) {
         // If we generated IR to record whether an exception was thrown from
         // 'await_resume', then use that IR to determine whether the coroutine
@@ -857,6 +854,17 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
     auto NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
     return RValue::get(NullPtr);
   }
+  case llvm::Intrinsic::coro_eh_save: {
+    if (CurCoro.Data && CurCoro.Data->CoroBegin) {
+      Args.push_back(CurCoro.Data->CoroBegin);
+      break;
+    }
+    Args.push_back(llvm::ConstantPointerNull::get(Builder.getInt8PtrTy()));
+    CGM.Error(E->getBeginLoc(),
+              "this builtin expect that __builtin_coro_begin has"
+              " been used earlier in this function");
+    break;
+  }
   // The following three intrinsics take a token parameter referring to a token
   // returned by earlier call to @llvm.coro.id. Since we cannot represent it in
   // builtins, we patch it up here.
@@ -901,5 +909,6 @@ RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,
     if (CurCoro.Data)
       CurCoro.Data->LastCoroFree = Call;
   }
+
   return RValue::get(Call);
 }

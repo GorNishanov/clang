@@ -663,12 +663,12 @@ bool Sema::ActOnCoroutineBodyStart(Scope *SC, SourceLocation KWLoc,
   if (getLangOpts().CoroutinesTS2) {
     // Put a placeholder for initial_suspend.
     InitSuspend = ActOnCXXNullPtrLiteral(Loc);
- 
+
     FinalSuspend =
         buildPromiseCall(*this, ScopeInfo->CoroutinePromise, Loc, "final_suspend", None);
     if (FinalSuspend.isInvalid())
       return true;
-    
+
     FinalSuspend = buildMemberCall(*this, FinalSuspend.get(), Loc, "address", None);
     if (FinalSuspend.isInvalid())
       return true;
@@ -1377,6 +1377,20 @@ bool CoroutineStmtBuilder::makeOnException() {
     S.Diag(Fn.FirstCoroutineStmtLoc, diag::note_declared_coroutine_here)
         << Fn.getFirstCoroutineStmtKeyword();
     return false;
+  }
+
+  if (S.getLangOpts().CoroutinesTS2) {
+    Expr *FramePtr =
+      buildBuiltinCall(S, Loc, Builtin::BI__builtin_coro_eh_save, {});
+
+    Expr *DummyNull = S.ActOnCXXNullPtrLiteral(Loc).get();
+    DummyNull =
+        S.ImpCastExprToType(DummyNull, S.Context.VoidTy, CK_ToVoid).get();
+
+    UnhandledException = S.ActOnConditionalOp(Loc, Loc, FramePtr, DummyNull,
+                                              UnhandledException.get());
+    if (UnhandledException.isInvalid())
+      return false;
   }
 
   this->OnException = UnhandledException.get();

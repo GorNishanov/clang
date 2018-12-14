@@ -46,27 +46,25 @@ coro_t f() {
 }
 
 // CHECK: @"?f@@YA?AUcoro_t@@XZ"(
+// CHECK: %[[COROBEG:.+]] = call i8* @llvm.coro.begin(
 // CHECK:   invoke void @"?may_throw@@YAXXZ"()
 // CHECK:       to label %[[CONT:.+]] unwind label %[[EHCLEANUP:.+]]
 // CHECK: [[EHCLEANUP]]:
 // CHECK:   %[[INNERPAD:.+]] = cleanuppad within none []
 // CHECK:   call void @"??1Cleanup@@QEAA@XZ"(
-// CHECK:   cleanupret from %{{.+}} unwind label %[[COROSAVEBB:.+]]
-
-// CHECK: [[COROSAVEBB]]:
-// CHECK-NEXT: cleanuppad within none []
-// CHECK-NEXT: %[[COROSAVETOK:.+]] = call token @llvm.coro.save(
-// CHECK-NEXT: cleanupret from %{{.+}} unwind label %[[CATCHDISPATCH:.+]]
+// CHECK:   cleanupret from %{{.+}} unwind label %[[CATCHDISPATCH:.+]]
 
 // CHECK: [[CATCHDISPATCH]]:
-// CHECK:   catchswitch within none [label %[[CATCHPAD:.+]]] unwind label %[[COROEHBB:.+]]
-// CHECK: [[CATCHPAD]]:
-// CHECK:   invoke void @"?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
+// CHECK:   catchswitch within none [label %[[CATCHPAD:.+]]] unwind label %{{.+}}
 
-// CHECK: [[COROEHBB]]:
-// CHECK-NEXT: cleanuppad within none []
-// CHECK-NEXT: call i1 @llvm.coro.eh.suspend(token %[[COROSAVETOK]])
-// CHECK-NEXT: cleanupret from %{{.+}} unwind label %[[COROENDBB:.+]]
+// CHECK: [[CATCHPAD]]:
+// CHECK-NEXT: catchpad within
+// CHECK-NEXT: %[[COROEHSAVE:.+]] = call i1 @llvm.coro.eh.save(i8* %[[COROBEG]])
+// CHECK-NEXT: br i1 %[[COROEHSAVE]], label %{{.+}}, label %[[UNHANDLEDEH:.+]]
+
+// CHECK: [[UNHANDLEDEH]]:
+// CHECK-NEXT: invoke void @"?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
+// CHECK-NEXT:   to label %{{.+}} unwind label %[[COROENDBB:.+]]
 
 // CHECK: [[COROENDBB]]:
 // CHECK-NEXT: %[[CLPAD:.+]] = cleanuppad within none
@@ -75,14 +73,13 @@ coro_t f() {
 
 // CHECK-LPAD: @_Z1fv(
 // CHECK-LPAD:   invoke void @_Z9may_throwv()
-// CHECK-LPAD:       to label %[[CONT:.+]] unwind label %[[EHCLEANUP:.+]]
+// CHECK-LPAD:       to label %{{.+}} unwind label %[[EHCLEANUP:.+]]
 // CHECK-LPAD: [[EHCLEANUP]]:
-// CHECK-LPAD:    landingpad { i8*, i32 }
-// CHECK-LPAD:          catch
+// CHECK-LPAD-NEXT:    landingpad { i8*, i32 }
+// CHECK-LPAD-NEXT:          catch
 // CHECK-LPAD:   call void @_ZN7CleanupD1Ev(
-// CHECK-LPAD-NEXT:   call token @llvm.coro.save(
-
 // CHECK-LPAD:   call i8* @__cxa_begin_catch
+// CHECK-LPAD:   call i1 @llvm.coro.eh.save(
 // CHECK-LPAD:   invoke void @_ZN6coro_t12promise_type19unhandled_exceptionEv
 // CHECK-LPAD:      to label %{{.+}} unwind label %[[ENDCATCHBB:.+]]
 
@@ -94,12 +91,8 @@ coro_t f() {
 // CHECK-LPAD-NEXT: br label %[[LPADCLEANUP:.+]]
 
 // CHECK-LPAD: [[LPADCLEANUP]]:
-// CHECK-LPAD-NEXT:  %[[COND1:.+]] = call i1 @llvm.coro.eh.suspend(token
-// CHECK-LPAD-NEXT:  br i1 %[[COND1]], label %[[EHRES:.+]], label %[[CONT:.+]]
-
-// CHECK-LPAD: [[CONT]]:
 // CHECK-LPAD-NEXT:  %[[COND2:.+]] = call i1 @llvm.coro.end(i8* null, i1 true)
-// CHECK-LPAD-NEXT:  br i1 %[[COND2]], label %[[EHRES]], label %{{.+}}
+// CHECK-LPAD-NEXT:  br i1 %[[COND2]], label %[[EHRES:.+]], label %{{.+}}
 
 // CHECK-LPAD: [[EHRES]]:
 // CHECK-LPAD-NEXT:  %[[exn:.+]] = load i8*, i8** %exn.slot, align 8

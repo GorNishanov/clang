@@ -3306,6 +3306,8 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
     return EmitCoroutineIntrinsic(E, Intrinsic::coro_suspend);
   case Builtin::BI__builtin_coro_param:
     return EmitCoroutineIntrinsic(E, Intrinsic::coro_param);
+  case Builtin::BI__builtin_coro_eh_save:
+    return EmitCoroutineIntrinsic(E, Intrinsic::coro_eh_save);
 
   // OpenCL v2.0 s6.13.16.2, Built-in pipe read and write functions
   case Builtin::BIread_pipe:
