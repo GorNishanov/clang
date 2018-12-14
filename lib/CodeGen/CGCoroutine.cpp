@@ -643,13 +643,24 @@ struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
         CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
     // See if we have a funclet bundle to associate the intrinscs with.
     auto Bundles = getBundlesForWinEH(CGF);
-    CGF.Builder.CreateCall(CoroSuspendEhFn, {CoroSave}, Bundles);
+    auto *Call = CGF.Builder.CreateCall(CoroSuspendEhFn, {CoroSave}, Bundles);
+    if (Bundles.empty()) {
+      // Otherwise, (landingpad model), create a conditional branch that leads
+      // either to a cleanup block or a block with EH resume instruction.
+      auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
+      auto *CleanupContBB = CGF.createBasicBlock("eh.suspend.cont");
+      CGF.Builder.CreateCondBr(Call, ResumeBB, CleanupContBB);
+      CGF.EmitBlock(CleanupContBB);
+    }
   }
 };
 } // namespace
 
 static void emitBodyAndFallthrough(CodeGenFunction &CGF,
                                    const CoroutineBodyStmt &S, Stmt *Body) {
+  CodeGenFunction::RunCleanupsScope CoroSave(CGF);
+  CGF.EHStack.pushCleanup<CallCoroSave>(EHCleanup);
+
   CGF.EmitStmt(Body);
   const bool CanFallthrough = CGF.Builder.GetInsertBlock();
   if (CanFallthrough)
@@ -759,37 +770,41 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
 
-    if (CurCoro.Data->ExceptionHandler) {
-      // If we generated IR to record whether an exception was thrown from
-      // 'await_resume', then use that IR to determine whether the coroutine
-      // body should be skipped.
-      // If we didn't generate the IR (perhaps because 'await_resume' was marked
-      // as 'noexcept'), then we skip this check.
-      BasicBlock *ContBB = nullptr;
-      if (CurCoro.Data->ResumeEHVar) {
-        BasicBlock *BodyBB = createBasicBlock("coro.resumed.body");
-        ContBB = createBasicBlock("coro.resumed.cont");
-        Value *SkipBody = Builder.CreateFlagLoad(CurCoro.Data->ResumeEHVar,
-                                                 "coro.resumed.eh");
-        Builder.CreateCondBr(SkipBody, ContBB, BodyBB);
-        EmitBlock(BodyBB);
+    {
+      CodeGenFunction::RunCleanupsScope CoroEhScope(*this);
+      EHStack.pushCleanup<CallCoroEhSuspend>(EHCleanup);
+      if (CurCoro.Data->ExceptionHandler) {
+        // If we generated IR to record whether an exception was thrown from
+        // 'await_resume', then use that IR to determine whether the coroutine
+        // body should be skipped.
+        // If we didn't generate the IR (perhaps because 'await_resume' was marked
+        // as 'noexcept'), then we skip this check.
+        BasicBlock *ContBB = nullptr;
+        if (CurCoro.Data->ResumeEHVar) {
+          BasicBlock *BodyBB = createBasicBlock("coro.resumed.body");
+          ContBB = createBasicBlock("coro.resumed.cont");
+          Value *SkipBody = Builder.CreateFlagLoad(CurCoro.Data->ResumeEHVar,
+                                                  "coro.resumed.eh");
+          Builder.CreateCondBr(SkipBody, ContBB, BodyBB);
+          EmitBlock(BodyBB);
+        }
+
+        auto Loc = S.getBeginLoc();
+        CXXCatchStmt Catch(Loc, /*exDecl=*/nullptr,
+                          CurCoro.Data->ExceptionHandler);
+        auto *TryStmt =
+            CXXTryStmt::Create(getContext(), Loc, S.getBody(), &Catch);
+
+        EnterCXXTryStmt(*TryStmt);
+        emitBodyAndFallthrough(*this, S, TryStmt->getTryBlock());
+        ExitCXXTryStmt(*TryStmt);
+
+        if (ContBB)
+          EmitBlock(ContBB);
       }
-
-      auto Loc = S.getBeginLoc();
-      CXXCatchStmt Catch(Loc, /*exDecl=*/nullptr,
-                         CurCoro.Data->ExceptionHandler);
-      auto *TryStmt =
-          CXXTryStmt::Create(getContext(), Loc, S.getBody(), &Catch);
-
-      EnterCXXTryStmt(*TryStmt);
-      emitBodyAndFallthrough(*this, S, TryStmt->getTryBlock());
-      ExitCXXTryStmt(*TryStmt);
-
-      if (ContBB)
-        EmitBlock(ContBB);
-    }
-    else {
-      emitBodyAndFallthrough(*this, S, S.getBody());
+      else {
+        emitBodyAndFallthrough(*this, S, S.getBody());
+      }
     }
 
     // See if we need to generate final suspend.
