@@ -29,7 +29,7 @@ struct suspend_always {
 
 struct coro_t {
   struct promise_type {
-    coro_t get_return_object() noexcept;
+    coro_t get_return_object(std::experimental::coroutine_handle<promise_type>) noexcept;
     std::experimental::coroutine_handle<> final_suspend() noexcept;
     void return_void() noexcept;
     void unhandled_exception();

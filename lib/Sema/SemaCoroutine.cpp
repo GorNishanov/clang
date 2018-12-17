@@ -1006,8 +1006,7 @@ CoroutineStmtBuilder::CoroutineStmtBuilder(Sema &S, FunctionDecl &FD,
 
 bool CoroutineStmtBuilder::buildStatements() {
   assert(this->IsValid && "coroutine already invalid");
-  this->IsValid = makeReturnObject();
-  if (this->IsValid && !IsPromiseDependentType)
+  if (!IsPromiseDependentType)
     buildDependentStatements();
   return this->IsValid;
 }
@@ -1016,9 +1015,9 @@ bool CoroutineStmtBuilder::buildDependentStatements() {
   assert(this->IsValid && "coroutine already invalid");
   assert(!this->IsPromiseDependentType &&
          "coroutine cannot have a dependent promise type");
-  this->IsValid = makeOnException() && makeOnFallthrough() &&
-                  makeGroDeclAndReturnStmt() && makeReturnOnAllocFailure() &&
-                  makeNewAndDeleteExpr();
+  this->IsValid = makeReturnObject() && makeOnException() &&
+                  makeOnFallthrough() && makeGroDeclAndReturnStmt() &&
+                  makeReturnOnAllocFailure() && makeNewAndDeleteExpr();
   return this->IsValid;
 }
 
@@ -1411,8 +1410,18 @@ bool CoroutineStmtBuilder::makeOnException() {
 bool CoroutineStmtBuilder::makeReturnObject() {
   // Build implicit 'p.get_return_object()' expression and form initialization
   // of return type from it.
+
+  SmallVector<Expr*, 1> Args;
+  if (S.getLangOpts().CoroutinesTS2) {
+    ExprResult CoroHandleRes =
+        buildCoroutineHandle(S, Fn.CoroutinePromise->getType(), Loc);
+    if (CoroHandleRes.isInvalid())
+      return false;
+    Args.push_back(CoroHandleRes.get());
+  }
+
   ExprResult ReturnObject =
-      buildPromiseCall(S, Fn.CoroutinePromise, Loc, "get_return_object", None);
+      buildPromiseCall(S, Fn.CoroutinePromise, Loc, "get_return_object", Args);
   if (ReturnObject.isInvalid())
     return false;
 

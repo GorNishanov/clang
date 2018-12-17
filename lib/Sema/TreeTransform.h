@@ -7054,14 +7054,6 @@ TreeTransform<Derived>::TransformCoroutineBodyStmt(CoroutineBodyStmt *S) {
   if (Builder.isInvalid())
     return StmtError();
 
-  Expr *ReturnObject = S->getReturnValueInit();
-  assert(ReturnObject && "the return object is expected to be valid");
-  ExprResult Res = getDerived().TransformInitializer(ReturnObject,
-                                                     /*NoCopyInit*/ false);
-  if (Res.isInvalid())
-    return StmtError();
-  Builder.ReturnValue = Res.get();
-
   if (S->hasDependentPromiseType()) {
     assert(!Promise->getType()->isDependentType() &&
            "the promise type must no longer be dependent");
@@ -7091,6 +7083,14 @@ TreeTransform<Derived>::TransformCoroutineBodyStmt(CoroutineBodyStmt *S) {
         return StmtError();
       Builder.ReturnStmtOnAllocFailure = Res.get();
     }
+
+    Expr *ReturnObject = S->getReturnValueInit();
+    assert(ReturnObject && "the return object is expected to be valid");
+    ExprResult Res = getDerived().TransformInitializer(ReturnObject,
+                                                       /*NoCopyInit*/ false);
+    if (Res.isInvalid())
+      return StmtError();
+    Builder.ReturnValue = Res.get();
 
     // Transform any additional statements we may have already built
     assert(S->getAllocate() && S->getDeallocate() &&
