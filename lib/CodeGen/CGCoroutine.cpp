@@ -44,6 +44,9 @@ struct clang::CodeGen::CGCoroData {
   // A branch to this block is emitted when coroutine needs to suspend.
   llvm::BasicBlock *SuspendBB = nullptr;
 
+  // A branch to this block is emitted when coroutine needs to suspend.
+  llvm::BlockAddress *FinalEhBBAddr = nullptr;
+
   // The promise type's 'unhandled_exception' handler, if it defines one.
   Stmt *ExceptionHandler = nullptr;
 
@@ -392,6 +395,21 @@ getBundlesForCoroEnd(CodeGenFunction &CGF) {
 }
 
 namespace {
+// We will insert coro.eh.save.
+struct CallCoroEhSave final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    auto &CGM = CGF.CGM;
+    //auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
+    auto *Arg = CGF.CurCoro.Data->FinalEhBBAddr;
+    llvm::Function *CoroEhSaveFn = CGM.getIntrinsic(llvm::Intrinsic::coro_eh_save);
+    // See if we have a funclet bundle to associate coro.end with. (WinEH)
+    auto Bundles = getBundlesForCoroEnd(CGF);
+    CGF.Builder.CreateCall(CoroEhSaveFn, {Arg}, Bundles);
+  }
+};
+}
+
+namespace {
 // We will insert coro.end to cut any of the destructors for objects that
 // do not need to be destroyed once the coroutine is resumed.
 // See llvm/docs/Coroutines.rst for more details about coro.end.
@@ -535,6 +553,9 @@ struct GetReturnObjectManager {
 
 static void emitBodyAndFallthrough(CodeGenFunction &CGF,
                                    const CoroutineBodyStmt &S, Stmt *Body) {
+  CodeGenFunction::RunCleanupsScope BodyScope(CGF);
+  CGF.EHStack.pushCleanup<CallCoroEhSave>(EHCleanup);
+
   CGF.EmitStmt(Body);
   const bool CanFallthrough = CGF.Builder.GetInsertBlock();
   if (CanFallthrough)
@@ -551,6 +572,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *AllocBB = createBasicBlock("coro.alloc");
   auto *InitBB = createBasicBlock("coro.init");
   auto *FinalBB = createBasicBlock("coro.final");
+  auto *FinalEhBB = createBasicBlock("coro.final.eh.save");
   auto *RetBB = createBasicBlock("coro.ret");
 
   auto *CoroId = Builder.CreateCall(
@@ -558,6 +580,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
   createCoroData(*this, CurCoro, CoroId);
   CurCoro.Data->SuspendBB = RetBB;
+  CurCoro.Data->FinalEhBBAddr = llvm::BlockAddress::get(CurFn, FinalEhBB);
 
   // Backend is allowed to elide memory allocations, to help it, emit
   // auto mem = coro.alloc() ? 0 : ... allocation code ...;
@@ -683,6 +706,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       EmitBlock(FinalBB, /*IsFinished=*/true);
     }
   }
+
+  EmitBlock(FinalEhBB);
 
   EmitBlock(RetBB);
   // Emit coro.end before getReturnStmt (and parameter destructors), since
