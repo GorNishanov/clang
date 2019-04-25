@@ -76,10 +76,18 @@ struct clang::CodeGen::CGCoroData {
   // to wrap dealloc code with if(auto mem = coro.free) dealloc(mem).
   llvm::CallInst *LastCoroFree = nullptr;
 
+  // Stores the last emitted coro.save, we use it to connect to coro.eh.suspend
+  // which is emitted a bit later;
+  llvm::CallInst *LastCoroSave = nullptr;
+
   // If coro.id came from the builtin, remember the expression to give better
   // diagnostic. If CoroIdExpr is nullptr, the coro.id was created by
   // EmitCoroutineBody.
   CallExpr const *CoroIdExpr = nullptr;
+
+  // Indicates whether exception can escape the body of the coroutine and thus
+  // we need to insert coro.save and coro.eh.suspend on the unwind edge.
+  bool ExceptionCanEscapeTheCoroutine = true;
 };
 
 // Defining these here allows to keep CGCoroData private to this file.
@@ -129,7 +137,13 @@ static SmallString<32> buildSuspendPrefixStr(CGCoroData &Coro, AwaitKind Kind) {
   return Prefix;
 }
 
-static bool memberCallExpressionCanThrow(const Expr *E) {
+static SourceLocation getFnLocation(CodeGenFunction& CGF) {
+  if (auto *FD = CGF.CurCodeDecl)
+    return FD->getLocation();
+  return {};
+}
+
+static bool memberCallExpressionCanThrow(const Stmt *E) {
   if (const auto *CE = dyn_cast<CXXMemberCallExpr>(E))
     if (const auto *Proto =
             CE->getMethodDecl()->getType()->getAs<FunctionProtoType>())
@@ -138,6 +152,66 @@ static bool memberCallExpressionCanThrow(const Expr *E) {
         return false;
   return true;
 }
+
+// For WinEH exception representation backend needs to know what funclet coro.end
+// belongs to. That information is passed in a funclet bundle.
+static SmallVector<llvm::OperandBundleDef, 1>
+getBundlesForWinEH(CodeGenFunction &CGF) {
+  SmallVector<llvm::OperandBundleDef, 1> BundleList;
+
+  if (llvm::Instruction *EHPad = CGF.CurrentFuncletPad)
+    BundleList.emplace_back("funclet", EHPad);
+
+  return BundleList;
+}
+
+namespace {
+// We will insert coro.save if exception leaves the body of the coroutine,
+// to make it legal to call coro.destroy() from inside unhandled_exception.
+struct CallCoroSave final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    if (!CGF.CurCoro.Data->ExceptionCanEscapeTheCoroutine)
+      return;
+    auto &CGM = CGF.CGM;
+    llvm::Function *CoroSaveFn = CGM.getIntrinsic(llvm::Intrinsic::coro_save);
+    // See if we have a funclet bundle to associate the intrinscs with.
+    auto Bundles = getBundlesForWinEH(CGF);
+    auto *CoroSave = CGF.Builder.CreateCall(
+        CoroSaveFn, {CGF.CurCoro.Data->CoroBegin}, Bundles);
+
+    if (CGF.CurCoro.Data->LastCoroSave) {
+      CGF.CGM.Error(getFnLocation(CGF), "Intrinsic coro.save was not consumed");
+      return;
+    }
+
+    CGF.CurCoro.Data->LastCoroSave = CoroSave;
+  }
+};
+} // namespace
+
+namespace {
+// We will insert coro.eh.suspend if unhandled_exception has a throwing edge.
+struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    if (!CGF.CurCoro.Data->ExceptionCanEscapeTheCoroutine)
+      return;
+    auto &CGM = CGF.CGM;
+    // We should have captured coro.save earlier.
+    auto *CoroSave = CGF.CurCoro.Data->LastCoroSave;
+    if (!CoroSave) {
+      CGF.CGM.Error(getFnLocation(CGF), "Missing coro.save");
+      return;
+    }
+    CGF.CurCoro.Data->LastCoroSave = nullptr; // We consumed it.
+    
+    llvm::Function *CoroSuspendEhFn =
+        CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
+    // See if we have a funclet bundle to associate the intrinscs with.
+    auto Bundles = getBundlesForWinEH(CGF);
+    CGF.Builder.CreateCall(CoroSuspendEhFn, {CoroSave}, Bundles);
+  }
+};
+} // namespace
 
 // Emit suspend expression which roughly looks like:
 //
@@ -195,8 +269,7 @@ static LValueOrRValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Co
 
   auto &Builder = CGF.Builder;
   llvm::Function *CoroSave = CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_save);
-  auto *NullPtr = llvm::ConstantPointerNull::get(CGF.CGM.Int8PtrTy);
-  auto *SaveCall = Builder.CreateCall(CoroSave, {NullPtr});
+  auto *SaveCall = Builder.CreateCall(CoroSave, {CGF.CurCoro.Data->CoroBegin});
 
   auto *SuspendRet = CGF.EmitScalarExpr(S.getSuspendExpr());
   if (SuspendRet != nullptr && SuspendRet->getType()->isIntegerTy(1)) {
@@ -227,11 +300,23 @@ static LValueOrRValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Co
   // Emit await_resume expression.
   CGF.EmitBlock(ReadyBlock);
 
+  LValueOrRValue Res;
+  auto EmitResumeExpr = [&] {
+    if (forLValue)
+      Res.LV = CGF.EmitLValue(S.getResumeExpr());
+    else
+      Res.RV = CGF.EmitAnyExpr(S.getResumeExpr(), aggSlot, ignoreResult);
+  };
+
   // Exception handling requires additional IR. If the 'await_resume' function
   // is marked as 'noexcept', we avoid generating this additional IR.
-  CXXTryStmt *TryStmt = nullptr;
   if (Coro.ExceptionHandler && Kind == AwaitKind::Init &&
       memberCallExpressionCanThrow(S.getResumeExpr())) {
+    
+    // Make sure to add a call to coro.eh.suspend on unwind edge.
+    CodeGenFunction::RunCleanupsScope EhSuspendScope(CGF);
+    CGF.EHStack.pushCleanup<CallCoroEhSuspend>(EHCleanup);
+
     Coro.ResumeEHVar =
         CGF.CreateTempAlloca(Builder.getInt1Ty(), Prefix + Twine("resume.eh"));
     Builder.CreateFlagStore(true, Coro.ResumeEHVar);
@@ -241,20 +326,20 @@ static LValueOrRValue emitSuspendExpression(CodeGenFunction &CGF, CGCoroData &Co
         CXXCatchStmt(Loc, /*exDecl=*/nullptr, Coro.ExceptionHandler);
     auto *TryBody =
         CompoundStmt::Create(CGF.getContext(), S.getResumeExpr(), Loc, Loc);
-    TryStmt = CXXTryStmt::Create(CGF.getContext(), Loc, TryBody, Catch);
+    CXXTryStmt *TryStmt = CXXTryStmt::Create(CGF.getContext(), Loc, TryBody, Catch);
     CGF.EnterCXXTryStmt(*TryStmt);
-  }
+    {
+      // Make sure we call coro.save on unwind edge.
+      CodeGenFunction::RunCleanupsScope CoroSaveScope(CGF);
+      CGF.EHStack.pushCleanup<CallCoroSave>(EHCleanup);
 
-  LValueOrRValue Res;
-  if (forLValue)
-    Res.LV = CGF.EmitLValue(S.getResumeExpr());
-  else
-    Res.RV = CGF.EmitAnyExpr(S.getResumeExpr(), aggSlot, ignoreResult);
-
-  if (TryStmt) {
-    Builder.CreateFlagStore(false, Coro.ResumeEHVar);
+      EmitResumeExpr();
+      Builder.CreateFlagStore(false, Coro.ResumeEHVar);
+    }
     CGF.ExitCXXTryStmt(*TryStmt);
   }
+  else
+    EmitResumeExpr();
 
   return Res;
 }
@@ -285,7 +370,6 @@ void CodeGenFunction::EmitCoreturnStmt(CoreturnStmt const &S) {
   EmitStmt(S.getPromiseCall());
   EmitBranchThroughCleanup(CurCoro.Data->FinalJD);
 }
-
 
 #ifndef NDEBUG
 static QualType getCoroutineSuspendExprReturnType(const ASTContext &Ctx,
@@ -378,18 +462,6 @@ namespace {
   };
 }
 
-// For WinEH exception representation backend needs to know what funclet coro.end
-// belongs to. That information is passed in a funclet bundle.
-static SmallVector<llvm::OperandBundleDef, 1>
-getBundlesForCoroEnd(CodeGenFunction &CGF) {
-  SmallVector<llvm::OperandBundleDef, 1> BundleList;
-
-  if (llvm::Instruction *EHPad = CGF.CurrentFuncletPad)
-    BundleList.emplace_back("funclet", EHPad);
-
-  return BundleList;
-}
-
 namespace {
 // We will insert coro.end to cut any of the destructors for objects that
 // do not need to be destroyed once the coroutine is resumed.
@@ -400,7 +472,7 @@ struct CallCoroEnd final : public EHScopeStack::Cleanup {
     auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
     llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
     // See if we have a funclet bundle to associate coro.end with. (WinEH)
-    auto Bundles = getBundlesForCoroEnd(CGF);
+    auto Bundles = getBundlesForWinEH(CGF);
     auto *CoroEnd = CGF.Builder.CreateCall(
         CoroEndFn, {NullPtr, CGF.Builder.getTrue()}, Bundles);
     if (Bundles.empty()) {
@@ -444,7 +516,7 @@ struct CallCoroDelete final : public EHScopeStack::Cleanup {
     auto *CoroFree = CGF.CurCoro.Data->LastCoroFree;
     if (!CoroFree) {
       CGF.CGM.Error(Deallocate->getBeginLoc(),
-                    "Deallocation expressoin does not refer to coro.free");
+                    "Deallocation expression does not refer to coro.free");
       return;
     }
 
@@ -534,6 +606,9 @@ struct GetReturnObjectManager {
 
 static void emitBodyAndFallthrough(CodeGenFunction &CGF,
                                    const CoroutineBodyStmt &S, Stmt *Body) {
+  CodeGenFunction::RunCleanupsScope BodyScope(CGF);
+  CGF.EHStack.pushCleanup<CallCoroSave>(EHCleanup);
+
   CGF.EmitStmt(Body);
   const bool CanFallthrough = CGF.Builder.GetInsertBlock();
   if (CanFallthrough)
@@ -557,6 +632,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
       {Builder.getInt32(NewAlign), NullPtr, NullPtr, NullPtr});
   createCoroData(*this, CurCoro, CoroId);
   CurCoro.Data->SuspendBB = RetBB;
+
+  if (auto *ExceptionHandler = S.getExceptionHandler())
+    CurCoro.Data->ExceptionCanEscapeTheCoroutine =
+        memberCallExpressionCanThrow(ExceptionHandler);
 
   // Backend is allowed to elide memory allocations, to help it, emit
   // auto mem = coro.alloc() ? 0 : ... allocation code ...;
@@ -599,6 +678,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   GetReturnObjectManager GroManager(*this, S);
   GroManager.EmitGroAlloca();
 
+  EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
+
   CurCoro.Data->CleanupJD = getJumpDestInCurrentScope(RetBB);
   {
     ParamReferenceReplacerRAII ParamReplacer(LocalDeclMap);
@@ -628,8 +709,6 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // Now we have the promise, initialize the GRO
     GroManager.EmitGroInit();
 
-    EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
-
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     CurCoro.Data->ExceptionHandler = S.getExceptionHandler();
     EmitStmt(S.getInitSuspendStmt());
@@ -637,37 +716,42 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Normal;
 
-    if (CurCoro.Data->ExceptionHandler) {
-      // If we generated IR to record whether an exception was thrown from
-      // 'await_resume', then use that IR to determine whether the coroutine
-      // body should be skipped.
-      // If we didn't generate the IR (perhaps because 'await_resume' was marked
-      // as 'noexcept'), then we skip this check.
-      BasicBlock *ContBB = nullptr;
-      if (CurCoro.Data->ResumeEHVar) {
-        BasicBlock *BodyBB = createBasicBlock("coro.resumed.body");
-        ContBB = createBasicBlock("coro.resumed.cont");
-        Value *SkipBody = Builder.CreateFlagLoad(CurCoro.Data->ResumeEHVar,
-                                                 "coro.resumed.eh");
-        Builder.CreateCondBr(SkipBody, ContBB, BodyBB);
-        EmitBlock(BodyBB);
+    {
+      CodeGenFunction::RunCleanupsScope EhSuspendScope(*this);
+      EHStack.pushCleanup<CallCoroEhSuspend>(EHCleanup);
+
+      if (CurCoro.Data->ExceptionHandler) {
+        // If we generated IR to record whether an exception was thrown from
+        // 'await_resume', then use that IR to determine whether the coroutine
+        // body should be skipped.
+        // If we didn't generate the IR (perhaps because 'await_resume' was marked
+        // as 'noexcept'), then we skip this check.
+        BasicBlock *ContBB = nullptr;
+        if (CurCoro.Data->ResumeEHVar) {
+          BasicBlock *BodyBB = createBasicBlock("coro.resumed.body");
+          ContBB = createBasicBlock("coro.resumed.cont");
+          Value *SkipBody = Builder.CreateFlagLoad(CurCoro.Data->ResumeEHVar,
+                                                  "coro.resumed.eh");
+          Builder.CreateCondBr(SkipBody, ContBB, BodyBB);
+          EmitBlock(BodyBB);
+        }
+
+        auto Loc = S.getBeginLoc();
+        CXXCatchStmt Catch(Loc, /*exDecl=*/nullptr,
+                          CurCoro.Data->ExceptionHandler);
+        auto *TryStmt =
+            CXXTryStmt::Create(getContext(), Loc, S.getBody(), &Catch);
+
+        EnterCXXTryStmt(*TryStmt);
+        emitBodyAndFallthrough(*this, S, TryStmt->getTryBlock());
+        ExitCXXTryStmt(*TryStmt);
+
+        if (ContBB)
+          EmitBlock(ContBB);
       }
-
-      auto Loc = S.getBeginLoc();
-      CXXCatchStmt Catch(Loc, /*exDecl=*/nullptr,
-                         CurCoro.Data->ExceptionHandler);
-      auto *TryStmt =
-          CXXTryStmt::Create(getContext(), Loc, S.getBody(), &Catch);
-
-      EnterCXXTryStmt(*TryStmt);
-      emitBodyAndFallthrough(*this, S, TryStmt->getTryBlock());
-      ExitCXXTryStmt(*TryStmt);
-
-      if (ContBB)
-        EmitBlock(ContBB);
-    }
-    else {
-      emitBodyAndFallthrough(*this, S, S.getBody());
+      else {
+        emitBodyAndFallthrough(*this, S, S.getBody());
+      }
     }
 
     // See if we need to generate final suspend.
@@ -691,7 +775,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
 
   if (Stmt *Ret = S.getReturnStmt())
     EmitStmt(Ret);
-}
+  }
 
 // Emit coroutine intrinsic and patch up arguments of the token type.
 RValue CodeGenFunction::EmitCoroutineIntrinsic(const CallExpr *E,

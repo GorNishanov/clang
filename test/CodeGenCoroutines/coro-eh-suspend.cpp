@@ -32,7 +32,7 @@ struct coro_t {
     suspend_always initial_suspend() noexcept;
     suspend_always final_suspend() noexcept;
     void return_void() noexcept;
-    void unhandled_exception() noexcept;
+    void unhandled_exception();
   };
 };
 
@@ -55,6 +55,7 @@ coro_t f() {
 
 // CHECK: [[COROSAVEBB]]:
 // CHECK-NEXT: cleanuppad within none
+// CHECK-NEXT: %[[COROSAVE:.+]] = call token @llvm.coro.save(i8*
 // CHECK-NEXT: cleanupret from %{{.+}} unwind label %[[CATCHDISPATCH:.+]]
 
 // CHECK: [[CATCHDISPATCH]]:
@@ -62,10 +63,12 @@ coro_t f() {
 
 // CHECK: [[CATCHPAD]]:
 // CHECK-NEXT: catchpad within
-// CHECK-NEXT: call void @"?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
+// CHECK-NEXT: invoke void @"?unhandled_exception@promise_type@coro_t@@QEAAXXZ"
+// CHECK-NEXT:    to label %{{.+}} unwind label %[[COROEHSUS:.+]]
 
 // CHECK: [[COROEHSUS]]:
 // CHECK-NEXT: cleanuppad within
+// CHECK-NEXT: call void @llvm.coro.eh.suspend(token %[[COROSAVE]])
 // CHECK-NEXT: cleanupret from %{{.+}} unwind label %[[COROFREEBB:.+]]
 
 // CHECK: [[COROFREEBB]]:
@@ -85,17 +88,9 @@ coro_t f() {
 // CHECK-LPAD:    landingpad { i8*, i32 }
 // CHECK-LPAD:          catch
 // CHECK-LPAD:   call void @_ZN7CleanupD1Ev(
+// CHECK-LPAD:   %[[LPCOROSAVE:.+]] = call token @llvm.coro.save(i8*
 // CHECK-LPAD:   call i8* @__cxa_begin_catch
-// CHECK-LPAD:   call void @_ZN6coro_t12promise_type19unhandled_exceptionEv
-// CHECK-LPAD:   invoke void @__cxa_end_catch()
-// CHECK-LPAD:             to label %{{.+}} unwind label %[[UNWINDBB:.+]]
+// CHECK-LPAD:   invoke void @_ZN6coro_t12promise_type19unhandled_exceptionEv
+// CHECK-LPAD-NEXT:  to label %{{.+}} unwind label
 
-// CHECK-LPAD: [[UNWINDBB]]:
-// CHECK-LPAD:   %[[I1RESUME:.+]] = call i1 @llvm.coro.end(i8* null, i1 true)
-// CHECK-LPAD:   br i1  %[[I1RESUME]], label %[[EHRESUME:.+]], label
-// CHECK-LPAD: [[EHRESUME]]:
-// CHECK-LPAD-NEXT:  %[[exn:.+]] = load i8*, i8** %exn.slot, align 8
-// CHECK-LPAD-NEXT:  %[[sel:.+]] = load i32, i32* %ehselector.slot, align 4
-// CHECK-LPAD-NEXT:  %[[val1:.+]] = insertvalue { i8*, i32 } undef, i8* %[[exn]], 0
-// CHECK-LPAD-NEXT:  %[[val2:.+]] = insertvalue { i8*, i32 } %[[val1]], i32 %[[sel]], 1
-// CHECK-LPAD-NEXT:  resume { i8*, i32 } %[[val2]]
+// CHECK-LPAD: call void @llvm.coro.eh.suspend(token %[[LPCOROSAVE]])
