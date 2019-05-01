@@ -1364,6 +1364,7 @@ bool CoroutineStmtBuilder::makeOnException() {
   const bool RequireUnhandledException = S.getLangOpts().CXXExceptions;
 
   if (!lookupMember(S, "unhandled_exception", PromiseRecordDecl, Loc)) {
+#if 0
     auto DiagID =
         RequireUnhandledException
             ? diag::err_coroutine_promise_unhandled_exception_required
@@ -1373,6 +1374,14 @@ bool CoroutineStmtBuilder::makeOnException() {
     S.Diag(PromiseRecordDecl->getLocation(), diag::note_defined_here)
         << PromiseRecordDecl;
     return !RequireUnhandledException;
+#else
+    auto DiagID = diag::
+        warn_coroutine_promise_unhandled_exception_required_with_exceptions;
+    S.Diag(Loc, DiagID) << PromiseRecordDecl;
+    S.Diag(PromiseRecordDecl->getLocation(), diag::note_defined_here)
+        << PromiseRecordDecl;
+    return true;
+#endif
   }
 
   // If exceptions are disabled, don't try to build OnException.

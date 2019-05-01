@@ -399,6 +399,11 @@ struct CallCoroEnd final : public EHScopeStack::Cleanup {
     auto &CGM = CGF.CGM;
     auto *NullPtr = llvm::ConstantPointerNull::get(CGF.Int8PtrTy);
     llvm::Function *CoroEndFn = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
+    if (flags.isForNormalCleanup()) {
+      CGF.Builder.CreateCall(CoroEndFn, {NullPtr, CGF.Builder.getFalse()});
+      return;
+    }
+
     // See if we have a funclet bundle to associate coro.end with. (WinEH)
     auto Bundles = getBundlesForCoroEnd(CGF);
     auto *CoroEnd = CGF.Builder.CreateCall(
@@ -541,6 +546,16 @@ static void emitBodyAndFallthrough(CodeGenFunction &CGF,
       CGF.EmitStmt(OnFallthrough);
 }
 
+static void emitInitResume(CodeGenFunction &CGF, CGCoroData &Coro) {
+// Emit coro.init.resume()
+  llvm::Function *CoroInitResFn =
+        CGF.CGM.getIntrinsic(llvm::Intrinsic::coro_init_resume);
+  auto *Cond = CGF.EmitCallOrInvoke(CoroInitResFn, {Coro.CoroBegin});
+  auto *InitResContBB = CGF.createBasicBlock("init.res.cont");
+  CGF.Builder.CreateCondBr(Cond, InitResContBB, Coro.SuspendBB);
+  CGF.EmitBlock(InitResContBB);
+}
+
 void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   auto *NullPtr = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
   auto &TI = CGM.getContext().getTargetInfo();
@@ -628,6 +643,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // Now we have the promise, initialize the GRO
     GroManager.EmitGroInit();
 
+    emitInitResume(*this, *CurCoro.Data);
     EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
@@ -686,9 +702,10 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   EmitBlock(RetBB);
   // Emit coro.end before getReturnStmt (and parameter destructors), since
   // resume and destroy parts of the coroutine should not include them.
+#if 1
   llvm::Function *CoroEnd = CGM.getIntrinsic(llvm::Intrinsic::coro_end);
   Builder.CreateCall(CoroEnd, {NullPtr, Builder.getFalse()});
-
+#endif
   if (Stmt *Ret = S.getReturnStmt())
     EmitStmt(Ret);
 }
