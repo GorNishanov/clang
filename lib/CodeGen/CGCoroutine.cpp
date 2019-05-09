@@ -378,6 +378,7 @@ namespace {
   };
 }
 
+// TODO: Fix name. Also would be use to add EhSuspend
 // For WinEH exception representation backend needs to know what funclet coro.end
 // belongs to. That information is passed in a funclet bundle.
 static SmallVector<llvm::OperandBundleDef, 1>
@@ -389,6 +390,31 @@ getBundlesForCoroEnd(CodeGenFunction &CGF) {
 
   return BundleList;
 }
+
+namespace {
+// We will insert coro.eh.suspend
+// TODO: fix comment
+// See llvm/docs/Coroutines.rst for more details about coro.end.
+struct CallCoroEhSuspend final : public EHScopeStack::Cleanup {
+  void Emit(CodeGenFunction &CGF, Flags flags) override {
+    auto &CGM = CGF.CGM; // xxx
+    auto *None = llvm::ConstantTokenNone::get(CGM.getLLVMContext());
+    llvm::Function *CoroSuspendEhFn = CGM.getIntrinsic(llvm::Intrinsic::coro_eh_suspend);
+    // See if we have a funclet bundle to associate coro.end with. (WinEH)
+    auto Bundles = getBundlesForCoroEnd(CGF);
+    auto *CoroSuspendEh =
+        CGF.Builder.CreateCall(CoroSuspendEhFn, {None}, Bundles);
+    if (Bundles.empty()) {
+      // Otherwise, (landingpad model), create a conditional branch that leads
+      // either to a cleanup block or a block with EH resume instruction.
+      auto *ResumeBB = CGF.getEHResumeBlock(/*cleanup=*/true);
+      auto *CleanupContBB = CGF.createBasicBlock("eh.suspend.cleanup");
+      CGF.Builder.CreateCondBr(CoroSuspendEh, ResumeBB, CleanupContBB);
+      CGF.EmitBlock(CleanupContBB);
+    }
+  }
+};
+} // namespace
 
 namespace {
 // We will insert coro.end to cut any of the destructors for objects that
@@ -618,6 +644,8 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
   {
     ParamReferenceReplacerRAII ParamReplacer(LocalDeclMap);
     CodeGenFunction::RunCleanupsScope ResumeScope(*this);
+    EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
+    emitInitResume(*this, *CurCoro.Data);
     EHStack.pushCleanup<CallCoroDelete>(NormalAndEHCleanup, S.getDeallocate());
 
     // Create parameter copies. We do it before creating a promise, since an
@@ -643,8 +671,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     // Now we have the promise, initialize the GRO
     GroManager.EmitGroInit();
 
-    emitInitResume(*this, *CurCoro.Data);
-    EHStack.pushCleanup<CallCoroEnd>(EHCleanup);
+    //EHStack.pushCleanup<CallCoroEhSuspend>(EHCleanup);
 
     CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
     CurCoro.Data->ExceptionHandler = S.getExceptionHandler();
