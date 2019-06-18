@@ -2220,6 +2220,9 @@ public:
   llvm::APFloat ReadAPFloat(const RecordData &Record,
                             const llvm::fltSemantics &Sem, unsigned &Idx);
 
+  /// Read an APValue
+  APValue ReadAPValue(const RecordData &Record, unsigned &Idx);
+
   // Read a string
   static std::string ReadString(const RecordData &Record, unsigned &Idx);
 
@@ -2430,6 +2433,14 @@ public:
                                                  ID);
   }
 
+  ExplicitSpecifier readExplicitSpec() {
+    uint64_t Kind = readInt();
+    bool HasExpr = Kind & 0x1;
+    Kind = Kind >> 1;
+    return ExplicitSpecifier(HasExpr ? readExpr() : nullptr,
+                             static_cast<ExplicitSpecKind>(Kind));
+  }
+
   void readExceptionSpec(SmallVectorImpl<QualType> &ExceptionStorage,
                          FunctionProtoType::ExceptionSpecInfo &ESI) {
     return Reader->readExceptionSpec(*F, ExceptionStorage, ESI, Record, Idx);
@@ -2603,6 +2614,8 @@ public:
   SourceRange readSourceRange() {
     return Reader->ReadSourceRange(*F, Record, Idx);
   }
+
+  APValue readAPValue() { return Reader->ReadAPValue(Record, Idx); }
 
   /// Read an integral value, advancing Idx.
   llvm::APInt readAPInt() {

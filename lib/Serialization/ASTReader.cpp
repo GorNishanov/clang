@@ -6141,8 +6141,13 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
   case TYPE_AUTO: {
     QualType Deduced = readType(*Loc.F, Record, Idx);
     AutoTypeKeyword Keyword = (AutoTypeKeyword)Record[Idx++];
-    bool IsDependent = Deduced.isNull() ? Record[Idx++] : false;
-    return Context.getAutoType(Deduced, Keyword, IsDependent);
+    bool IsDependent = false, IsPack = false;
+    if (Deduced.isNull()) {
+      IsDependent = Record[Idx] > 0;
+      IsPack = Record[Idx] > 1;
+      ++Idx;
+    }
+    return Context.getAutoType(Deduced, Keyword, IsDependent, IsPack);
   }
 
   case TYPE_DEDUCED_TEMPLATE_SPECIALIZATION: {
@@ -6198,6 +6203,16 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     }
     QualType InnerType = readType(*Loc.F, Record, Idx);
     return Context.getParenType(InnerType);
+  }
+
+  case TYPE_MACRO_QUALIFIED: {
+    if (Record.size() != 2) {
+      Error("incorrect encoding of macro defined type");
+      return QualType();
+    }
+    QualType UnderlyingTy = readType(*Loc.F, Record, Idx);
+    IdentifierInfo *MacroII = GetIdentifierInfo(*Loc.F, Record, Idx);
+    return Context.getMacroQualifiedType(UnderlyingTy, MacroII);
   }
 
   case TYPE_PACK_EXPANSION: {
@@ -6519,6 +6534,10 @@ void TypeLocReader::VisitDecayedTypeLoc(DecayedTypeLoc TL) {
 
 void TypeLocReader::VisitAdjustedTypeLoc(AdjustedTypeLoc TL) {
   // nothing to do
+}
+
+void TypeLocReader::VisitMacroQualifiedTypeLoc(MacroQualifiedTypeLoc TL) {
+  TL.setExpansionLoc(ReadSourceLocation());
 }
 
 void TypeLocReader::VisitBlockPointerTypeLoc(BlockPointerTypeLoc TL) {
@@ -8731,6 +8750,11 @@ ASTReader::ReadTemplateName(ModuleFile &F, const RecordData &Record,
     return Context.getOverloadedTemplateName(Decls.begin(), Decls.end());
   }
 
+  case TemplateName::AssumedTemplate: {
+    DeclarationName Name = ReadDeclarationName(F, Record, Idx);
+    return Context.getAssumedTemplateName(Name);
+  }
+
   case TemplateName::QualifiedTemplate: {
     NestedNameSpecifier *NNS = ReadNestedNameSpecifier(F, Record, Idx);
     bool hasTemplKeyword = Record[Idx++];
@@ -9076,6 +9100,62 @@ ASTReader::ReadSourceRange(ModuleFile &F, const RecordData &Record,
   SourceLocation beg = ReadSourceLocation(F, Record, Idx);
   SourceLocation end = ReadSourceLocation(F, Record, Idx);
   return SourceRange(beg, end);
+}
+
+static FixedPointSemantics
+ReadFixedPointSemantics(const SmallVectorImpl<uint64_t> &Record,
+                        unsigned &Idx) {
+  unsigned Width = Record[Idx++];
+  unsigned Scale = Record[Idx++];
+  uint64_t Tmp = Record[Idx++];
+  bool IsSigned = Tmp & 0x1;
+  bool IsSaturated = Tmp & 0x2;
+  bool HasUnsignedPadding = Tmp & 0x4;
+  return FixedPointSemantics(Width, Scale, IsSigned, IsSaturated,
+                             HasUnsignedPadding);
+}
+
+APValue ASTReader::ReadAPValue(const RecordData &Record, unsigned &Idx) {
+  unsigned Kind = Record[Idx++];
+  switch (Kind) {
+  case APValue::None:
+    return APValue();
+  case APValue::Indeterminate:
+    return APValue::IndeterminateValue();
+  case APValue::Int:
+    return APValue(ReadAPSInt(Record, Idx));
+  case APValue::Float: {
+    const llvm::fltSemantics &FloatSema = llvm::APFloatBase::EnumToSemantics(
+        static_cast<llvm::APFloatBase::Semantics>(Record[Idx++]));
+    return APValue(ReadAPFloat(Record, FloatSema, Idx));
+  }
+  case APValue::FixedPoint: {
+    FixedPointSemantics FPSema = ReadFixedPointSemantics(Record, Idx);
+    return APValue(APFixedPoint(ReadAPInt(Record, Idx), FPSema));
+  }
+  case APValue::ComplexInt: {
+    llvm::APSInt First = ReadAPSInt(Record, Idx);
+    return APValue(std::move(First), ReadAPSInt(Record, Idx));
+  }
+  case APValue::ComplexFloat: {
+    const llvm::fltSemantics &FloatSema1 = llvm::APFloatBase::EnumToSemantics(
+        static_cast<llvm::APFloatBase::Semantics>(Record[Idx++]));
+    llvm::APFloat First = ReadAPFloat(Record, FloatSema1, Idx);
+    const llvm::fltSemantics &FloatSema2 = llvm::APFloatBase::EnumToSemantics(
+        static_cast<llvm::APFloatBase::Semantics>(Record[Idx++]));
+    return APValue(std::move(First), ReadAPFloat(Record, FloatSema2, Idx));
+  }
+  case APValue::LValue:
+  case APValue::Vector:
+  case APValue::Array:
+  case APValue::Struct:
+  case APValue::Union:
+  case APValue::MemberPointer:
+  case APValue::AddrLabelDiff:
+    // TODO : Handle all these APValue::ValueKind.
+    return APValue();
+  }
+  llvm_unreachable("Invalid APValue::ValueKind");
 }
 
 /// Read an integral value

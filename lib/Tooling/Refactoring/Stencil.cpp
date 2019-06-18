@@ -16,6 +16,7 @@
 #include "clang/Tooling/Refactoring/SourceCode.h"
 #include "llvm/Support/Errc.h"
 #include <atomic>
+#include <memory>
 #include <string>
 
 using namespace clang;
@@ -54,22 +55,11 @@ struct DebugPrintNodeOpData {
   explicit DebugPrintNodeOpData(std::string S) : Id(std::move(S)) {}
   std::string Id;
 };
-// Whether to associate a trailing semicolon with a node when identifying it's
-// text.  This flag is needed for expressions (clang::Expr), because their role
-// is ambiguous when they are also complete statements.  When this flag is
-// `Always`, an expression node will be treated like a statement, and will
-// therefore be associated with any trailing semicolon.
-enum class SemiAssociation : bool {
-  Always,
-  Inferred,
-};
 
-// A reference to a particular (bound) AST node.
-struct NodeRefData {
-  explicit NodeRefData(std::string S, SemiAssociation SA)
-      : Id(std::move(S)), SemiAssoc(SA) {}
-  std::string Id;
-  SemiAssociation SemiAssoc;
+// The fragment of code corresponding to the selected range.
+struct SelectorOpData {
+  explicit SelectorOpData(RangeSelector S) : Selector(std::move(S)) {}
+  RangeSelector Selector;
 };
 } // namespace
 
@@ -81,9 +71,8 @@ bool isEqualData(const DebugPrintNodeOpData &A, const DebugPrintNodeOpData &B) {
   return A.Id == B.Id;
 }
 
-bool isEqualData(const NodeRefData &A, const NodeRefData &B) {
-  return A.Id == B.Id && A.SemiAssoc == B.SemiAssoc;
-}
+// Equality is not (yet) defined for \c RangeSelector.
+bool isEqualData(const SelectorOpData &, const SelectorOpData &) { return false; }
 
 // The `evalData()` overloads evaluate the given stencil data to a string, given
 // the match result, and append it to `Result`. We define an overload for each
@@ -107,25 +96,12 @@ Error evalData(const DebugPrintNodeOpData &Data,
   return Error::success();
 }
 
-Error evalData(const NodeRefData &Data, const MatchFinder::MatchResult &Match,
+Error evalData(const SelectorOpData &Data, const MatchFinder::MatchResult &Match,
                std::string *Result) {
-  auto NodeOrErr = getNode(Match.Nodes, Data.Id);
-  if (auto Err = NodeOrErr.takeError())
-    return Err;
-  auto &Node = *NodeOrErr;
-  switch (Data.SemiAssoc) {
-  case SemiAssociation::Inferred:
-    // Include the semicolon for non-expression statements:
-    *Result += Node.get<Stmt>() != nullptr && Node.get<Expr>() == nullptr
-                   ? getExtendedText(NodeOrErr.get(), tok::TokenKind::semi,
-                                     *Match.Context)
-                   : getText(NodeOrErr.get(), *Match.Context);
-    break;
-  case SemiAssociation::Always:
-    *Result +=
-        getExtendedText(NodeOrErr.get(), tok::TokenKind::semi, *Match.Context);
-    break;
-  }
+  auto Range = Data.Selector(Match);
+  if (!Range)
+    return Range.takeError();
+  *Result += getText(*Range, *Match.Context);
   return Error::success();
 }
 
@@ -161,11 +137,15 @@ public:
 namespace {
 using RawText = StencilPartImpl<RawTextData>;
 using DebugPrintNodeOp = StencilPartImpl<DebugPrintNodeOpData>;
-using NodeRef = StencilPartImpl<NodeRefData>;
+using SelectorOp = StencilPartImpl<SelectorOpData>;
 } // namespace
 
 StencilPart Stencil::wrap(StringRef Text) {
   return stencil::text(Text);
+}
+
+StencilPart Stencil::wrap(RangeSelector Selector) {
+  return stencil::selection(std::move(Selector));
 }
 
 void Stencil::append(Stencil OtherStencil) {
@@ -183,17 +163,13 @@ Stencil::eval(const MatchFinder::MatchResult &Match) const {
 }
 
 StencilPart stencil::text(StringRef Text) {
-  return StencilPart(llvm::make_unique<RawText>(Text));
+  return StencilPart(std::make_shared<RawText>(Text));
 }
 
-StencilPart stencil::node(StringRef Id) {
-  return StencilPart(llvm::make_unique<NodeRef>(Id, SemiAssociation::Inferred));
-}
-
-StencilPart stencil::sNode(StringRef Id) {
-  return StencilPart(llvm::make_unique<NodeRef>(Id, SemiAssociation::Always));
+StencilPart stencil::selection(RangeSelector Selector) {
+  return StencilPart(std::make_shared<SelectorOp>(std::move(Selector)));
 }
 
 StencilPart stencil::dPrint(StringRef Id) {
-  return StencilPart(llvm::make_unique<DebugPrintNodeOp>(Id));
+  return StencilPart(std::make_shared<DebugPrintNodeOp>(Id));
 }

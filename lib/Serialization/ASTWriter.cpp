@@ -369,7 +369,8 @@ void ASTTypeWriter::VisitAutoType(const AutoType *T) {
   Record.AddTypeRef(T->getDeducedType());
   Record.push_back((unsigned)T->getKeyword());
   if (T->getDeducedType().isNull())
-    Record.push_back(T->isDependentType());
+    Record.push_back(T->containsUnexpandedParameterPack() ? 2 :
+                     T->isDependentType() ? 1 : 0);
   Code = TYPE_AUTO;
 }
 
@@ -514,6 +515,12 @@ void ASTTypeWriter::VisitPackExpansionType(const PackExpansionType *T) {
 void ASTTypeWriter::VisitParenType(const ParenType *T) {
   Record.AddTypeRef(T->getInnerType());
   Code = TYPE_PAREN;
+}
+
+void ASTTypeWriter::VisitMacroQualifiedType(const MacroQualifiedType *T) {
+  Record.AddTypeRef(T->getUnderlyingType());
+  Record.AddIdentifierRef(T->getMacroIdentifier());
+  Code = TYPE_MACRO_QUALIFIED;
 }
 
 void ASTTypeWriter::VisitElaboratedType(const ElaboratedType *T) {
@@ -800,6 +807,10 @@ void TypeLocWriter::VisitTemplateSpecializationTypeLoc(
 void TypeLocWriter::VisitParenTypeLoc(ParenTypeLoc TL) {
   Record.AddSourceLocation(TL.getLParenLoc());
   Record.AddSourceLocation(TL.getRParenLoc());
+}
+
+void TypeLocWriter::VisitMacroQualifiedTypeLoc(MacroQualifiedTypeLoc TL) {
+  Record.AddSourceLocation(TL.getExpansionLoc());
 }
 
 void TypeLocWriter::VisitElaboratedTypeLoc(ElaboratedTypeLoc TL) {
@@ -1219,6 +1230,7 @@ void ASTWriter::WriteBlockInfoBlock() {
   RECORD(TYPE_DEPENDENT_TEMPLATE_SPECIALIZATION);
   RECORD(TYPE_DEPENDENT_SIZED_ARRAY);
   RECORD(TYPE_PAREN);
+  RECORD(TYPE_MACRO_QUALIFIED);
   RECORD(TYPE_PACK_EXPANSION);
   RECORD(TYPE_ATTRIBUTED);
   RECORD(TYPE_SUBST_TEMPLATE_TYPE_PARM_PACK);
@@ -1266,7 +1278,6 @@ void ASTWriter::WriteBlockInfoBlock() {
   RECORD(DECL_CXX_RECORD);
   RECORD(DECL_CXX_METHOD);
   RECORD(DECL_CXX_CONSTRUCTOR);
-  RECORD(DECL_CXX_INHERITED_CONSTRUCTOR);
   RECORD(DECL_CXX_DESTRUCTOR);
   RECORD(DECL_CXX_CONVERSION);
   RECORD(DECL_ACCESS_SPEC);
@@ -5388,6 +5399,61 @@ void ASTRecordWriter::AddAPFloat(const llvm::APFloat &Value) {
   AddAPInt(Value.bitcastToAPInt());
 }
 
+static void WriteFixedPointSemantics(ASTRecordWriter &Record,
+                                     FixedPointSemantics FPSema) {
+  Record.push_back(FPSema.getWidth());
+  Record.push_back(FPSema.getScale());
+  Record.push_back(FPSema.isSigned() | FPSema.isSaturated() << 1 |
+                   FPSema.hasUnsignedPadding() << 2);
+}
+
+void ASTRecordWriter::AddAPValue(const APValue &Value) {
+  APValue::ValueKind Kind = Value.getKind();
+  push_back(static_cast<uint64_t>(Kind));
+  switch (Kind) {
+  case APValue::None:
+  case APValue::Indeterminate:
+    return;
+  case APValue::Int:
+    AddAPSInt(Value.getInt());
+    return;
+  case APValue::Float:
+    push_back(static_cast<uint64_t>(
+        llvm::APFloatBase::SemanticsToEnum(Value.getFloat().getSemantics())));
+    AddAPFloat(Value.getFloat());
+    return;
+  case APValue::FixedPoint: {
+    WriteFixedPointSemantics(*this, Value.getFixedPoint().getSemantics());
+    AddAPSInt(Value.getFixedPoint().getValue());
+    return;
+  }
+  case APValue::ComplexInt: {
+    AddAPSInt(Value.getComplexIntReal());
+    AddAPSInt(Value.getComplexIntImag());
+    return;
+  }
+  case APValue::ComplexFloat: {
+    push_back(static_cast<uint64_t>(llvm::APFloatBase::SemanticsToEnum(
+        Value.getComplexFloatReal().getSemantics())));
+    AddAPFloat(Value.getComplexFloatReal());
+    push_back(static_cast<uint64_t>(llvm::APFloatBase::SemanticsToEnum(
+        Value.getComplexFloatImag().getSemantics())));
+    AddAPFloat(Value.getComplexFloatImag());
+    return;
+  }
+  case APValue::LValue:
+  case APValue::Vector:
+  case APValue::Array:
+  case APValue::Struct:
+  case APValue::Union:
+  case APValue::MemberPointer:
+  case APValue::AddrLabelDiff:
+    // TODO : Handle all these APValue::ValueKind.
+    return;
+  }
+  llvm_unreachable("Invalid APValue::ValueKind");
+}
+
 void ASTWriter::AddIdentifierRef(const IdentifierInfo *II, RecordDataImpl &Record) {
   Record.push_back(getIdentifierRef(II));
 }
@@ -5863,6 +5929,12 @@ void ASTRecordWriter::AddTemplateName(TemplateName Name) {
     Record->push_back(OvT->size());
     for (const auto &I : *OvT)
       AddDeclRef(I);
+    break;
+  }
+
+  case TemplateName::AssumedTemplate: {
+    AssumedTemplateStorage *ADLT = Name.getAsAssumedTemplateName();
+    AddDeclarationName(ADLT->getDeclName());
     break;
   }
 
