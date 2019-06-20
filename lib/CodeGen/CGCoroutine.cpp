@@ -468,11 +468,6 @@ struct CallCoroInitEnd final : public EHScopeStack::Cleanup {
     llvm::Function *CoroEndFn =
         CGM.getIntrinsic(llvm::Intrinsic::coro_init_end);
 
-    if (flags.isNormalCleanupKind()) {
-      CGF.Builder.CreateCall(CoroEndFn, {NullPtr, CGF.Builder.getFalse()});
-      return;
-    }
-
     // See if we have a funclet bundle to associate coro.end with. (WinEH)
     auto Bundles = getBundlesForWinEH(CGF);
     auto *CoroEnd = CGF.Builder.CreateCall(
@@ -748,7 +743,7 @@ void CodeGenFunction::EmitCoroutineBody(const CoroutineBodyStmt &S) {
     {
       CodeGenFunction::RunCleanupsScope CoroInitScope(*this);
       emitInitResume(*this, *CurCoro.Data);
-      EHStack.pushCleanup<CallCoroInitEnd>(NormalAndEHCleanup);
+      EHStack.pushCleanup<CallCoroInitEnd>(EHCleanup);
 
       CurCoro.Data->CurrentAwaitKind = AwaitKind::Init;
       CurCoro.Data->ExceptionHandler = S.getExceptionHandler();
